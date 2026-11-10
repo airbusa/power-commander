@@ -17,6 +17,8 @@ const STEP: usize = 64;
 const CHUNK: usize = 1 << 20;
 /// Bytes in a row of the hex dump.
 pub const HEX_ROW: usize = 16;
+/// The most Copy puts on the clipboard.
+pub const COPY_LIMIT: u64 = 64 << 20;
 
 /// How bytes become characters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +30,16 @@ pub enum Decoding {
         big_endian: bool,
     },
     Page(u16),
+}
+
+impl Decoding {
+    /// The code page of Binary and Hex.
+    fn page(self) -> u16 {
+        match self {
+            Decoding::Auto(page) | Decoding::Page(page) => page,
+            Decoding::Utf8 | Decoding::Utf16 { .. } => 1252,
+        }
+    }
 }
 
 /// How a file is cut into rows.
@@ -73,6 +85,78 @@ fn is_utf8(bytes: &[u8], sample: bool) -> bool {
     match std::str::from_utf8(bytes) {
         Ok(_) => true,
         Err(err) => sample && err.error_len().is_none(),
+    }
+}
+
+/// A row as shown, and the bytes each of its characters comes from.
+#[derive(Debug)]
+pub struct Row {
+    pub text: String,
+    /// One a character of `text`; empty for the hex dump's spacing.
+    pub cells: Vec<Range<u64>>,
+    /// Where the row's text ends, before its line end.
+    pub end: u64,
+}
+
+impl Row {
+    fn new(end: u64) -> Self {
+        Self {
+            text: String::new(),
+            cells: Vec::new(),
+            end,
+        }
+    }
+
+    fn push(&mut self, c: char, cell: Range<u64>) {
+        self.text.push(c);
+        self.cells.push(cell);
+    }
+
+    /// Where a click on the `column`th character puts the cursor.
+    pub fn offset(&self, column: usize) -> u64 {
+        self.cells.get(column).map_or(self.end, |cell| cell.start)
+    }
+
+    /// The word around the `column`th character, as a double click selects it.
+    pub fn word(&self, column: usize) -> Option<Range<u64>> {
+        let chars: Vec<char> = self.text.chars().collect();
+        let column = column.min(chars.len().checked_sub(1)?);
+        let word = |at: &usize| chars[*at].is_alphanumeric() || chars[*at] == '_';
+        if !word(&column) {
+            return None;
+        }
+        let first = (0..column).rev().take_while(word).last().unwrap_or(column);
+        let last = (column..chars.len()).take_while(word).last()?;
+        Some(self.cells[first].start..self.cells[last].end)
+    }
+
+    /// Byte ranges of `text` whose characters are in `selection`.
+    pub fn highlights(&self, selection: &Range<u64>) -> Vec<Range<usize>> {
+        let mut runs: Vec<Range<usize>> = Vec::new();
+        for ((at, c), cell) in self.text.char_indices().zip(&self.cells) {
+            if cell.start < selection.end && selection.start < cell.end {
+                let end = at + c.len_utf8();
+                match runs.last_mut() {
+                    Some(run) if run.end == at => run.end = end,
+                    _ => runs.push(at..end),
+                }
+            }
+        }
+        runs
+    }
+}
+
+#[cfg(test)]
+impl PartialEq<&str> for Row {
+    fn eq(&self, other: &&str) -> bool {
+        self.text == *other
+    }
+}
+
+#[cfg(test)]
+impl PartialEq<String> for Row {
+    fn eq(&self, other: &String) -> bool {
+        self.text == *other
     }
 }
 
@@ -171,24 +255,61 @@ impl TextFile {
     }
 
     /// The rows of `range` as shown: tabs expanded, control characters as `·`.
-    pub fn rows(&self, range: Range<usize>) -> Vec<String> {
+    pub fn rows(&self, range: Range<usize>) -> Vec<Row> {
         match self.layout {
             Layout::Lines { width } => self.lines(range, width),
-            Layout::Fixed { width } => self.fixed(range, width, |_, bytes| {
-                let page = match self.decoding {
-                    Decoding::Auto(page) | Decoding::Page(page) => page,
-                    _ => 1252,
-                };
-                codepage::decode(page, bytes)
-                    .chars()
-                    .map(|c| if c.is_control() { '.' } else { c })
-                    .collect()
+            Layout::Fixed { width } => self.fixed(range, width, |start, bytes| {
+                let mut row = Row::new(start + bytes.len() as u64);
+                let mut at = start;
+                for (c, len) in codepage::chars(self.decoding.page(), bytes) {
+                    let len = len as u64;
+                    row.push(if c.is_control() { '.' } else { c }, at..at + len);
+                    at += len;
+                }
+                row
             }),
             Layout::Hex => self.fixed(range, HEX_ROW, hex_row),
         }
     }
 
-    fn lines(&self, range: Range<usize>, width: usize) -> Vec<String> {
+    /// The bytes of `range`, as in the file.
+    pub fn bytes(&self, range: Range<u64>) -> io::Result<Vec<u8>> {
+        let end = range.end.min(self.len);
+        let mut buf = vec![0; end.saturating_sub(range.start) as usize];
+        let read = read_at(&mut self.data.lock().unwrap(), range.start, &mut buf)?;
+        buf.truncate(read);
+        Ok(buf)
+    }
+
+    /// `range` as Lister's Copy as text gives it: line ends kept, other
+    /// control characters as `.`.
+    pub fn text_of(&self, range: Range<u64>) -> io::Result<String> {
+        let decoding = match self.layout {
+            Layout::Lines { .. } => self.decoding,
+            Layout::Fixed { .. } | Layout::Hex => Decoding::Page(self.decoding.page()),
+        };
+        let bytes = self.bytes(range.clone())?;
+        let chars = chars(&bytes, decoding).into_iter().map(|(c, _)| c);
+        let text = chars.map(|c| match c {
+            '\t' | '\r' | '\n' => c,
+            c if c.is_control() => '.',
+            c => c,
+        });
+        let text: String = text.collect();
+        Ok(match range.start {
+            0 => text.trim_start_matches('\u{feff}').to_owned(),
+            _ => text,
+        })
+    }
+
+    /// `range` as Copy as Hex characters gives it: `77 6F 72 64`.
+    pub fn hex_of(&self, range: Range<u64>) -> io::Result<String> {
+        let bytes = self.bytes(range)?;
+        let hex: Vec<String> = bytes.iter().map(|byte| format!("{byte:02X}")).collect();
+        Ok(hex.join(" "))
+    }
+
+    fn lines(&self, range: Range<usize>, width: usize) -> Vec<Row> {
         let (start, first) = {
             let progress = self.index.progress.lock().unwrap();
             let block = range.start / STEP;
@@ -213,7 +334,7 @@ impl TextFile {
                 rows.push(display(
                     &buf[at..at + len],
                     self.decoding,
-                    start + at as u64 == 0,
+                    start + at as u64,
                 ));
             }
             at += len;
@@ -226,8 +347,8 @@ impl TextFile {
         &self,
         range: Range<usize>,
         width: usize,
-        show: impl Fn(u64, &[u8]) -> String,
-    ) -> Vec<String> {
+        show: impl Fn(u64, &[u8]) -> Row,
+    ) -> Vec<Row> {
         let start = (range.start * width) as u64;
         if start >= self.len {
             return Vec::new();
@@ -331,69 +452,116 @@ fn row_len(bytes: &[u8], eof: bool, width: usize, decoding: Decoding) -> Option<
     }
 }
 
-fn display(row: &[u8], decoding: Decoding, first: bool) -> String {
-    let text = match decoding {
-        Decoding::Auto(page) => match std::str::from_utf8(row) {
-            Ok(text) => text.to_owned(),
+/// The characters of `bytes`, each with how many bytes it takes.
+fn chars(bytes: &[u8], decoding: Decoding) -> Vec<(char, usize)> {
+    let utf8 = |text: &str| text.chars().map(|c| (c, c.len_utf8())).collect::<Vec<_>>();
+    match decoding {
+        Decoding::Auto(page) => match std::str::from_utf8(bytes) {
+            Ok(text) => utf8(text),
             // Binary as UTF-8 would be rare characters, each slow to draw.
-            Err(_) => codepage::decode(page, row),
+            Err(_) => codepage::chars(page, bytes),
         },
-        Decoding::Utf8 => String::from_utf8_lossy(row).into_owned(),
+        Decoding::Utf8 => bytes
+            .utf8_chunks()
+            .flat_map(|chunk| {
+                let mut chars = utf8(chunk.valid());
+                if !chunk.invalid().is_empty() {
+                    chars.push((char::REPLACEMENT_CHARACTER, chunk.invalid().len()));
+                }
+                chars
+            })
+            .collect(),
         Decoding::Utf16 { big_endian } => {
-            let units = row.as_chunks::<2>().0.iter().map(|&pair| match big_endian {
-                true => u16::from_be_bytes(pair),
-                false => u16::from_le_bytes(pair),
-            });
+            let units = bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&pair| match big_endian {
+                    true => u16::from_be_bytes(pair),
+                    false => u16::from_le_bytes(pair),
+                });
             char::decode_utf16(units)
-                .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
+                .map(|c| match c {
+                    Ok(c) => (c, 2 * c.len_utf16()),
+                    Err(_) => (char::REPLACEMENT_CHARACTER, 2),
+                })
                 .collect()
         }
-        Decoding::Page(page) => codepage::decode(page, row),
-    };
-    let text = match first {
-        true => text.trim_start_matches('\u{feff}'),
-        false => &text,
-    };
-    let mut shown = String::with_capacity(text.len());
-    let mut column = 0;
-    for c in text.trim_end_matches(['\n', '\r']).chars() {
+        Decoding::Page(page) => codepage::chars(page, bytes),
+    }
+}
+
+/// Tabs expanded, control characters as `·`, the line end and BOM hidden.
+fn display(bytes: &[u8], decoding: Decoding, start: u64) -> Row {
+    let mut chars = chars(bytes, decoding);
+    while let Some(('\n' | '\r', _)) = chars.last() {
+        chars.pop();
+    }
+    let mut row = Row::new(start);
+    let mut at = start;
+    for (c, len) in chars {
+        let cell = at..at + len as u64;
+        at = cell.end;
         match c {
+            '\u{feff}' if cell.start == 0 => {}
             '\t' => {
-                let spaces = 8 - column % 8;
-                shown.extend(std::iter::repeat_n(' ', spaces));
-                column += spaces;
+                let spaces = 8 - row.cells.len() % 8;
+                (0..spaces).for_each(|_| row.push(' ', cell.clone()));
             }
-            c if c.is_control() => {
-                shown.push('·');
-                column += 1;
-            }
-            c => {
-                shown.push(c);
-                column += 1;
-            }
+            c if c.is_control() => row.push('·', cell),
+            c => row.push(c, cell),
         }
     }
-    shown
+    row.end = at;
+    row
 }
 
 /// `00000010  0D 0A 1A 0A 00 00 00 0D  49 48 44 52 00 00 04 B0  ........IHDR....`
-fn hex_row(offset: u64, bytes: &[u8]) -> String {
-    let mut row = format!("{offset:08X} ");
+fn hex_row(offset: u64, bytes: &[u8]) -> Row {
+    let end = offset + bytes.len() as u64;
+    let mut row = Row::new(end);
+    let gap = |row: &mut Row, text: &str, at: u64| text.chars().for_each(|c| row.push(c, at..at));
+    gap(&mut row, &format!("{offset:08X} "), offset);
     for i in 0..HEX_ROW {
+        let at = offset + i as u64;
         if i == HEX_ROW / 2 {
-            row.push(' ');
+            gap(&mut row, " ", at);
         }
         match bytes.get(i) {
-            Some(byte) => write!(row, " {byte:02X}").unwrap(),
-            None => row.push_str("   "),
+            Some(byte) => {
+                gap(&mut row, " ", at);
+                format!("{byte:02X}")
+                    .chars()
+                    .for_each(|c| row.push(c, at..at + 1));
+            }
+            None => gap(&mut row, "   ", end),
         }
     }
-    row.push_str("  ");
-    row.extend(bytes.iter().map(|&byte| match byte {
-        0x20..=0x7E => byte as char,
-        _ => '.',
-    }));
+    gap(&mut row, "  ", end);
+    for (i, &byte) in bytes.iter().enumerate() {
+        let at = offset + i as u64;
+        let c = match byte {
+            0x20..=0x7E => byte as char,
+            _ => '.',
+        };
+        row.push(c, at..at + 1);
+    }
     row
+}
+
+/// Google's search for `text`, as Lister's context menu opens it.
+pub fn search_url(text: &str) -> String {
+    let mut url = String::from("https://www.google.com/search?q=");
+    for byte in text.trim().bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                url.push(byte as char)
+            }
+            b' ' => url.push('+'),
+            _ => write!(url, "%{byte:02X}").unwrap(),
+        }
+    }
+    url
 }
 
 fn read_at(data: &mut Data, pos: u64, buf: &mut [u8]) -> io::Result<usize> {
@@ -433,7 +601,8 @@ mod tests {
         while !file.indexed().2 {
             std::thread::yield_now();
         }
-        file.rows(0..file.indexed().0)
+        let rows = file.rows(0..file.indexed().0);
+        rows.into_iter().map(|row| row.text).collect()
     }
 
     #[test]
@@ -463,10 +632,10 @@ mod tests {
             ),
             Some(6)
         );
-        assert_eq!(display(b"a\tb\x01\r\n", AUTO, false), "a       b\u{b7}");
-        assert_eq!(display("é€".as_bytes(), AUTO, false), "é€", "UTF-8");
+        assert_eq!(display(b"a\tb\x01\r\n", AUTO, 1), "a       b\u{b7}");
+        assert_eq!(display("é€".as_bytes(), AUTO, 1), "é€", "UTF-8");
         assert_eq!(
-            display(b"\x89PNG\x80\xe9\xff", AUTO, false),
+            display(b"\x89PNG\x80\xe9\xff", AUTO, 1),
             "\u{2030}PNG€éÿ",
             "else ANSI"
         );
@@ -485,14 +654,14 @@ mod tests {
         assert_eq!(wrapped[2].len(), 81);
         assert_eq!(wrapped.len(), 2 + 3000usize.div_ceil(81) + 1);
         let binary = TextFile::open(&path, Layout::Fixed { width: 75 }, AUTO).unwrap();
-        let first = &binary.rows(0..1)[0];
+        let first = &binary.rows(0..1)[0].text;
         assert!(
             first.starts_with("short line...Tab indented..0123"),
             "{first}"
         );
         assert_eq!(first.len(), 75);
         let hex = TextFile::open(&path, Layout::Hex, AUTO).unwrap();
-        assert!(hex.rows(0..1)[0].starts_with("00000000  73 68 6F 72"));
+        assert!(hex.rows(0..1)[0].text.starts_with("00000000  73 68 6F 72"));
         std::fs::remove_file(&path).unwrap();
 
         let words: Vec<_> = (0..200).map(|i| format!("word{i}")).collect();
@@ -573,6 +742,43 @@ mod tests {
         );
         assert_eq!(file.rows(100_001..100_005), ["x".repeat(10)]);
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn selects_and_copies_as_lister_does() {
+        let path = temp("select", "\u{feff}one tw\u{f6}\tx\r\nnext\x01".as_bytes());
+        let file = TextFile::open(&path, Layout::Lines { width: 81 }, Decoding::Utf8).unwrap();
+        while !file.indexed().2 {
+            std::thread::yield_now();
+        }
+        let rows = file.rows(0..2);
+        assert_eq!(rows[0].text, "one tw\u{f6} x");
+        assert_eq!(
+            (rows[0].offset(0), rows[0].offset(4), rows[0].end),
+            (3, 7, 13)
+        );
+        assert_eq!(rows[0].word(5), Some(7..11), "tw\u{f6} is 4 bytes");
+        assert_eq!(rows[0].word(3), None);
+        assert_eq!(rows[0].word(usize::MAX), Some(12..13), "past the end: x");
+        assert_eq!(
+            rows[0].highlights(&(9..13)),
+            vec![6..10],
+            "ö, the tab's space and x"
+        );
+        assert_eq!(
+            file.text_of(0..file.len()).unwrap(),
+            "one tw\u{f6}\tx\r\nnext."
+        );
+        assert_eq!(file.hex_of(3..6).unwrap(), "6F 6E 65");
+        let hex = TextFile::open(&path, Layout::Hex, AUTO).unwrap();
+        let row = &hex.rows(0..1)[0];
+        assert_eq!(row.highlights(&(1..2)), [13..15, 61..62]);
+        assert_eq!(row.offset(0), 0);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            search_url(" a b&\u{e9} "),
+            "https://www.google.com/search?q=a+b%26%C3%A9"
+        );
     }
 
     #[test]

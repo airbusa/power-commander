@@ -5,13 +5,15 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::menu::{DropdownMenu, PopupMenu};
+use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenu};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarHandle};
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::*;
 use pc_core::settings::{StartFont, StartMode, ViewerSettings};
-use pc_core::viewer::{Decoding, Detected, LONG_ROW, Layout, TextFile, detect};
+use pc_core::viewer::{
+    COPY_LIMIT, Decoding, Detected, LONG_ROW, Layout, Row, TextFile, detect, search_url,
+};
 use pc_core::{codepage, html};
 
 actions!(
@@ -45,9 +47,11 @@ actions!(
         OpenFile,
         SaveAs,
         Configure,
-        // shortcut: disabled menu items until Find and selection are built.
         CopyText,
+        CopyHex,
+        SearchGoogle,
         SelectAll,
+        // shortcut: disabled menu items until Find is built.
         Find,
         FindNext
     ]
@@ -60,6 +64,8 @@ struct SetPage(Option<u16>);
 
 const CONTEXT: &str = "Viewer";
 const ROW: Pixels = px(20.);
+/// Left of the rows' text.
+const PAD: Pixels = px(8.);
 /// Rows drawn before the viewport's height is known.
 const FIRST_DRAWN: usize = 60;
 /// The scrollbar's height in rows: small enough for f32 pixels to stay exact.
@@ -100,6 +106,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("n", NextFile, keys),
         KeyBinding::new("p", PreviousFile, keys),
         KeyBinding::new("f2", Reload, keys),
+        KeyBinding::new("secondary-c", CopyText, keys),
+        KeyBinding::new("secondary-shift-c", CopyHex, keys),
+        KeyBinding::new("secondary-a", SelectAll, keys),
     ]);
 }
 
@@ -277,6 +286,10 @@ struct Viewer {
     size: u64,
     fit: bool,
     only_larger: bool,
+    /// Anchor and head, as file offsets: what Copy copies.
+    selection: (u64, u64),
+    /// The left button is down for a selection.
+    selecting: bool,
     view: ViewHandle,
     focus: FocusHandle,
     _poll: Task<()>,
@@ -293,6 +306,10 @@ struct Viewport {
     bounds: Bounds<Pixels>,
     /// Wheel pixels not yet a whole row.
     wheel: Pixels,
+    /// From `top`, as drawn last: where clicks land.
+    drawn: Vec<Row>,
+    font: gpui_kit::Font,
+    font_size: Pixels,
 }
 
 impl Viewport {
@@ -358,6 +375,8 @@ impl Viewer {
             text,
             fit: true,
             only_larger: false,
+            selection: (0, 0),
+            selecting: false,
             view: ViewHandle::default(),
             focus,
             _poll: Self::poll(cx),
@@ -399,6 +418,7 @@ impl Viewer {
     ) {
         self.size = file_size(&self.shown, &text);
         self.text = text;
+        self.selection = (0, 0);
         if !keep_top {
             let mut view = self.view.0.borrow_mut();
             (view.top, view.x) = (0, px(0.));
@@ -500,6 +520,109 @@ impl Viewer {
         .detach();
     }
 
+    fn selected(&self) -> std::ops::Range<u64> {
+        let (anchor, head) = self.selection;
+        anchor.min(head)..anchor.max(head)
+    }
+
+    /// The drawn row under `position`, and the column in it.
+    fn hit(&self, position: Point<Pixels>, window: &mut Window) -> Option<(usize, usize)> {
+        let view = self.view.0.borrow();
+        let last = view.drawn.len().checked_sub(1)?;
+        let y = ((position.y - view.bounds.origin.y) / ROW).floor();
+        if y > last as f32 {
+            return Some((last, usize::MAX));
+        }
+        let index = y.max(0.) as usize;
+        let row = &view.drawn[index];
+        let run = TextRun {
+            len: row.text.len(),
+            font: view.font.clone(),
+            ..Default::default()
+        };
+        let line =
+            window
+                .text_system()
+                .shape_line(row.text.clone().into(), view.font_size, &[run], None);
+        let x = position.x - view.bounds.origin.x + view.x - PAD;
+        Some((
+            index,
+            row.text[..line.closest_index_for_x(x)].chars().count(),
+        ))
+    }
+
+    fn offset_at(&self, position: Point<Pixels>, window: &mut Window) -> Option<u64> {
+        let (row, column) = self.hit(position, window)?;
+        Some(self.view.0.borrow().drawn[row].offset(column))
+    }
+
+    /// A click starts a selection, Shift extends it, a double click takes the word.
+    fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(at) = self.offset_at(event.position, window) else {
+            return;
+        };
+        if event.click_count == 2 {
+            let (row, column) = self.hit(event.position, window).unwrap_or_default();
+            if let Some(word) = self.view.0.borrow().drawn[row].word(column) {
+                self.selection = (word.start, word.end);
+            }
+        } else if event.modifiers.shift {
+            self.selection.1 = at;
+        } else {
+            self.selection = (at, at);
+        }
+        self.selecting = event.click_count == 1;
+        cx.notify();
+    }
+
+    /// Dragging past the top or bottom scrolls, as in Lister.
+    fn drag(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.selecting {
+            return;
+        }
+        let bounds = self.view.0.borrow().bounds;
+        if position.y < bounds.top() {
+            self.view.0.borrow_mut().scroll_rows(-1);
+        } else if position.y > bounds.bottom() {
+            self.view.0.borrow_mut().scroll_rows(1);
+        }
+        if let Some(at) = self.offset_at(position, window) {
+            self.selection.1 = at;
+        }
+        cx.notify();
+    }
+
+    fn copy(&mut self, hex: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let range = self.selected();
+        if range.is_empty() {
+            return;
+        }
+        if range.end - range.start > COPY_LIMIT {
+            let text = format!("Selections over {} MB are not copied.", COPY_LIMIT >> 20);
+            window.push_notification(Notification::warning(text), cx);
+            return;
+        }
+        let text = match hex {
+            true => self.text.hex_of(range),
+            false => self.text.text_of(range),
+        };
+        match text {
+            Ok(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
+            Err(err) => self.failed(err, window, cx),
+        }
+    }
+
+    fn search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let range = self.selected();
+        // A search takes a phrase, not a file.
+        let range = range.start..range.end.min(range.start + 1000);
+        match self.text.text_of(range) {
+            Ok(text) if !text.trim().is_empty() => cx.open_url(&search_url(&text)),
+            Ok(_) => {}
+            Err(err) => self.failed(err, window, cx),
+        }
+    }
+
     fn scroll(&mut self, by: impl FnOnce(&mut Viewport), cx: &mut Context<Self>) {
         by(&mut self.view.0.borrow_mut());
         cx.notify();
@@ -543,6 +666,7 @@ impl Viewer {
         } = self.shown;
         let (fit, only_larger) = (self.fit, self.only_larger);
         let columns = self.shown.settings.text_width;
+        let none = self.selected().is_empty();
         let file = |menu: PopupMenu| {
             menu.menu("Open...", Box::new(OpenFile))
                 .menu("Save as...", Box::new(SaveAs))
@@ -554,9 +678,9 @@ impl Viewer {
                 .separator()
                 .menu("Close", Box::new(Close))
         };
-        let edit = |menu: PopupMenu| {
-            menu.menu_with_disabled("Copy as text", Box::new(CopyText), true)
-                .menu_with_disabled("Select all", Box::new(SelectAll), true)
+        let edit = move |menu: PopupMenu| {
+            menu.menu_with_disabled("Copy as text", Box::new(CopyText), none)
+                .menu("Select all", Box::new(SelectAll))
                 .separator()
                 .menu_with_disabled("Find...", Box::new(Find), true)
                 .menu_with_disabled("Find next", Box::new(FindNext), true)
@@ -673,7 +797,7 @@ impl Viewer {
         let em = text_system
             .em_advance(text_system.resolve_font(&font(family.clone())), font_size)
             .unwrap_or(px(8.));
-        let widest = lines.iter().map(|line| line.chars().count()).max();
+        let widest = lines.iter().map(|line| line.text.chars().count()).max();
         let x = {
             let mut view = self.view.0.borrow_mut();
             view.width = em * widest.unwrap_or(0) as f32 + px(24.);
@@ -694,14 +818,51 @@ impl Viewer {
                 scanned * 100 / self.text.len().max(1)
             ),
         };
+        let selection = self.selected();
+        let highlight = HighlightStyle {
+            background_color: Some(theme.selection),
+            ..Default::default()
+        };
+        let texts: Vec<_> = lines
+            .iter()
+            .map(|row| {
+                let runs = row.highlights(&selection).into_iter();
+                let text = StyledText::new(row.text.clone());
+                text.with_highlights(runs.map(|run| (run, highlight)))
+            })
+            .collect();
+        {
+            let mut view = self.view.0.borrow_mut();
+            view.drawn = lines;
+            (view.font, view.font_size) = (font(family.clone()), font_size);
+        }
         let bounds_of = self.view.clone();
+        let viewer = cx.entity().downgrade();
+        let dragged = move |_, _, window: &mut Window, _: &mut App| {
+            let moved = viewer.clone();
+            window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left)
+                {
+                    let _ = moved.update(cx, |this, cx| this.drag(event.position, window, cx));
+                }
+            });
+            let released = viewer.clone();
+            window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+                if phase == DispatchPhase::Bubble {
+                    let _ = released.update(cx, |this, _| this.selecting = false);
+                }
+            });
+        };
+        let viewer = cx.entity().downgrade();
+        let focus = self.focus.clone();
         let rows = div()
+            .id("viewer-rows")
             .size_full()
             .relative()
             .overflow_hidden()
-            .font_family(family)
-            .text_size(font_size)
+            .cursor_text()
             .on_scroll_wheel(cx.listener(Self::wheel))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_action(
                 cx.listener(move |this, _: &Left, _, cx| this.scroll(|v| v.scroll_x(-em * 8.), cx)),
             )
@@ -711,24 +872,41 @@ impl Viewer {
             .child(
                 canvas(
                     move |bounds, _, _| bounds_of.0.borrow_mut().bounds = bounds,
-                    |_, _, _, _| {},
+                    dragged,
                 )
                 .absolute()
                 .size_full(),
             )
             .child(
-                v_flex().absolute().top_0().left(-x).pl_2().children(
-                    lines
-                        .into_iter()
-                        .map(|line| div().h(ROW).whitespace_nowrap().child(line)),
-                ),
+                v_flex()
+                    .absolute()
+                    .top_0()
+                    .left(-x)
+                    .pl(PAD)
+                    // Not on the rows' parent: its context menu keeps the UI font.
+                    .font_family(family)
+                    .text_size(font_size)
+                    .children(
+                        texts
+                            .into_iter()
+                            .map(|text| div().h(ROW).whitespace_nowrap().child(text)),
+                    ),
             )
             .child(
                 div()
                     .absolute()
                     .inset_0()
                     .child(Scrollbar::new(&self.view).axis(ScrollbarAxis::Both)),
-            );
+            )
+            .context_menu(move |menu, _, cx| {
+                let none = viewer.read_with(cx, |this, _| this.selected().is_empty());
+                let none = none.unwrap_or(true);
+                let google = "Search for selected text with Google";
+                menu.action_context(focus.clone())
+                    .menu_with_disabled("Copy as text", Box::new(CopyText), none)
+                    .menu_with_disabled("Copy as Hex characters", Box::new(CopyHex), none)
+                    .menu_with_disabled(google, Box::new(SearchGoogle), none)
+            });
         (rows.into_any_element(), status)
     }
 
@@ -814,6 +992,13 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Reload, w, cx| this.show(true, w, cx)))
             .on_action(cx.listener(|this, _: &OpenFile, w, cx| this.open_file(w, cx)))
             .on_action(cx.listener(|this, _: &SaveAs, w, cx| this.save_as(w, cx)))
+            .on_action(cx.listener(|this, _: &CopyText, w, cx| this.copy(false, w, cx)))
+            .on_action(cx.listener(|this, _: &CopyHex, w, cx| this.copy(true, w, cx)))
+            .on_action(cx.listener(|this, _: &SearchGoogle, w, cx| this.search(w, cx)))
+            .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
+                this.selection = (0, this.text.len());
+                cx.notify()
+            }))
             .on_action(cx.listener(|_, _: &Configure, _, cx| crate::configure_viewer(cx)))
             .on_action(
                 cx.listener(|this, _: &LineUp, _, cx| this.scroll(|v| v.scroll_rows(-1), cx)),

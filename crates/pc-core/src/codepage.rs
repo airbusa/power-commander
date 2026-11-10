@@ -45,6 +45,26 @@ pub fn decode(page: u16, bytes: &[u8]) -> String {
         .collect()
 }
 
+/// The characters of `bytes`, each with how many bytes it takes.
+pub fn chars(page: u16, bytes: &[u8]) -> Vec<(char, usize)> {
+    let Some(encoding) = encoding(page).filter(|_| matches!(page, 932 | 936 | 949 | 950)) else {
+        return decode(page, bytes).chars().map(|c| (c, 1)).collect();
+    };
+    // Fed a byte at a time, the decoder tells where each character ends.
+    let mut decoder = encoding.new_decoder_without_bom_handling();
+    let (mut chars, mut start, mut out) = (Vec::new(), 0, String::with_capacity(16));
+    for (i, byte) in bytes.iter().enumerate() {
+        out.clear();
+        let last = i + 1 == bytes.len();
+        let _ = decoder.decode_to_string(std::slice::from_ref(byte), &mut out, last);
+        for c in out.chars() {
+            chars.push((c, i + 1 - start));
+            start = i + 1;
+        }
+    }
+    chars
+}
+
 fn encoding(page: u16) -> Option<&'static Encoding> {
     use encoding_rs::*;
     Some(match page {
@@ -160,5 +180,8 @@ mod tests {
         for &(_, page) in MENU {
             assert!(!decode(page, b"abc").is_empty(), "{page}");
         }
+        assert_eq!(chars(1250, b"\xc1r"), [('Á', 1), ('r', 1)]);
+        let japanese = encoding_rs::SHIFT_JIS.encode("a日本").0;
+        assert_eq!(chars(932, &japanese), [('a', 1), ('日', 2), ('本', 2)]);
     }
 }
