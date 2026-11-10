@@ -5540,9 +5540,11 @@ name = "pc-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "crc32fast",
  "dirs 6.0.0",
  "encoding_rs",
  "keyring",
+ "md-5",
  "memchr",
  "pdfium-render",
  "regex",

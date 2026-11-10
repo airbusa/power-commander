@@ -34,10 +34,7 @@ pub fn open(
                 true
             })
     });
-    input.update(cx, |input, cx| {
-        input.focus(window, cx);
-        input.select_all(window, cx);
-    });
+    crate::pack_dialog::focus_all(&input, window, cx);
 }
 
 struct NameDialog {

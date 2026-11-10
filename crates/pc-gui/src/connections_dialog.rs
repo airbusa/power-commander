@@ -53,7 +53,7 @@ pub fn open(commander: WeakEntity<Commander>, side: usize, window: &mut Window, 
                 false
             })
     });
-    address.update(cx, |input, cx| input.focus(window, cx));
+    crate::pack_dialog::focus_all(&address, window, cx);
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -393,7 +393,7 @@ fn open_edit(
                 false
             })
     });
-    name.update(cx, |input, cx| input.focus(window, cx));
+    crate::pack_dialog::focus_all(&name, window, cx);
 }
 
 struct EditConnection {

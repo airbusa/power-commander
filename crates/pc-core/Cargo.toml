@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# Checksum files: SFV and MD5; ring has the SHAs.
+crc32fast = "1"
+md-5 = "0.10"
 # Modification times in local time.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The configuration folder of each platform.

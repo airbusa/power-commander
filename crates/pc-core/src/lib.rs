@@ -1,5 +1,6 @@
 pub mod archive;
 pub mod attributes;
+pub mod checksum;
 pub mod codepage;
 pub mod command;
 pub mod connections;
@@ -19,6 +20,7 @@ pub mod session;
 pub mod settings;
 pub mod sftp;
 pub mod space;
+pub mod split;
 pub mod theme;
 pub mod vfs;
 pub mod viewer;

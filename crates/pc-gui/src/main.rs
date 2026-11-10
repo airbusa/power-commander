@@ -5,6 +5,7 @@ mod appearance;
 mod attributes_dialog;
 mod connections_dialog;
 mod editor;
+mod file_tools;
 mod find_dialog;
 mod menus;
 mod minimap;
@@ -1207,6 +1208,10 @@ impl Render for Commander {
                     Command::Pack => this.pack(window, cx),
                     Command::UnpackSpecificFiles => this.unpack(window, cx),
                     Command::TestArchives => this.test_archives(window, cx),
+                    Command::CreateChecksumFiles => this.create_checksums(window, cx),
+                    Command::VerifyChecksums => this.verify_checksums(window, cx),
+                    Command::SplitFile => this.split_file(window, cx),
+                    Command::CombineFiles => this.combine_files(window, cx),
                     Command::View => this.open_file(remote::Open::View, window, cx),
                     Command::Edit => this.open_file(remote::Open::Edit, window, cx),
                     Command::EditExternally => this.open_file(remote::Open::External, window, cx),

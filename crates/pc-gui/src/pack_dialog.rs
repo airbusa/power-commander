@@ -29,7 +29,7 @@ const LEVELS: [(u8, &str); 5] = [
 impl Commander {
     /// The other panel's folder, where packing and unpacking go; this one's
     /// if that one is on a server or in an archive.
-    fn local_target(&self) -> PathBuf {
+    pub(crate) fn local_target(&self) -> PathBuf {
         let other = self.panels[1 - self.active].tabs.current();
         let this = self.panels[self.active].tabs.current();
         match other.remote().is_none() && !other.in_archive() {
@@ -39,7 +39,7 @@ impl Commander {
     }
 
     /// The chosen entries on this computer, outside archives; else why not.
-    fn local_chosen(&self, what: &str) -> Result<(&Panel, Vec<OsString>), String> {
+    pub(crate) fn local_chosen(&self, what: &str) -> Result<(&Panel, Vec<OsString>), String> {
         let panel = self.panels[self.active].tabs.current();
         if panel.remote().is_some() || panel.in_archive() {
             return Err(format!(
@@ -155,7 +155,7 @@ impl Commander {
 }
 
 /// A dialog of `view`; OK runs `finish`, which keeps it open by returning false.
-fn open<V: Render>(
+pub(crate) fn open<V: Render>(
     view: Entity<V>,
     title: &'static str,
     window: &mut Window,
@@ -173,14 +173,18 @@ fn open<V: Render>(
     });
 }
 
-fn focus_all(input: &Entity<InputState>, window: &mut Window, cx: &mut App) {
-    input.update(cx, |input, cx| {
-        input.focus(window, cx);
-        input.select_all(window, cx);
+/// After the menu that opened the dialog has given the focus back to the panel.
+pub(crate) fn focus_all(input: &Entity<InputState>, window: &mut Window, cx: &mut App) {
+    let input = input.clone();
+    window.defer(cx, move |window, cx| {
+        input.update(cx, |input, cx| {
+            input.focus(window, cx);
+            input.select_all(window, cx);
+        });
     });
 }
 
-fn buttons<V: 'static>(
+pub(crate) fn buttons<V: 'static>(
     id: &'static str,
     cx: &mut Context<V>,
     finish: fn(&mut V, &mut Window, &mut Context<V>) -> bool,
@@ -208,7 +212,7 @@ fn buttons<V: 'static>(
         )
 }
 
-fn check<V: 'static>(
+pub(crate) fn check<V: 'static>(
     id: &'static str,
     label: &'static str,
     on: bool,
