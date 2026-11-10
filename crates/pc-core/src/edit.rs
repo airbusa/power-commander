@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 /// Up to `limit_mb`, as Settings' Edit/View page says.
 pub fn load_text(path: &Path, limit_mb: u64) -> io::Result<String> {
@@ -40,20 +40,24 @@ pub fn save_text(path: &Path, text: &str) -> io::Result<()> {
 
 /// Starts the external editor on `file`, as Ctrl+Shift+F4 does.
 pub fn edit_externally(line: &str, file: &Path) -> io::Result<()> {
+    let mut child = start_editor(line, file)?;
+    // Reaps it once it ends.
+    std::thread::spawn(move || child.wait());
+    Ok(())
+}
+
+/// The external editor on `file`; waiting for it tells when editing ends,
+/// if the editor waits too (`code --wait`).
+pub fn start_editor(line: &str, file: &Path) -> io::Result<Child> {
     let (program, args) = command_line(line, file)
         .ok_or_else(|| io::Error::other("no external editor is set (Settings, Edit/View)"))?;
-    let mut child = Command::new(&program)
+    Command::new(&program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|err| {
-            io::Error::new(err.kind(), format!("{}: {err}", program.to_string_lossy()))
-        })?;
-    // Reaps it once it ends.
-    std::thread::spawn(move || child.wait());
-    Ok(())
+        .map_err(|err| io::Error::new(err.kind(), format!("{}: {err}", program.to_string_lossy())))
 }
 
 /// Words of `line`, `"quoted"` ones with their spaces; `%1` becomes `file`,

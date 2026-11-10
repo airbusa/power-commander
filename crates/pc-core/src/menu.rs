@@ -84,6 +84,8 @@ pub enum Command {
     EditExternally,
     ToggleMark,
     OperationQueue,
+    ConnectToServer,
+    Disconnect,
     Copy,
     Move,
     NewFolder,
@@ -255,7 +257,10 @@ pub const MENUS: &[Menu] = &[
     },
     Menu {
         label: "Net",
-        items: &[],
+        items: &[
+            cmd("Connect to Server...", "ctrl-f", ConnectToServer),
+            cmd("Disconnect", "ctrl-shift-f", Disconnect),
+        ],
     },
     Menu {
         label: "Show",

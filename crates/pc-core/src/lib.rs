@@ -712,6 +712,19 @@ impl Tabs {
         Ok(())
     }
 
+    /// A move made on a copy of tab `ix` elsewhere, as for a server: the
+    /// tab takes it, or a locked one gets a new tab beside it.
+    pub fn navigated(&mut self, ix: usize, moved: Panel) {
+        let Some(panel) = self.panels.get(ix) else {
+            return;
+        };
+        if !panel.locked {
+            self.panels[ix] = moved;
+        } else if moved.path() != panel.path() || moved.location() != panel.location() {
+            self.add(moved.plain_copy());
+        }
+    }
+
     /// Tabs showing `folder` read it again.
     pub fn reload_folder(&mut self, folder: &Path) {
         for panel in &mut self.panels {

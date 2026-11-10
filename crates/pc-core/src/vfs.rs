@@ -95,6 +95,20 @@ pub fn copy_file(
     written
 }
 
+/// A server's file in a temporary folder, for the viewer and editors.
+pub fn fetch(fs: &dyn Fs, path: &Path) -> io::Result<PathBuf> {
+    let meta = fs.metadata(path)?;
+    let local = crate::archive::fresh_scratch()?.join(path.file_name().unwrap_or_default());
+    copy_file(fs, path, &Local, &local, &meta, &mut |_| Ok(()))?;
+    Ok(local)
+}
+
+/// The edited temporary file back to the server.
+pub fn upload(local: &Path, fs: &dyn Fs, path: &Path) -> io::Result<()> {
+    let meta = Local.metadata(local)?;
+    copy_file(&Local, local, fs, path, &meta, &mut |_| Ok(()))
+}
+
 /// Removes a folder and all in it, or a file.
 pub fn remove_all(fs: &dyn Fs, path: &Path) -> io::Result<()> {
     let meta = fs.metadata(path)?;

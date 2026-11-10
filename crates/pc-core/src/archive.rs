@@ -39,9 +39,7 @@ pub struct Member {
 impl Member {
     /// Extracts the file into a folder of its own under `scratch()`.
     pub fn extract(&self) -> io::Result<PathBuf> {
-        static TAKEN: AtomicUsize = AtomicUsize::new(0);
-        let dir = claim()?.join(TAKEN.fetch_add(1, Ordering::Relaxed).to_string());
-        fs::create_dir_all(&dir)?;
+        let dir = fresh_scratch()?;
         extract(&self.archive, &self.listed, &dir)?;
         let path = dir.join(&self.name);
         match path.exists() {
@@ -65,6 +63,14 @@ const LOCK: &str = ".lock";
 
 /// This run's lock, once `scratch()` exists.
 static HELD: Mutex<Option<File>> = Mutex::new(None);
+
+/// A new folder under `scratch()`, so files of one name never meet.
+pub fn fresh_scratch() -> io::Result<PathBuf> {
+    static TAKEN: AtomicUsize = AtomicUsize::new(0);
+    let dir = claim()?.join(TAKEN.fetch_add(1, Ordering::Relaxed).to_string());
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
 
 /// Creates `scratch()` and locks it, at the first use.
 fn claim() -> io::Result<PathBuf> {

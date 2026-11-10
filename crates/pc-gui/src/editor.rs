@@ -1,5 +1,6 @@
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, RopeExt};
@@ -10,6 +11,13 @@ use gpui_kit::*;
 
 use crate::minimap::{self, Minimap};
 use pc_core::edit;
+use pc_core::vfs::{self, Fs};
+
+/// Where a server's file goes back after each save.
+pub struct Upload {
+    pub fs: Arc<dyn Fs>,
+    pub path: PathBuf,
+}
 
 actions!(editor, [Save]);
 
@@ -20,7 +28,7 @@ pub fn bind_keys(cx: &mut App) {
 }
 
 /// Refuses files over `limit_mb`, and ones editing could change by accident.
-pub fn open(path: PathBuf, limit_mb: u64, cx: &mut App) -> io::Result<()> {
+pub fn open(path: PathBuf, limit_mb: u64, upload: Option<Upload>, cx: &mut App) -> io::Result<()> {
     let text = edit::load_text(&path, limit_mb)?;
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(size(px(1000.), px(700.)), cx)),
@@ -32,7 +40,7 @@ pub fn open(path: PathBuf, limit_mb: u64, cx: &mut App) -> io::Result<()> {
         ..Default::default()
     };
     gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| TextEditor::new(path, text, window, cx))
+        cx.new(|cx| TextEditor::new(path, text, upload, window, cx))
     })
     .map(drop)
     .map_err(|err| io::Error::other(err.to_string()))
@@ -45,6 +53,7 @@ fn title(path: &std::path::Path, edited: bool) -> String {
 
 struct TextEditor {
     path: PathBuf,
+    upload: Option<Upload>,
     editor: Entity<EditorState>,
     edited: bool,
     minimap: Entity<Minimap>,
@@ -106,7 +115,13 @@ impl minimap::Source for EditorMap {
 }
 
 impl TextEditor {
-    fn new(path: PathBuf, text: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        path: PathBuf,
+        text: String,
+        upload: Option<Upload>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let editor = cx.new(|cx| {
             let mut editor = EditorState::new(window, cx)
                 .language("text")
@@ -134,6 +149,7 @@ impl TextEditor {
         let map = EditorMap(editor.clone());
         Self {
             path,
+            upload,
             editor,
             edited: false,
             minimap: cx.new(|_| Minimap::new(map)),
@@ -147,6 +163,25 @@ impl TextEditor {
             Ok(()) => {
                 self.edited = false;
                 window.set_window_title(&title(&self.path, false));
+                if let Some(upload) = &self.upload {
+                    let (local, fs, path) =
+                        (self.path.clone(), upload.fs.clone(), upload.path.clone());
+                    cx.spawn_in(window, async move |_, cx| {
+                        let shown = path.display().to_string();
+                        let sent = cx
+                            .background_executor()
+                            .spawn(async move { vfs::upload(&local, &*fs, &path) });
+                        let note = match sent.await {
+                            Ok(()) => Notification::success(format!("Uploaded {shown}")),
+                            Err(err) => {
+                                Notification::error(format!("Could not upload {shown}: {err}"))
+                                    .autohide(false)
+                            }
+                        };
+                        let _ = cx.update(|window, cx| window.push_notification(note, cx));
+                    })
+                    .detach();
+                }
                 cx.notify();
                 true
             }

@@ -4,7 +4,6 @@
 use std::collections::HashSet;
 use std::path::{MAIN_SEPARATOR, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
@@ -14,8 +13,9 @@ use gpui_kit::component::radio::RadioGroup;
 use gpui_kit::component::{ActiveTheme, IconName, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use pc_core::Panel;
 use pc_core::ops::{Answer, JobView, Kind, Operation, Overwrite, Question, Queue, Status, Target};
-use pc_core::vfs::{Local, Meta};
+use pc_core::vfs::Meta;
 
 use crate::Commander;
 
@@ -72,8 +72,13 @@ impl Commander {
             Kind::Copy => "Copy",
             Kind::Move => "Move",
         };
+        let (from, to) = (source.fs(), other.fs());
+        let server = other.remote().map(|remote| remote.url());
+        let label = match &server {
+            Some(url) => format!("{verb} {what} to {url}:"),
+            None => format!("{verb} {what} to:"),
+        };
         let commander = cx.entity().downgrade();
-        let label = format!("{verb} {what} to:");
         open_dialog(
             verb,
             label,
@@ -82,12 +87,17 @@ impl Commander {
             cx,
             move |text, overwrite, _, cx| {
                 let _ = commander.update(cx, |this, cx| {
-                    let target = Target::parse(&text, &folder, sources.len(), &Local);
+                    // The server's own address typed: its path.
+                    let text = server
+                        .as_deref()
+                        .and_then(|url| text.strip_prefix(url))
+                        .unwrap_or(&text);
+                    let target = Target::parse(text, &folder, sources.len(), &*to);
                     this.transfers.queue.push(Operation {
                         kind,
-                        from: Arc::new(Local),
+                        from: from.clone(),
                         sources: sources.clone(),
-                        to: Arc::new(Local),
+                        to: to.clone(),
                         target,
                         overwrite,
                     });
@@ -138,10 +148,10 @@ impl Commander {
         let newly = finished.iter().any(|id| !transfers.seen.contains(id));
         transfers.seen = finished.into_iter().collect();
         if newly {
-            for side in &mut self.panels {
+            for ix in 0..self.panels.len() {
                 // shortcut: a panel whose folder is gone keeps its list until it moves.
-                let _ = side.tabs.current_mut().reload();
-                side.scroll_to_cursor();
+                let remote = self.panels[ix].tabs.current().remote().is_some();
+                self.navigate_on(ix, remote, Panel::reload, window, cx);
             }
         }
         if self.transfers.asked.is_some_and(|id| {

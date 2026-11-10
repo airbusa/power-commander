@@ -5085,6 +5085,7 @@ dependencies = [
 name = "pc-gui"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "gpui-kit",
  "pc-core",
 ]

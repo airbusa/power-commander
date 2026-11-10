@@ -7,13 +7,14 @@ mod find_dialog;
 mod menus;
 mod minimap;
 mod name_dialog;
+mod remote;
 mod settings_dialog;
 mod transfer;
 mod viewer;
 
 use std::borrow::Cow;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -28,6 +29,7 @@ use pc_core::command::{self, Outcome};
 use pc_core::menu::{BUTTON_BAR, Command, Item, TAB_MENU};
 use pc_core::session::Session;
 use pc_core::settings::{self, Settings};
+use pc_core::sftp::Address;
 use pc_core::theme::{self, Theme};
 use pc_core::{Panel, Sort, SortKey, Tabs, archive, edit, icons, ops};
 
@@ -378,9 +380,17 @@ impl Commander {
             }
             return self.view_in_archive(window, cx);
         }
+        if panel.remote().is_some() {
+            let how = if edit {
+                remote::Open::Edit
+            } else {
+                remote::Open::View
+            };
+            return self.open_remote(how, window, cx);
+        }
         let path = panel.folder().join(&entry.name);
         let opened = match edit {
-            true => editor::open(path.clone(), self.settings.editor.limit_mb, cx),
+            true => editor::open(path.clone(), self.settings.editor.limit_mb, None, cx),
             false => {
                 let files = panel.entries().iter().filter(|e| !e.is_dir);
                 let files: Vec<_> = files.map(|e| panel.folder().join(&e.name)).collect();
@@ -404,6 +414,9 @@ impl Commander {
         if panel.in_archive() {
             let text = "Files inside archives cannot be edited yet.";
             return window.push_notification(Notification::warning(text), cx);
+        }
+        if panel.remote().is_some() {
+            return self.open_remote(remote::Open::External, window, cx);
         }
         let path = panel.folder().join(&entry.name);
         if let Err(err) = edit::edit_externally(&self.settings.editor.external, &path) {
@@ -455,6 +468,10 @@ impl Commander {
                 }
                 let _ = commander.update(cx, |this, cx| {
                     let panel = this.panels[side].tabs.current_mut();
+                    if panel.remote().is_some() {
+                        let made = move |panel: &mut Panel| panel.new_folder(&name);
+                        return this.navigate_on(side, true, made, window, cx);
+                    }
                     let folder = panel.folder().to_owned();
                     if let Err(err) = panel.new_folder(&name) {
                         let text = format!("Could not make the folder: {err}");
@@ -490,7 +507,16 @@ impl Commander {
             [one] => format!("the file \"{}\"", one.display_name()),
             many => format!("{} items", many.len()),
         };
+        let server = panel.remote().map(|remote| remote.url());
         let (title, text) = match to_trash {
+            // A server has no trash.
+            _ if server.is_some() => (
+                "Delete",
+                format!(
+                    "Delete {what} on {}? This cannot be undone.",
+                    server.unwrap_or_default()
+                ),
+            ),
             true => ("Delete", format!("Move {what} to the trash?")),
             false => (
                 "Delete permanently",
@@ -516,6 +542,9 @@ impl Commander {
 
     fn delete(&mut self, side: usize, to_trash: bool, window: &mut Window, cx: &mut Context<Self>) {
         let panel = self.panels[side].tabs.current_mut();
+        if panel.remote().is_some() {
+            return self.navigate_on(side, true, move |panel| panel.delete(false), window, cx);
+        }
         let folder = panel.folder().to_owned();
         if let Err(err) = panel.delete(to_trash) {
             window.push_notification(Notification::error(format!("Could not delete: {err}")), cx);
@@ -555,7 +584,7 @@ impl Commander {
 
     fn edit_path(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.active = ix;
-        let path = self.panels[ix].tabs.current().path().display().to_string();
+        let path = self.panels[ix].tabs.current().location();
         let input = cx.new(|cx| InputState::new(window, cx).default_value(path));
         let events = cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
             InputEvent::PressEnter { .. } => this.apply_path_edit(window, cx),
@@ -582,6 +611,26 @@ impl Commander {
         };
         if typed.is_empty() {
             return self.cancel_path_edit(window, cx);
+        }
+        if let Some(address) = Address::parse(&typed) {
+            self.cancel_path_edit(window, cx);
+            return self.connect(ix, address, window, cx);
+        }
+        // On a server, a path typed is the server's.
+        let panel = self.panels[ix].tabs.current();
+        if let Some(remote) = panel.remote() {
+            let target = match typed.strip_prefix(&remote.url()) {
+                Some(path) => PathBuf::from(path),
+                None => panel.folder().join(&typed),
+            };
+            self.cancel_path_edit(window, cx);
+            return self.navigate_on(
+                ix,
+                true,
+                move |panel| panel.go_to_folder(target),
+                window,
+                cx,
+            );
         }
         let side = &mut self.panels[ix];
         let target = command::resolve(&typed, side.tabs.current().folder());
@@ -610,6 +659,29 @@ impl Commander {
 
     fn run_command(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let line = self.command.read(cx).value().to_string();
+        let target = line.trim().strip_prefix("cd ").unwrap_or(line.trim());
+        if let Some(address) = Address::parse(target) {
+            self.focus_panels(window, cx);
+            return self.connect(self.active, address, window, cx);
+        }
+        let panel = self.panels[self.active].tabs.current();
+        if let Some(remote) = panel.remote().filter(|_| !line.trim().is_empty()) {
+            // shortcut: commands do not run on servers; cd moves there.
+            match line.trim().strip_prefix("cd ").map(str::trim) {
+                Some(path) => {
+                    let path = match path.strip_prefix('~') {
+                        Some(rest) => remote.home().join(rest.trim_start_matches('/')),
+                        None => command::resolve(path, panel.folder()),
+                    };
+                    self.navigate(move |panel| panel.go_to_folder(path), window, cx);
+                }
+                None => {
+                    let text = "Commands run on this computer; the panel is on a server.";
+                    window.push_notification(Notification::warning(text), cx);
+                }
+            }
+            return self.focus_panels(window, cx);
+        }
         if !line.trim().is_empty() {
             let folder = self.panels[self.active].tabs.current().folder().to_owned();
             match command::run(&line, &folder) {
@@ -790,19 +862,58 @@ impl Commander {
         ((height / ROW) as isize - 1).max(1)
     }
 
+    /// On a server, in the background.
     fn navigate(
         &mut self,
-        go: impl FnOnce(&mut Panel) -> io::Result<()>,
+        go: impl FnOnce(&mut Panel) -> io::Result<()> + Send + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let side = &mut self.panels[self.active];
-        if let Err(err) = side.tabs.navigate(go) {
-            let text = format!("{}: {err}", side.tabs.current().path().display());
-            window.push_notification(Notification::error(text), cx);
+        let remote = self.panels[self.active].tabs.current().remote().is_some();
+        self.navigate_on(self.active, remote, go, window, cx);
+    }
+
+    /// `background` for a server: the move runs on a copy of the panel,
+    /// which then takes the tab's place. Locally it is instant, and keys
+    /// pressed meanwhile must not be lost.
+    fn navigate_on(
+        &mut self,
+        ix: usize,
+        background: bool,
+        go: impl FnOnce(&mut Panel) -> io::Result<()> + Send + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let side = &mut self.panels[ix];
+        if !background {
+            if let Err(err) = side.tabs.navigate(go) {
+                let text = format!("{}: {err}", side.tabs.current().location());
+                window.push_notification(Notification::error(text), cx);
+            }
+            side.scroll_to_cursor();
+            return cx.notify();
         }
-        side.scroll_to_cursor();
-        cx.notify();
+        let tab = side.tabs.active();
+        let mut moved = side.tabs.current().clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let went = cx
+                .background_executor()
+                .spawn(async move { go(&mut moved).map(|()| moved) });
+            let went = went.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let side = &mut this.panels[ix];
+                match went {
+                    Ok(moved) => side.tabs.navigated(tab, moved),
+                    Err(err) => {
+                        let text = format!("{}: {err}", side.tabs.current().location());
+                        window.push_notification(Notification::error(text), cx);
+                    }
+                }
+                side.scroll_to_cursor();
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn render_panel(&self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
@@ -992,7 +1103,7 @@ impl Commander {
                         cx.listener(move |this, _, window, cx| this.edit_path(ix, window, cx)),
                     )
                     .truncate()
-                    .child(panel.path().display().to_string())
+                    .child(panel.location())
                     .into_any_element(),
             })
             .child(column_titles)
@@ -1126,6 +1237,8 @@ impl Render for Commander {
                     Command::ToggleMark => this.mark(Panel::toggle_mark, cx),
                     Command::Copy => this.transfer(ops::Kind::Copy, window, cx),
                     Command::Move => this.transfer(ops::Kind::Move, window, cx),
+                    Command::ConnectToServer => this.ask_address(window, cx),
+                    Command::Disconnect => this.disconnect(window, cx),
                     Command::OperationQueue => {
                         transfer::open_queue(this.transfers.queue.clone(), window, cx)
                     }
