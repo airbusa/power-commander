@@ -3,6 +3,7 @@
 
 mod appearance;
 mod attributes_dialog;
+mod compare_view;
 mod connections_dialog;
 mod editor;
 mod file_tools;
@@ -1213,6 +1214,7 @@ impl Render for Commander {
                     Command::VerifyChecksums => this.verify_checksums(window, cx),
                     Command::SplitFile => this.split_file(window, cx),
                     Command::MultiRenameTool => this.multi_rename(window, cx),
+                    Command::CompareByContent => this.compare_files(window, cx),
                     Command::CombineFiles => this.combine_files(window, cx),
                     Command::View => this.open_file(remote::Open::View, window, cx),
                     Command::Edit => this.open_file(remote::Open::Edit, window, cx),

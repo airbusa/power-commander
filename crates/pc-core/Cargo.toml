@@ -9,6 +9,8 @@ license.workspace = true
 # Checksum files: SFV and MD5; ring has the SHAs.
 crc32fast = "1"
 md-5 = "0.10"
+# Compare By Content's line diff; GPUI Kit builds it already.
+similar = "2"
 # Modification times in local time.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The configuration folder of each platform.

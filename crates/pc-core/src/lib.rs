@@ -3,6 +3,7 @@ pub mod attributes;
 pub mod checksum;
 pub mod codepage;
 pub mod command;
+pub mod compare;
 pub mod connections;
 pub mod edit;
 pub mod ftp;
