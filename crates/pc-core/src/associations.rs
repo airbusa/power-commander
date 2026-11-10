@@ -64,7 +64,7 @@ pub fn find<'a>(list: &'a [Association], name: &str) -> Option<&'a Association> 
 /// The mask "Associate With" starts from: `*.txt`, or the whole name.
 pub fn mask_for(name: &str) -> String {
     match name.rfind('.') {
-        Some(dot) if dot > 0 => format!("*{}", &name[dot..].to_lowercase()),
+        Some(dot) if dot > 0 => format!("*{}", name[dot..].to_lowercase()),
         _ => name.to_owned(),
     }
 }
