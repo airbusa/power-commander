@@ -81,6 +81,7 @@ pub enum Command {
     // Button bar
     View,
     Edit,
+    EditExternally,
     Copy,
     Move,
     NewFolder,
@@ -149,6 +150,7 @@ pub const MENUS: &[Menu] = &[
                 InternalAssociations,
             ),
             cmd("Properties...", "alt-enter", Properties),
+            cmd("Edit With External Editor", "ctrl-shift-f4", EditExternally),
             cmd(
                 "Calculate Occupied Space...",
                 "ctrl-l",

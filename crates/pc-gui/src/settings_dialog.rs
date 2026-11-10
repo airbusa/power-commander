@@ -11,7 +11,7 @@ use pc_core::settings::{PAGES, Settings, StartFont, StartMode};
 use crate::Commander;
 
 const WIDTH: f32 = 720.;
-const BODY_HEIGHT: f32 = 460.;
+const BODY_HEIGHT: f32 = 550.;
 
 const START_MODES: [StartMode; 4] = [
     StartMode::Text,
@@ -34,40 +34,58 @@ pub fn open(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let mut width = |value: usize, cx: &mut App| {
+    let mut input = |value: String, digits: bool, cx: &mut App| {
         cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(value.to_string())
-                .validate(|text, _| text.len() <= 4 && text.chars().all(|c| c.is_ascii_digit()))
+            let state = InputState::new(window, cx).default_value(value);
+            match digits {
+                true => state.validate(|text, _| {
+                    text.len() <= 4 && text.chars().all(|c| c.is_ascii_digit())
+                }),
+                false => state,
+            }
         })
     };
-    let text_width = width(settings.viewer.text_width, cx);
-    let binary_width = width(settings.viewer.binary_width, cx);
+    let text_width = input(settings.viewer.text_width.to_string(), true, cx);
+    let binary_width = input(settings.viewer.binary_width.to_string(), true, cx);
+    let limit = input(settings.editor.limit_mb.to_string(), true, cx);
+    let external = input(settings.editor.external.clone(), false, cx);
     let view = cx.new(|cx| {
-        let changed =
-            |cx: &mut Context<SettingsDialog>, input: &Entity<InputState>, binary: bool| {
-                cx.subscribe(input, move |this, input, event: &InputEvent, cx| {
-                    let InputEvent::Change = event else {
-                        return;
-                    };
-                    if let Ok(width @ 1..) = input.read(cx).value().parse() {
-                        let viewer = &mut this.draft.viewer;
-                        *(if binary {
-                            &mut viewer.binary_width
-                        } else {
-                            &mut viewer.text_width
-                        }) = width;
-                        cx.notify();
-                    }
-                })
-            };
+        // Each input's text into the draft, as typed.
+        let bind = |cx: &mut Context<SettingsDialog>,
+                    input: &Entity<InputState>,
+                    set: fn(&mut Settings, &str)| {
+            cx.subscribe(input, move |this, input, event: &InputEvent, cx| {
+                if let InputEvent::Change = event {
+                    set(&mut this.draft, &input.read(cx).value());
+                    cx.notify();
+                }
+            })
+        };
         SettingsDialog {
-            _widths: [
-                changed(cx, &text_width, false),
-                changed(cx, &binary_width, true),
+            _inputs: [
+                bind(cx, &text_width, |s, text| {
+                    if let Ok(width @ 1..) = text.parse() {
+                        s.viewer.text_width = width;
+                    }
+                }),
+                bind(cx, &binary_width, |s, text| {
+                    if let Ok(width @ 1..) = text.parse() {
+                        s.viewer.binary_width = width;
+                    }
+                }),
+                bind(cx, &limit, |s, text| {
+                    if let Ok(mb @ 1..) = text.parse() {
+                        s.editor.limit_mb = mb;
+                    }
+                }),
+                bind(cx, &external, |s, text| {
+                    s.editor.external = text.trim().to_owned()
+                }),
             ],
             text_width,
             binary_width,
+            limit,
+            external,
             commander,
             saved: settings.clone(),
             draft: settings,
@@ -91,7 +109,9 @@ struct SettingsDialog {
     page: usize,
     text_width: Entity<InputState>,
     binary_width: Entity<InputState>,
-    _widths: [Subscription; 2],
+    limit: Entity<InputState>,
+    external: Entity<InputState>,
+    _inputs: [Subscription; 4],
 }
 
 impl SettingsDialog {
@@ -166,27 +186,39 @@ impl SettingsDialog {
                     cx.notify();
                 })),
         );
-        GroupBox::new().outline().title("Viewer (F3)").child(
+        GroupBox::new().outline().title("Viewer for F3").child(
             v_flex()
                 .gap_4()
-                .child(h_flex().items_start().gap_12().child(start).child(font))
                 .child(
-                    Checkbox::new("viewer-wrap")
-                        .label("Wrap text")
-                        .checked(viewer.wrap)
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            this.draft.viewer.wrap = *checked;
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Checkbox::new("viewer-minimap")
-                        .label("Show the minimap (Viewer and Editor)")
-                        .checked(viewer.minimap)
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            this.draft.viewer.minimap = *checked;
-                            cx.notify();
-                        })),
+                    h_flex()
+                        .items_start()
+                        .gap_8()
+                        .child(start)
+                        .child(font)
+                        .child(
+                            v_flex()
+                                .gap_2()
+                                .child("Show:")
+                                .child(
+                                    Checkbox::new("viewer-wrap")
+                                        .label("Wrap text")
+                                        .checked(viewer.wrap)
+                                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                            this.draft.viewer.wrap = *checked;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    // Beside the editor too.
+                                    Checkbox::new("viewer-minimap")
+                                        .label("Minimap")
+                                        .checked(viewer.minimap)
+                                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                            this.draft.viewer.minimap = *checked;
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
                 )
                 .child(
                     h_flex()
@@ -198,10 +230,68 @@ impl SettingsDialog {
         )
     }
 
+    fn render_editor(&self, cx: &mut Context<Self>) -> GroupBox {
+        let theme = cx.theme();
+        let external = self.external.clone();
+        let browse = Button::new("editor-browse")
+            .outline()
+            .label("Browse...")
+            .on_click(cx.listener(move |_, _, window, cx| {
+                let paths = cx.prompt_for_paths(PathPromptOptions {
+                    files: true,
+                    directories: false,
+                    multiple: false,
+                    prompt: Some("Choose".into()),
+                });
+                let external = external.clone();
+                cx.spawn_in(window, async move |_, cx| {
+                    let Ok(Ok(Some(paths))) = paths.await else {
+                        return;
+                    };
+                    let program = paths[0].to_string_lossy().into_owned();
+                    let program = match program.contains(' ') {
+                        true => format!("\"{program}\""),
+                        false => program,
+                    };
+                    let _ = cx.update(|window, cx| {
+                        external.update(cx, |input, cx| input.set_value(program, window, cx))
+                    });
+                })
+                .detach();
+            }));
+        GroupBox::new().outline().title("Editor for F4").child(
+            v_flex()
+                .gap_3()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child("Built-in editor (F4) opens files up to")
+                        .child(div().w(px(70.)).child(Input::new(&self.limit)))
+                        .child("MB"),
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child("External editor (Ctrl+Shift+F4):")
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(div().flex_1().child(Input::new(&self.external)))
+                                .child(browse),
+                        )
+                        .child(
+                            div()
+                                .text_color(theme.muted_foreground)
+                                .child("%1 is the file, else it goes last; e.g. code --wait %1"),
+                        ),
+                ),
+        )
+    }
+
     fn render_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (_, title) = PAGES[self.page];
         let content = match title {
-            "Display" => Some(
+            "Display" => vec![
                 GroupBox::new().outline().title("File display").child(
                     h_flex()
                         .gap_6()
@@ -226,9 +316,9 @@ impl SettingsDialog {
                                 })),
                         ),
                 ),
-            ),
-            "Edit/View" => Some(self.render_viewer(cx)),
-            "Folder Tabs" => Some(
+            ],
+            "Edit/View" => vec![self.render_viewer(cx), self.render_editor(cx)],
+            "Folder Tabs" => vec![
                 GroupBox::new().outline().title("Folder tab headers").child(
                     Checkbox::new("tab-header-always")
                         .label("Show tab header also when there is only one tab")
@@ -238,8 +328,8 @@ impl SettingsDialog {
                             cx.notify();
                         })),
                 ),
-            ),
-            _ => None,
+            ],
+            _ => Vec::new(),
         };
         let theme = cx.theme();
         v_flex()
@@ -255,7 +345,15 @@ impl SettingsDialog {
                     .border_color(theme.border)
                     .child(title),
             )
-            .children(content)
+            .child(
+                v_flex()
+                    .id("settings-page-body")
+                    .flex_1()
+                    .min_h_0()
+                    .gap_3()
+                    .overflow_y_scroll()
+                    .children(content),
+            )
     }
 }
 

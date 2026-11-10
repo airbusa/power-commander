@@ -28,7 +28,7 @@ use pc_core::menu::{BUTTON_BAR, Command, Item, TAB_MENU};
 use pc_core::session::Session;
 use pc_core::settings::{self, Settings};
 use pc_core::theme::{self, Theme};
-use pc_core::{Panel, Sort, SortKey, Tabs, archive, icons};
+use pc_core::{Panel, Sort, SortKey, Tabs, archive, edit, icons};
 
 use crate::appearance::PanelColors;
 use crate::menus::{ReopenTab, Run, SelectTab, SetTheme};
@@ -372,7 +372,7 @@ impl Commander {
         }
         let path = panel.folder().join(&entry.name);
         let opened = match edit {
-            true => editor::open(path.clone(), cx),
+            true => editor::open(path.clone(), self.settings.editor.limit_mb, cx),
             false => {
                 let files = panel.entries().iter().filter(|e| !e.is_dir);
                 let files: Vec<_> = files.map(|e| panel.folder().join(&e.name)).collect();
@@ -382,6 +382,23 @@ impl Commander {
             }
         };
         if let Err(err) = opened {
+            let text = format!("{}: {err}", path.display());
+            window.push_notification(Notification::error(text), cx);
+        }
+    }
+
+    /// The cursor's file in the external editor of Settings' Edit/View page.
+    fn edit_externally(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.panels[self.active].tabs.current();
+        let Some(entry) = panel.current_entry().filter(|e| !e.is_dir) else {
+            return;
+        };
+        if panel.in_archive() {
+            let text = "Files inside archives cannot be edited yet.";
+            return window.push_notification(Notification::warning(text), cx);
+        }
+        let path = panel.folder().join(&entry.name);
+        if let Err(err) = edit::edit_externally(&self.settings.editor.external, &path) {
             let text = format!("{}: {err}", path.display());
             window.push_notification(Notification::error(text), cx);
         }
@@ -1085,6 +1102,7 @@ impl Render for Commander {
                     Command::NewFolder => this.new_folder(window, cx),
                     Command::View => this.open_file(false, window, cx),
                     Command::Edit => this.open_file(true, window, cx),
+                    Command::EditExternally => this.edit_externally(window, cx),
                     Command::Delete => this.confirm_delete(true, window, cx),
                     Command::DeletePermanently => this.confirm_delete(false, window, cx),
                     Command::SortByName => this.set_sort(this.active, Sort::by(SortKey::Name), cx),

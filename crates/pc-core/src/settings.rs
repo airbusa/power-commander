@@ -17,6 +17,32 @@ pub struct Settings {
     pub show_hidden: bool,
     pub show_system: bool,
     pub viewer: ViewerSettings,
+    pub editor: EditorSettings,
+}
+
+/// F4 edits in the built-in editor, Ctrl+Shift+F4 in another program.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EditorSettings {
+    /// The largest file the built-in editor opens, in MB: it takes about
+    /// eight times as much memory.
+    pub limit_mb: u64,
+    /// Ctrl+Shift+F4's command line: `%1` is the file, else the file goes last.
+    pub external: String,
+}
+
+impl Default for EditorSettings {
+    fn default() -> Self {
+        let external = match () {
+            _ if cfg!(windows) => "notepad.exe",
+            _ if cfg!(target_os = "macos") => "open -t",
+            _ => "xdg-open",
+        };
+        Self {
+            limit_mb: 32,
+            external: external.into(),
+        }
+    }
 }
 
 /// Lister's: what F3 shows a file as at first.

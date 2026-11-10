@@ -19,9 +19,9 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("secondary-s", Save, Some(CONTEXT))]);
 }
 
-/// Refuses files that editing could change by accident; F3 views those.
-pub fn open(path: PathBuf, cx: &mut App) -> io::Result<()> {
-    let text = edit::load_text(&path)?;
+/// Refuses files over `limit_mb`, and ones editing could change by accident.
+pub fn open(path: PathBuf, limit_mb: u64, cx: &mut App) -> io::Result<()> {
+    let text = edit::load_text(&path, limit_mb)?;
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(size(px(1000.), px(700.)), cx)),
         titlebar: Some(TitlebarOptions {
