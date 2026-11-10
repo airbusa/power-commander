@@ -15,7 +15,8 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::settings::{StartFont, StartMode, ViewerSettings};
 use pc_core::viewer::{
-    COPY_LIMIT, Decoding, Detected, LONG_ROW, Layout, Query, Row, TextFile, detect, search_url,
+    COPY_LIMIT, Decoding, Detected, LONG_ROW, Layout, Query, Row, Searches, TextFile, detect,
+    search_url,
 };
 use pc_core::{codepage, html};
 
@@ -77,8 +78,6 @@ const PAD: Pixels = px(8.);
 const FIRST_DRAWN: usize = 60;
 /// The scrollbar's height in rows: small enough for f32 pixels to stay exact.
 const VIRTUAL_HEIGHT: f32 = 1_000_000.;
-/// Searches the Find dialog's list keeps.
-const HISTORY: usize = 20;
 /// Larger HTML is shown as plain text.
 const HTML_LIMIT: u64 = 64 << 20;
 
@@ -86,7 +85,9 @@ pub fn bind_keys(cx: &mut App) {
     let keys = Some(CONTEXT);
     cx.bind_keys([
         KeyBinding::new("escape", Close, keys),
-        KeyBinding::new("f3", Close, keys),
+        // Lister's F3 is Find next, as F5; earlier bound, so menus show F5.
+        KeyBinding::new("f3", FindNext, keys),
+        KeyBinding::new("shift-f3", FindPrevious, keys),
         KeyBinding::new("q", Close, keys),
         KeyBinding::new("up", LineUp, keys),
         KeyBinding::new("down", LineDown, keys),
@@ -299,14 +300,18 @@ impl Shown {
     }
 }
 
-/// The last Find, for Find next and the next Find dialog, in every viewer.
-#[derive(Default)]
-struct Searches {
-    query: Query,
-    history: Vec<String>,
-}
+/// The searches, shared by the viewers.
+struct LastSearches(Searches);
 
-impl Global for Searches {}
+impl Global for LastSearches {}
+
+/// Read from disk at the first Find.
+fn searches(cx: &mut App) -> &mut Searches {
+    if !cx.has_global::<LastSearches>() {
+        cx.set_global(LastSearches(Searches::load().unwrap_or_default()));
+    }
+    &mut cx.global_mut::<LastSearches>().0
+}
 
 struct Viewer {
     shown: Shown,
@@ -729,17 +734,15 @@ impl Viewer {
         if self.shown.mode == Mode::Picture {
             return;
         }
-        let searches = cx.default_global::<Searches>();
-        let (query, history) = (searches.query.clone(), searches.history.clone());
+        let Searches { query, history } = searches(cx).clone();
         let viewer = cx.entity().downgrade();
         find_dialog::open(query, history, window, cx, move |query, window, cx| {
-            let searches = cx.default_global::<Searches>();
-            if !query.text.is_empty() {
-                searches.history.retain(|text| *text != query.text);
-                searches.history.insert(0, query.text.clone());
-                searches.history.truncate(HISTORY);
+            let searches = searches(cx);
+            searches.add(query.clone());
+            if let Err(err) = searches.save() {
+                let text = format!("Could not save the searches: {err}");
+                window.push_notification(Notification::error(text), cx);
             }
-            searches.query = query.clone();
             let _ = viewer.update(cx, |this, cx| {
                 let from = this.screen_top();
                 this.run_find(&query, from, query.backwards, window, cx);
@@ -747,17 +750,15 @@ impl Viewer {
         });
     }
 
-    /// F5 goes on as the dialog said, Shift+F5 the other way, from the selection.
+    /// F3 and F5 go on as the dialog said, with Shift the other way, from the selection.
     fn find_next(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.shown.mode == Mode::Picture {
             return;
         }
-        let query = cx
-            .try_global::<Searches>()
-            .map(|searches| searches.query.clone());
-        let Some(query) = query.filter(|query| !query.text.is_empty()) else {
+        let query = searches(cx).query.clone();
+        if query.text.is_empty() {
             return self.open_find(window, cx);
-        };
+        }
         let backwards = query.backwards != reverse;
         let selected = self.selected();
         let from = match (selected.is_empty(), backwards) {

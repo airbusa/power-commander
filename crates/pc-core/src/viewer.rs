@@ -8,7 +8,9 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::codepage;
+use serde::{Deserialize, Serialize};
+
+use crate::{codepage, settings};
 
 /// Unwrapped lines are cut into rows of this many characters.
 pub const LONG_ROW: usize = 1024;
@@ -23,7 +25,8 @@ pub const COPY_LIMIT: u64 = 64 << 20;
 const OVERLAP: usize = 4 << 10;
 
 /// What Lister's Find dialog asks.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Query {
     pub text: String,
     pub whole_words: bool,
@@ -32,6 +35,38 @@ pub struct Query {
     /// `text` is bytes as hex digits: `77 6F 72 64`.
     pub hex: bool,
     pub regex: bool,
+}
+
+/// Searches the Find dialog's list keeps.
+const HISTORY: usize = 20;
+
+/// The last Find and the texts searched before, kept between runs: F3
+/// and F5 go on with it in any viewer.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Searches {
+    pub query: Query,
+    pub history: Vec<String>,
+}
+
+impl Searches {
+    pub fn load() -> io::Result<Self> {
+        settings::read_json("searches.json")
+    }
+
+    pub fn save(&self) -> io::Result<()> {
+        settings::write_json("searches.json", self)
+    }
+
+    /// `query` becomes the last one, its text the history's first.
+    pub fn add(&mut self, query: Query) {
+        if !query.text.is_empty() {
+            self.history.retain(|text| *text != query.text);
+            self.history.insert(0, query.text.clone());
+            self.history.truncate(HISTORY);
+        }
+        self.query = query;
+    }
 }
 
 pub enum Pattern {
@@ -1051,6 +1086,14 @@ mod tests {
         assert_eq!(find(&file, &query("für"), 0, false), Some(6..12));
         std::fs::remove_file(&path).unwrap();
 
+        let mut searches = Searches::default();
+        for text in ["a", "b", "a"] {
+            searches.add(query(text));
+        }
+        assert_eq!(
+            (searches.history, searches.query.text),
+            (vec!["a".into(), "b".into()], "a".into())
+        );
         assert!(query("").pattern().is_err());
         assert!(
             Query {
