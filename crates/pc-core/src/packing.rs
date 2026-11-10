@@ -579,7 +579,7 @@ fn failure(code: Option<i32>, stderr: &[u8]) -> String {
 /// The last `NN%` 7-Zip wrote in `bytes`.
 fn last_percent(bytes: &[u8]) -> Option<u64> {
     let text = String::from_utf8_lossy(bytes);
-    text.split(|c: char| c == '\u{8}' || c == '\r' || c == '\n')
+    text.split(['\u{8}', '\r', '\n'])
         .filter_map(|part| {
             let part = part.trim_start();
             let digits = part.find('%')?;
@@ -587,7 +587,7 @@ fn last_percent(bytes: &[u8]) -> Option<u64> {
             (!number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
                 .then(|| number.parse::<u64>().ok())?
         })
-        .last()
+        .next_back()
         .map(|percent| percent.min(100))
 }
 
