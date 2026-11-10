@@ -15,6 +15,7 @@ mod pack_dialog;
 mod pdf_view;
 mod properties_dialog;
 mod remote;
+mod rename_dialog;
 mod settings_dialog;
 mod transfer;
 mod viewer;
@@ -1211,6 +1212,7 @@ impl Render for Commander {
                     Command::CreateChecksumFiles => this.create_checksums(window, cx),
                     Command::VerifyChecksums => this.verify_checksums(window, cx),
                     Command::SplitFile => this.split_file(window, cx),
+                    Command::MultiRenameTool => this.multi_rename(window, cx),
                     Command::CombineFiles => this.combine_files(window, cx),
                     Command::View => this.open_file(remote::Open::View, window, cx),
                     Command::Edit => this.open_file(remote::Open::Edit, window, cx),

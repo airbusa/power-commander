@@ -15,6 +15,7 @@ pub mod packing;
 pub mod pdf;
 pub mod properties;
 pub mod remote;
+pub mod rename;
 pub mod secrets;
 pub mod session;
 pub mod settings;
