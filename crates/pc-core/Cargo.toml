@@ -30,3 +30,6 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "io-util", "sync"] }
 # F8 moves to the trash, as each platform keeps one.
 trash = "5.3.0"
+suppaftp = { version = "12", default-features = false, features = ["rustls-ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+ring = "0.17"

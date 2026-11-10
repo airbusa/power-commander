@@ -3,6 +3,7 @@ pub mod codepage;
 pub mod command;
 pub mod connections;
 pub mod edit;
+pub mod ftp;
 pub mod html;
 pub mod icons;
 pub mod menu;

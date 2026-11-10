@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::radio::RadioGroup;
 use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, h_flex, v_flex};
@@ -24,16 +24,7 @@ pub fn open(commander: WeakEntity<Commander>, side: usize, window: &mut Window, 
         InputState::new(window, cx)
             .placeholder("sftp://user@host:port/path, ftp://, ftps://, or a host below")
     });
-    let view = cx.new(|cx| {
-        let entered = cx.subscribe_in(
-            &address,
-            window,
-            |this: &mut ConnectionsDialog, _, event, window, cx| {
-                if let InputEvent::PressEnter { .. } = event {
-                    this.connect_typed(window, cx);
-                }
-            },
-        );
+    let view = cx.new(|_| {
         let saved = Connections::load().unwrap_or_default().saved;
         let hosts = connections::ssh_hosts();
         let selected = match (saved.is_empty(), hosts.is_empty()) {
@@ -48,15 +39,19 @@ pub fn open(commander: WeakEntity<Commander>, side: usize, window: &mut Window, 
             saved,
             hosts,
             address: address.clone(),
-            _entered: entered,
         }
     });
     window.open_dialog(cx, move |dialog, _, _| {
+        let enter = view.clone();
         dialog
             .title("Connect to server")
             .width(px(640.))
             .overlay_closable(false)
             .child(view.clone())
+            .on_ok(move |_, window, cx| {
+                enter.update(cx, |this, cx| this.connect_typed(window, cx));
+                false
+            })
     });
     address.update(cx, |input, cx| input.focus(window, cx));
 }
@@ -74,7 +69,6 @@ struct ConnectionsDialog {
     hosts: Vec<String>,
     selected: Option<Pick>,
     address: Entity<InputState>,
-    _entered: Subscription,
 }
 
 impl ConnectionsDialog {
@@ -388,11 +382,16 @@ fn open_edit(
         done: Rc::new(done),
     });
     window.open_dialog(cx, move |dialog, _, _| {
+        let enter = view.clone();
         dialog
             .title("Server")
             .width(px(520.))
             .overlay_closable(false)
             .child(view.clone())
+            .on_ok(move |_, window, cx| {
+                enter.update(cx, |this, cx| this.finish(window, cx));
+                false
+            })
     });
     name.update(cx, |input, cx| input.focus(window, cx));
 }

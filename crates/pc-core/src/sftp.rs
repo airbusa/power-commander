@@ -403,7 +403,7 @@ fn meta(attrs: &Metadata) -> Meta {
 }
 
 /// `rwxr-xr-x`, as local panels show it.
-fn mode_text(mode: Option<u32>) -> String {
+pub(crate) fn mode_text(mode: Option<u32>) -> String {
     let Some(mode) = mode else {
         return String::new();
     };

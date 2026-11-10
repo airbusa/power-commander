@@ -141,13 +141,10 @@ pub fn connect(address: &Address, ask: Ask) -> io::Result<(Arc<dyn Remote>, Path
             let start = sftp.start(address);
             Ok((sftp, start))
         }
-        // shortcut: FTP comes in the next step.
         Scheme::Ftp | Scheme::Ftps => {
-            let _ = ask;
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "FTP is not supported yet",
-            ))
+            let ftp = crate::ftp::Ftp::connect(address, ask)?;
+            let start = ftp.start(address);
+            Ok((ftp, start))
         }
     }
 }

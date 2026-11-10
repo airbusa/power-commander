@@ -10,7 +10,7 @@ use futures::StreamExt;
 use futures::channel::{mpsc as channel, oneshot};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
@@ -270,32 +270,25 @@ fn ask_user(
             keyring,
         } => {
             let input = cx.new(|cx| InputState::new(window, cx).masked(true));
-            let view = cx.new(|cx| {
-                let entered = cx.subscribe_in(
-                    &input,
-                    window,
-                    |this: &mut SecretDialog, _, event, window, cx| {
-                        if let InputEvent::PressEnter { .. } = event {
-                            this.finish(window, cx);
-                        }
-                    },
-                );
-                SecretDialog {
-                    text,
-                    input: input.clone(),
-                    answer,
-                    keyring,
-                    remember: false,
-                    keep,
-                    _entered: entered,
-                }
+            let view = cx.new(|_| SecretDialog {
+                text,
+                input: input.clone(),
+                answer,
+                keyring,
+                remember: false,
+                keep,
             });
             window.open_dialog(cx, move |dialog, _, _| {
+                let enter = view.clone();
                 dialog
                     .title(title.clone())
                     .width(px(460.))
                     .overlay_closable(false)
                     .child(view.clone())
+                    .on_ok(move |_, window, cx| {
+                        enter.update(cx, |this, cx| this.finish(window, cx));
+                        false
+                    })
             });
             input.update(cx, |input, cx| input.focus(window, cx));
         }
@@ -310,7 +303,6 @@ struct SecretDialog {
     keyring: Option<String>,
     remember: bool,
     keep: Keep,
-    _entered: Subscription,
 }
 
 impl SecretDialog {
