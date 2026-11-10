@@ -14,6 +14,8 @@ dirs = "6"
 encoding_rs = "0.8"
 # Finds the line ends of big files fast.
 memchr = "2"
+# Saved server passwords: KWallet or GNOME Keyring, macOS Keychain, Windows Credential Manager.
+keyring = "4"
 # PDF pages for the viewer, by the bundled PDFium (vendor/pdfium).
 pdfium-render = { version = "0.9", default-features = false, features = ["pdfium_8125", "thread_safe"] }
 # The viewer's Find; GPUI builds it already.

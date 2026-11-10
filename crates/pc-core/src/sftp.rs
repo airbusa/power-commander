@@ -19,6 +19,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Runtime;
 
 use crate::Entry;
+use crate::remote::{Address, Ask, Prompt, Reply};
+use crate::secrets;
 use crate::vfs::{Fs, Meta, Remote};
 
 /// Every connection's network work; callers block on it from their own threads.
@@ -30,64 +32,6 @@ static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
         .build()
         .expect("a runtime for SSH")
 });
-
-/// `sftp://[user@]host[:port][/path]`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Address {
-    pub user: Option<String>,
-    /// A `~/.ssh/config` host name, or the server's.
-    pub host: String,
-    pub port: Option<u16>,
-    pub path: Option<String>,
-}
-
-impl Address {
-    pub fn parse(text: &str) -> Option<Self> {
-        let rest = text.trim().strip_prefix("sftp://")?;
-        let (authority, path) = match rest.find('/') {
-            Some(at) => (&rest[..at], Some(rest[at..].to_owned())),
-            None => (rest, None),
-        };
-        let (user, server) = match authority.rsplit_once('@') {
-            Some((user, server)) => (Some(user.to_owned()), server),
-            None => (None, authority),
-        };
-        let (host, port) = match server.rsplit_once(':') {
-            Some((host, port)) if port.parse::<u16>().is_ok() => (host, port.parse().ok()),
-            _ => (server, None),
-        };
-        let host = host.trim_start_matches('[').trim_end_matches(']');
-        (!host.is_empty()).then(|| Address {
-            user: user.filter(|user| !user.is_empty()),
-            host: host.to_owned(),
-            port,
-            path,
-        })
-    }
-}
-
-/// What connecting asks the user.
-#[derive(Clone, Debug)]
-pub enum Prompt {
-    /// The server's key is not in `known_hosts` yet.
-    UnknownHost {
-        host: String,
-        key_type: String,
-        fingerprint: String,
-    },
-    /// A password, or a key file's passphrase.
-    Secret { title: String, text: String },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Reply {
-    Trust { remember: bool },
-    Secret(String),
-    Cancel,
-}
-
-/// Answers a prompt; called on a thread of its own, so it may block.
-pub type Ask = Arc<dyn Fn(Prompt) -> Reply + Send + Sync>;
 
 pub struct Sftp {
     url: String,
@@ -123,12 +67,23 @@ impl Drop for Sftp {
     }
 }
 
-async fn connect(address: &Address, ask: Ask) -> io::Result<Sftp> {
+/// What `~/.ssh/config` makes of the address: user, server and port.
+fn resolve(address: &Address) -> (russh_config::Config, String, String, u16) {
     let config = russh_config::parse_home(&address.host)
         .unwrap_or_else(|_| russh_config::Config::default(&address.host));
-    let host = config.host_name.clone();
+    let host = config.host().to_owned();
     let port = address.port.unwrap_or_else(|| config.port());
     let user = address.user.clone().unwrap_or_else(|| config.user());
+    (config, user, host, port)
+}
+
+pub(crate) fn keyring_key(address: &Address) -> String {
+    let (_, user, host, port) = resolve(address);
+    secrets::key("sftp", &user, &host, port)
+}
+
+async fn connect(address: &Address, ask: Ask) -> io::Result<Sftp> {
+    let (config, user, host, port) = resolve(address);
     let known_hosts = config
         .host_config
         .user_known_hosts_file
@@ -154,7 +109,8 @@ async fn connect(address: &Address, ask: Ask) -> io::Result<Sftp> {
         Some(why) => io::Error::new(io::ErrorKind::PermissionDenied, why),
         None => io::Error::other(format!("{host}:{port}: {err}")),
     })?;
-    login(&mut ssh, &user, &host, &config, &ask).await?;
+    let key = secrets::key("sftp", &user, &host, port);
+    login(&mut ssh, &user, &host, &key, &config, &ask).await?;
     let channel = ssh.channel_open_session().await.map_err(other)?;
     channel
         .request_subsystem(true, "sftp")
@@ -250,6 +206,7 @@ async fn login(
     ssh: &mut Handle<Client>,
     user: &str,
     host: &str,
+    key: &str,
     config: &russh_config::Config,
     ask: &Ask,
 ) -> io::Result<()> {
@@ -273,6 +230,7 @@ async fn login(
                 let prompt = Prompt::Secret {
                     title: "Key passphrase".into(),
                     text: format!("Passphrase for {}", file.display()),
+                    keyring: None,
                 };
                 let Reply::Secret(passphrase) = ask_user(ask, prompt).await else {
                     continue;
@@ -313,6 +271,7 @@ async fn login(
         let prompt = Prompt::Secret {
             title: "Password".into(),
             text: format!("Password for {user}@{host}"),
+            keyring: Some(key.to_owned()),
         };
         let Reply::Secret(secret) = ask_user(ask, prompt).await else {
             break;
@@ -600,29 +559,6 @@ impl Drop for SyncFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reads_addresses() {
-        let address = |text| Address::parse(text);
-        assert_eq!(
-            address("sftp://me@example.org:2222/var/log"),
-            Some(Address {
-                user: Some("me".into()),
-                host: "example.org".into(),
-                port: Some(2222),
-                path: Some("/var/log".into()),
-            })
-        );
-        let alias = address("sftp://myserver").unwrap();
-        assert_eq!(
-            (alias.user, alias.host.as_str(), alias.port, alias.path),
-            (None, "myserver", None, None)
-        );
-        assert_eq!(address("sftp://[::1]:22/").unwrap().host, "::1");
-        assert!(address("sftp://").is_none());
-        assert!(address("/home").is_none());
-        assert_eq!(mode_text(Some(0o100754)), "rwxr-xr--");
-    }
 
     /// Needs a server: PC_SFTP_TEST=sftp://user@host:port/dir, with a key
     /// it takes in $HOME/.ssh. The first run trusts the host key.

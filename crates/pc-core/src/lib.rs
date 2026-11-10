@@ -1,12 +1,15 @@
 pub mod archive;
 pub mod codepage;
 pub mod command;
+pub mod connections;
 pub mod edit;
 pub mod html;
 pub mod icons;
 pub mod menu;
 pub mod ops;
 pub mod pdf;
+pub mod remote;
+pub mod secrets;
 pub mod session;
 pub mod settings;
 pub mod sftp;

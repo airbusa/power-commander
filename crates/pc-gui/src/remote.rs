@@ -4,23 +4,26 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 
 use futures::StreamExt;
 use futures::channel::{mpsc as channel, oneshot};
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{WindowExt, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use pc_core::sftp::{Address, Ask, Prompt, Reply, Sftp};
+use pc_core::remote::{self, Address, Ask, Prompt, Reply};
+use pc_core::secrets;
 use pc_core::vfs::{self, Local};
 use pc_core::{edit, vfs::Fs};
 
 use crate::{Commander, editor, viewer};
 
 impl Commander {
-    /// `sftp://…`: connects in the background, then shows it on `side`.
+    /// `sftp://…`, `ftp://…`: connects in the background, then shows it on `side`.
     pub(crate) fn connect(
         &mut self,
         side: usize,
@@ -29,6 +32,9 @@ impl Commander {
         cx: &mut Context<Self>,
     ) {
         let (prompts, mut asked) = channel::unbounded::<(Prompt, mpsc::Sender<Reply>)>();
+        // A password the user asked to keep, once it has logged in.
+        let keep: Keep = Arc::default();
+        let kept = keep.clone();
         let ask: Ask = Arc::new(move |prompt| {
             let (reply, answer) = mpsc::channel();
             match prompts.unbounded_send((prompt, reply)) {
@@ -39,7 +45,8 @@ impl Commander {
         // The questions, for as long as the connection may ask.
         cx.spawn_in(window, async move |_, cx| {
             while let Some((prompt, reply)) = asked.next().await {
-                let _ = cx.update(|window, cx| ask_user(prompt, reply, window, cx));
+                let keep = keep.clone();
+                let _ = cx.update(|window, cx| ask_user(prompt, reply, keep, window, cx));
             }
         })
         .detach();
@@ -49,11 +56,14 @@ impl Commander {
         // A thread of its own: it may wait long on the user.
         let (done, connected) = oneshot::channel();
         std::thread::spawn(move || {
-            let sftp = Sftp::connect(&address, ask).map(|sftp| {
-                let start = sftp.start(&address);
-                (sftp, start)
-            });
-            let _ = done.send(sftp);
+            let connected = remote::connect(&address, ask);
+            if connected.is_ok()
+                && let Some((key, password)) = kept.lock().unwrap().take()
+            {
+                // shortcut: a keyring that cannot keep it means asking again next time.
+                let _ = secrets::remember(&key, &password);
+            }
+            let _ = done.send(connected);
         });
         cx.spawn_in(window, async move |this, cx| {
             let connected = connected
@@ -74,31 +84,6 @@ impl Commander {
             });
         })
         .detach();
-    }
-
-    /// Net > Connect to Server.
-    pub(crate) fn ask_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (side, commander) = (self.active, cx.entity().downgrade());
-        let label = "Server: user@host:port/path, or a host of ~/.ssh/config";
-        crate::name_dialog::open(
-            "Connect to server",
-            label,
-            String::new(),
-            window,
-            cx,
-            move |text, window, cx| {
-                // The scheme is what this dialog is for.
-                let text = match text.contains("://") {
-                    true => text,
-                    false => format!("sftp://{}", text.trim()),
-                };
-                let Some(address) = Address::parse(&text) else {
-                    let note = Notification::error(format!("Not an address: {text}"));
-                    return window.push_notification(note, cx);
-                };
-                let _ = commander.update(cx, |this, cx| this.connect(side, address, window, cx));
-            },
-        );
     }
 
     /// Net > Disconnect: the active panel goes home.
@@ -217,7 +202,16 @@ impl Drop for Answer {
     }
 }
 
-fn ask_user(prompt: Prompt, reply: mpsc::Sender<Reply>, window: &mut Window, cx: &mut App) {
+/// The keyring key and password to keep after a login.
+type Keep = Arc<Mutex<Option<(String, String)>>>;
+
+fn ask_user(
+    prompt: Prompt,
+    reply: mpsc::Sender<Reply>,
+    keep: Keep,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let answer = Rc::new(RefCell::new(Answer(Some(reply))));
     match prompt {
         Prompt::UnknownHost {
@@ -226,7 +220,7 @@ fn ask_user(prompt: Prompt, reply: mpsc::Sender<Reply>, window: &mut Window, cx:
             fingerprint,
         } => {
             let text = format!(
-                "The server {host} is not known yet. Its {key_type} key's fingerprint is\n\n{fingerprint}\n\n\
+                "The server {host} is not known yet. Its {key_type} fingerprint is\n\n{fingerprint}\n\n\
                  Connect only if this is the server you mean; its administrator can confirm the fingerprint."
             );
             window.open_dialog(cx, move |dialog, _, _| {
@@ -270,7 +264,11 @@ fn ask_user(prompt: Prompt, reply: mpsc::Sender<Reply>, window: &mut Window, cx:
                     )
             });
         }
-        Prompt::Secret { title, text } => {
+        Prompt::Secret {
+            title,
+            text,
+            keyring,
+        } => {
             let input = cx.new(|cx| InputState::new(window, cx).masked(true));
             let view = cx.new(|cx| {
                 let entered = cx.subscribe_in(
@@ -286,6 +284,9 @@ fn ask_user(prompt: Prompt, reply: mpsc::Sender<Reply>, window: &mut Window, cx:
                     text,
                     input: input.clone(),
                     answer,
+                    keyring,
+                    remember: false,
+                    keep,
                     _entered: entered,
                 }
             });
@@ -305,12 +306,19 @@ struct SecretDialog {
     text: String,
     input: Entity<InputState>,
     answer: Rc<RefCell<Answer>>,
+    /// A password's keyring key; a passphrase has none.
+    keyring: Option<String>,
+    remember: bool,
+    keep: Keep,
     _entered: Subscription,
 }
 
 impl SecretDialog {
     fn finish(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let secret = self.input.read(cx).value().to_string();
+        if let Some(key) = self.keyring.clone().filter(|_| self.remember) {
+            *self.keep.lock().unwrap() = Some((key, secret.clone()));
+        }
         self.answer.borrow_mut().send(Reply::Secret(secret));
         window.close_dialog(cx);
     }
@@ -328,6 +336,17 @@ impl Render for SecretDialog {
                     .child(self.text.clone())
                     .child(Input::new(&self.input)),
             )
+            .when(self.keyring.is_some(), |el| {
+                el.child(
+                    Checkbox::new("secret-remember")
+                        .label("Remember it in the system keyring")
+                        .checked(self.remember)
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.remember = *checked;
+                            cx.notify();
+                        })),
+                )
+            })
             .child(
                 h_flex()
                     .gap_2()

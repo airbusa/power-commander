@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod appearance;
+mod connections_dialog;
 mod editor;
 mod find_dialog;
 mod menus;
@@ -28,9 +29,9 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::command::{self, Outcome};
 use pc_core::menu::{BUTTON_BAR, Command, Item, TAB_MENU};
+use pc_core::remote::Address;
 use pc_core::session::Session;
 use pc_core::settings::{self, Settings};
-use pc_core::sftp::Address;
 use pc_core::theme::{self, Theme};
 use pc_core::{Panel, Sort, SortKey, Tabs, archive, edit, icons, ops};
 
@@ -1238,7 +1239,10 @@ impl Render for Commander {
                     Command::ToggleMark => this.mark(Panel::toggle_mark, cx),
                     Command::Copy => this.transfer(ops::Kind::Copy, window, cx),
                     Command::Move => this.transfer(ops::Kind::Move, window, cx),
-                    Command::ConnectToServer => this.ask_address(window, cx),
+                    Command::ConnectToServer => {
+                        let side = this.active;
+                        connections_dialog::open(cx.entity().downgrade(), side, window, cx)
+                    }
                     Command::Disconnect => this.disconnect(window, cx),
                     Command::OperationQueue => {
                         transfer::open_queue(this.transfers.queue.clone(), window, cx)
