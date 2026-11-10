@@ -34,6 +34,8 @@ pub struct TabState {
     pub archive_dir: Option<PathBuf>,
     pub locked: bool,
     pub name: Option<String>,
+    /// A server's tab: `path` is on it. Restored as a local tab, not reconnected.
+    pub url: Option<String>,
 }
 
 impl Session {

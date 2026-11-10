@@ -708,6 +708,40 @@ mod tests {
         );
         assert!(sftp.metadata(&dir.join("up")).is_err(), "moved away");
 
+        // A panel on the server.
+        let mut panel = crate::Panel::new(&local, crate::Filter::default()).unwrap();
+        panel.go_remote(sftp.clone(), dir.clone()).unwrap();
+        assert!(
+            panel.location().starts_with("sftp://")
+                && panel.location().ends_with(&*dir.to_string_lossy())
+        );
+        let at = |panel: &crate::Panel, name: &str| {
+            panel
+                .entries()
+                .iter()
+                .position(|e| e.display_name() == name)
+                .unwrap()
+        };
+        panel.set_cursor(at(&panel, "dir"));
+        assert!(panel.open().unwrap());
+        assert_eq!(panel.path(), dir.join("dir"));
+        panel.up().unwrap();
+        assert_eq!(
+            panel.current_entry().unwrap().display_name(),
+            "dir",
+            "back on the folder it left"
+        );
+        panel.new_folder("made/inner").unwrap();
+        assert!(sftp.metadata(&dir.join("made/inner")).unwrap().is_dir);
+        panel.delete(true).unwrap();
+        assert!(
+            sftp.metadata(&dir.join("made")).is_err(),
+            "deleted, not to a trash"
+        );
+        assert!(panel.state().url.is_some());
+        panel.disconnect(local.clone()).unwrap();
+        assert!(panel.remote().is_none() && panel.location() == local.display().to_string());
+
         crate::vfs::create_all(&*sftp, &dir.join("a/b")).unwrap();
         sftp.rename(&dir.join("a"), &dir.join("c")).unwrap();
         crate::vfs::remove_all(&*sftp, &dir.join("c")).unwrap();

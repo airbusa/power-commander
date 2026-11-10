@@ -22,6 +22,8 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::session::{SideState, TabState};
+use crate::vfs::{Fs, Local, Remote};
+use std::sync::Arc;
 
 pub const PARENT: &str = "..";
 
@@ -165,9 +167,10 @@ pub fn local_time(time: SystemTime, format: &str) -> String {
 
 #[derive(Clone)]
 pub struct Panel {
-    /// The folder, or the archive `archive` browses.
+    /// The folder, or the archive `archive` browses; on `remote`'s server if any.
     path: PathBuf,
     archive: Option<Archive>,
+    remote: Option<Arc<dyn Remote>>,
     entries: Vec<Entry>,
     cursor: usize,
     /// Names of the marked entries: what F5, F6 and F8 work on.
@@ -191,6 +194,7 @@ impl Panel {
         let mut panel = Self {
             path: path.into(),
             archive: None,
+            remote: None,
             entries: Vec::new(),
             cursor: 0,
             marked: HashSet::new(),
@@ -205,6 +209,12 @@ impl Panel {
 
     /// Where `state` was, or the nearest folder above it that still exists.
     pub fn restore(state: &TabState, filter: Filter) -> io::Result<Self> {
+        if state.url.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "a server's tab",
+            ));
+        }
         let exact = match &state.archive_dir {
             Some(dir) => Self::new(state.path.parent().unwrap_or(&state.path), filter).and_then(
                 |mut panel| {
@@ -233,7 +243,51 @@ impl Panel {
             archive_dir: self.archive.as_ref().map(|archive| archive.dir.clone()),
             locked: self.locked,
             name: self.name.clone(),
+            url: self.remote.as_ref().map(|remote| remote.url()),
         }
+    }
+
+    /// The path as the title bar shows it: `sftp://user@host/dir` on a server.
+    pub fn location(&self) -> String {
+        let path = self.path().display().to_string();
+        match &self.remote {
+            Some(remote) => format!("{}{}", remote.url(), path),
+            None => path,
+        }
+    }
+
+    pub fn remote(&self) -> Option<&Arc<dyn Remote>> {
+        self.remote.as_ref()
+    }
+
+    /// What copies read from and write to here.
+    pub fn fs(&self) -> Arc<dyn Fs> {
+        match &self.remote {
+            Some(remote) => remote.clone(),
+            None => Arc::new(Local),
+        }
+    }
+
+    /// Shows `path` on `remote`'s server.
+    pub fn go_remote(&mut self, remote: Arc<dyn Remote>, path: PathBuf) -> io::Result<()> {
+        let entries = remote.entries(&path)?;
+        self.remote = Some(remote);
+        self.archive = None;
+        self.marked.clear();
+        self.path = path;
+        self.show(entries, None);
+        Ok(())
+    }
+
+    /// Leaves the server for the local `path`.
+    pub fn disconnect(&mut self, path: PathBuf) -> io::Result<()> {
+        let entries = read_dir(&path)?;
+        self.remote = None;
+        self.archive = None;
+        self.marked.clear();
+        self.path = path;
+        self.show(entries, None);
+        Ok(())
     }
 
     pub fn path(&self) -> PathBuf {
@@ -298,7 +352,7 @@ impl Panel {
             self.show_archive_dir(archive.dir.join(name), None);
         } else if is_dir {
             self.go_to(self.path.join(name), None)?;
-        } else if archive::is_archive(&name) {
+        } else if archive::is_archive(&name) && self.remote.is_none() {
             self.enter_archive(self.path.join(name))?;
         } else {
             return Ok(false);
@@ -437,11 +491,12 @@ impl Panel {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "no name given"));
         }
         let target = self.path.join(name);
-        if target.exists() {
+        let fs = self.fs();
+        if fs.metadata(&target).is_ok() {
             let err = format!("{name} exists already");
             return Err(io::Error::new(io::ErrorKind::AlreadyExists, err));
         }
-        fs::create_dir_all(&target)?;
+        vfs::create_all(&*fs, &target)?;
         let first = Path::new(name)
             .components()
             .next()
@@ -458,7 +513,10 @@ impl Panel {
             .map(|e| self.path.join(&e.name))
             .collect();
         let deleted = paths.iter().try_for_each(|path| {
-            if to_trash {
+            if let Some(remote) = &self.remote {
+                // A server has no trash.
+                vfs::remove_all(&**remote, path)
+            } else if to_trash {
                 trash::delete(path).map_err(io::Error::other)
             } else if fs::symlink_metadata(path)?.is_dir() {
                 fs::remove_dir_all(path)
@@ -515,7 +573,10 @@ impl Panel {
     }
 
     fn go_to(&mut self, path: PathBuf, select: Option<OsString>) -> io::Result<()> {
-        let entries = read_dir(&path)?;
+        let entries = match &self.remote {
+            Some(remote) => remote.entries(&path)?,
+            None => read_dir(&path)?,
+        };
         if path != self.path || self.archive.is_some() {
             self.marked.clear();
         }
@@ -654,7 +715,7 @@ impl Tabs {
     /// Tabs showing `folder` read it again.
     pub fn reload_folder(&mut self, folder: &Path) {
         for panel in &mut self.panels {
-            if panel.archive.is_none() && panel.path == folder {
+            if panel.archive.is_none() && panel.remote.is_none() && panel.path == folder {
                 // shortcut: a tab that cannot read its folder keeps its old list.
                 let _ = panel.reload();
             }
