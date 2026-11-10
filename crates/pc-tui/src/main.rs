@@ -51,6 +51,8 @@ pub type Done = Box<dyn FnOnce(&mut App) + Send>;
 /// What a dialog's answer is for.
 pub enum Purpose {
     Find,
+    /// Select (true) or Unselect Group.
+    Group(bool),
 }
 
 /// Programs that take the terminal over until they end; the loop runs them.
@@ -76,6 +78,8 @@ pub struct App {
     foreground: Option<Foreground>,
     /// Read at the first Find.
     searches: Option<Searches>,
+    /// Save Selection's names, for Restore Selection.
+    saved: Vec<std::ffi::OsString>,
     /// How the terminal draws pictures; asked at the start.
     picker: Option<Picker>,
     done: (mpsc::Sender<Done>, mpsc::Receiver<Done>),
@@ -163,6 +167,7 @@ impl App {
             clicked: None,
             foreground: None,
             searches: None,
+            saved: Vec::new(),
             picker: None,
             done: mpsc::channel(),
             quit: false,
@@ -288,6 +293,7 @@ impl App {
             {
                 match purpose {
                     Purpose::Find => self.find_answered(&form),
+                    Purpose::Group(mark) => self.panel_mut().mark_group(form.value(0), mark),
                 }
             }
             return;
@@ -314,6 +320,12 @@ impl App {
             KeyCode::Esc => return self.command.clear(),
             KeyCode::F(10) if plain => return self.quit = true,
             KeyCode::F(9) if plain => return self.not_yet("The menus"),
+            // As in Midnight Commander, with nothing typed: groups and inverting.
+            KeyCode::Char('+') if !typing && plain => return self.command(Command::SelectGroup),
+            KeyCode::Char('-') if !typing && plain => return self.command(Command::UnselectGroup),
+            KeyCode::Char('*') if !typing && plain => {
+                return self.command(Command::InvertSelection);
+            }
             // Alt+1 to Alt+9: that tab.
             KeyCode::Char(c @ '1'..='9') if key.modifiers == KeyModifiers::ALT => {
                 let tabs = &mut self.sides[self.active].tabs;
@@ -425,6 +437,37 @@ impl App {
                 });
             }
             Command::RereadSource => self.navigate(Panel::reload),
+            Command::SelectGroup | Command::UnselectGroup => {
+                let mark = command == Command::SelectGroup;
+                let title = if mark {
+                    "Select group"
+                } else {
+                    "Unselect group"
+                };
+                let form =
+                    Form::new(title).text("Files (*.txt *.md; folders end in /):", "*", Vec::new());
+                self.form = Some((form, Purpose::Group(mark)));
+            }
+            Command::SelectAllWithSameExtension => self.panel_mut().mark_same_extension(),
+            Command::SaveSelection => self.saved = self.panel().marked_names(),
+            Command::RestoreSelection => {
+                let saved = std::mem::take(&mut self.saved);
+                self.panel_mut().mark_names(&saved);
+                self.saved = saved;
+            }
+            Command::CompareDirectories | Command::MarkNewerHideSame => {
+                let hide = command == Command::MarkNewerHideSame;
+                let [left, right] = &mut self.sides;
+                let count = left
+                    .tabs
+                    .current_mut()
+                    .compare_with(right.tabs.current_mut(), hide);
+                let text = match count {
+                    0 => "The folders have the same files.".to_string(),
+                    n => format!("{n} file(s) marked: newer than, or missing on, the other side."),
+                };
+                self.say(text, false);
+            }
             Command::DuplicateTab => self.sides[side].tabs.duplicate(),
             Command::LockTab => self.sides[side].tabs.toggle_lock(),
             Command::CloseTab => self.sides[side].tabs.close(),
@@ -660,6 +703,41 @@ mod tests {
             matches!(app.foreground.take(), Some(Foreground::Shell(line, at)) if line == "l" && at == root),
             "for the shell"
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn selects_groups_as_midnight_commander() {
+        let root = std::env::temp_dir().join(format!("pc-tui-group-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        for name in ["a.txt", "b.md", "c.txt"] {
+            std::fs::write(root.join(name), name).unwrap();
+        }
+        let mut app = App::new(
+            Settings::default(),
+            &Session::default(),
+            [root.clone()].into_iter(),
+        );
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        app.key(key(KeyCode::Char('+')));
+        assert!(
+            app.form.is_some(),
+            "+ with nothing typed asks for the group"
+        );
+        app.key(key(KeyCode::Backspace));
+        for c in "*.txt".chars() {
+            app.key(key(KeyCode::Char(c)));
+        }
+        app.key(key(KeyCode::Enter));
+        let marked: Vec<String> = app
+            .panel()
+            .marked_names()
+            .iter()
+            .map(|n| n.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(marked, ["a.txt", "c.txt"]);
+        app.key(key(KeyCode::Char('*')));
+        assert_eq!(app.panel().marked_names(), ["b.md"]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
