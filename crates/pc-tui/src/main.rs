@@ -4,6 +4,7 @@
 mod dialog;
 mod input;
 mod keys;
+mod picture;
 mod ui;
 mod viewer;
 
@@ -25,7 +26,8 @@ use ratatui::crossterm::event::{
     KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::SetTitle;
+use ratatui::crossterm::terminal::{Clear, ClearType, SetTitle};
+use ratatui_image::picker::Picker;
 
 use crate::dialog::{Answer, Form};
 use crate::input::Input;
@@ -74,6 +76,8 @@ pub struct App {
     foreground: Option<Foreground>,
     /// Read at the first Find.
     searches: Option<Searches>,
+    /// How the terminal draws pictures; asked at the start.
+    picker: Option<Picker>,
     done: (mpsc::Sender<Done>, mpsc::Receiver<Done>),
     quit: bool,
 }
@@ -102,6 +106,7 @@ fn main() -> io::Result<()> {
         app.say(problems.join("\n"), true);
     }
     let mut terminal = start();
+    app.picker = Some(picture::ask_terminal());
     let ran = app.run(&mut terminal);
     stop();
     app.save_session();
@@ -158,6 +163,7 @@ impl App {
             clicked: None,
             foreground: None,
             searches: None,
+            picker: None,
             done: mpsc::channel(),
             quit: false,
         };
@@ -173,7 +179,21 @@ impl App {
 
     fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         let mut redraw = true;
+        let mut picture = None;
         while !self.quit {
+            self.want_picture();
+            // Pixels of a picture stay until the screen is cleared.
+            let in_sight = self
+                .viewer
+                .as_ref()
+                .and_then(Viewer::picture_in_sight)
+                .cloned();
+            if in_sight != picture {
+                // Not terminal.clear(): it asks where the cursor is, and waits.
+                execute!(io::stdout(), Clear(ClearType::All))?;
+                terminal.swap_buffers();
+                (picture, redraw) = (in_sight, true);
+            }
             // Asked before drawing: work that ends while it draws gets one more frame.
             let busy = self.viewer.as_ref().is_some_and(Viewer::busy);
             if redraw {

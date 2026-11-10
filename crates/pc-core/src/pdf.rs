@@ -23,6 +23,22 @@ pub struct Bitmap {
     pub bgra: Vec<u8>,
 }
 
+impl Bitmap {
+    /// RGBA, as image libraries take it.
+    pub fn into_rgba(mut self) -> Vec<u8> {
+        for pixel in self.bgra.as_chunks_mut::<4>().0 {
+            pixel.swap(0, 2);
+        }
+        self.bgra
+    }
+}
+
+/// How wide in pixels a page renders to fit `width` × `height` pixels.
+pub fn fit_width(page: PageSize, width: u32, height: u32) -> u32 {
+    let fitted = height as f32 * page.width / page.height.max(1.);
+    (fitted as u32).clamp(1, width.max(1))
+}
+
 type Reply<T> = Sender<io::Result<T>>;
 
 enum Job {
@@ -242,6 +258,18 @@ mod tests {
             (400, 200, 400 * 200 * 4)
         );
         assert!(page.bgra.chunks(4).all(|pixel| pixel[3] == 255), "opaque");
+        let wide = PageSize {
+            width: 200.,
+            height: 100.,
+        };
+        assert_eq!(fit_width(wide, 1000, 100), 200, "as high as there is room");
+        assert_eq!(fit_width(wide, 150, 1000), 150, "as wide as there is room");
+        let bgra = Bitmap {
+            width: 1,
+            height: 1,
+            bgra: vec![1, 2, 3, 255],
+        };
+        assert_eq!(bgra.into_rgba(), [3, 2, 1, 255]);
         assert!(page.bgra.chunks(4).any(|pixel| pixel[0] < 128), "some ink");
         assert_eq!(text(&path).unwrap().trim(), "Hello PDF");
         assert!(render(&path, 5, 100).is_err(), "no such page");

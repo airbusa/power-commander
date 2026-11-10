@@ -8,5 +8,9 @@ license.workspace = true
 [dependencies]
 pc-core.workspace = true
 ratatui = "0.30"
+# Pictures and PDF pages: Sixel, kitty or iTerm2 images, else half blocks; no chafa.
+ratatui-image = { version = "11.1", default-features = false, features = ["crossterm", "image-defaults"] }
+# Decodes pictures; ratatui-image builds it already.
+image = { version = "0.25", default-features = false }
 # Column widths of names; ratatui builds it already.
 unicode-width = "0.2"
