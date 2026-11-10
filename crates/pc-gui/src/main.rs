@@ -3,6 +3,7 @@
 
 mod appearance;
 mod editor;
+mod find_dialog;
 mod menus;
 mod name_dialog;
 mod settings_dialog;
@@ -337,7 +338,8 @@ impl Commander {
                 let files = panel.entries().iter().filter(|e| !e.is_dir);
                 let files: Vec<_> = files.map(|e| panel.folder().join(&e.name)).collect();
                 let at = files.iter().position(|file| *file == path).unwrap_or(0);
-                viewer::open(files, at, self.settings.viewer.clone(), cx)
+                let bounds = window.window_bounds();
+                viewer::open(files, at, self.settings.viewer.clone(), bounds, cx)
             }
         };
         if let Err(err) = opened {

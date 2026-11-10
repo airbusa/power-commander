@@ -2,6 +2,8 @@ use std::cell::RefCell;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -12,9 +14,11 @@ use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, 
 use gpui_kit::*;
 use pc_core::settings::{StartFont, StartMode, ViewerSettings};
 use pc_core::viewer::{
-    COPY_LIMIT, Decoding, Detected, LONG_ROW, Layout, Row, TextFile, detect, search_url,
+    COPY_LIMIT, Decoding, Detected, LONG_ROW, Layout, Query, Row, TextFile, detect, search_url,
 };
 use pc_core::{codepage, html};
+
+use crate::find_dialog;
 
 actions!(
     viewer,
@@ -51,9 +55,9 @@ actions!(
         CopyHex,
         SearchGoogle,
         SelectAll,
-        // shortcut: disabled menu items until Find is built.
         Find,
-        FindNext
+        FindNext,
+        FindPrevious
     ]
 );
 
@@ -70,6 +74,8 @@ const PAD: Pixels = px(8.);
 const FIRST_DRAWN: usize = 60;
 /// The scrollbar's height in rows: small enough for f32 pixels to stay exact.
 const VIRTUAL_HEIGHT: f32 = 1_000_000.;
+/// Searches the Find dialog's list keeps.
+const HISTORY: usize = 20;
 /// Larger HTML is shown as plain text.
 const HTML_LIMIT: u64 = 64 << 20;
 
@@ -109,6 +115,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-c", CopyText, keys),
         KeyBinding::new("secondary-shift-c", CopyHex, keys),
         KeyBinding::new("secondary-a", SelectAll, keys),
+        KeyBinding::new("f7", Find, keys),
+        KeyBinding::new("f5", FindNext, keys),
+        KeyBinding::new("shift-f5", FindPrevious, keys),
     ]);
 }
 
@@ -130,11 +139,13 @@ enum Font {
     Variable,
 }
 
-/// Shows `files[at]`; Next and Previous go through `files`.
+/// Shows `files[at]`; Next and Previous go through `files`. `bounds` are
+/// the main window's, which the viewer covers.
 pub fn open(
     files: Vec<PathBuf>,
     at: usize,
     settings: ViewerSettings,
+    bounds: WindowBounds,
     cx: &mut App,
 ) -> io::Result<()> {
     let font = match settings.font {
@@ -155,7 +166,7 @@ pub fn open(
     };
     let text = shown.start()?;
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(1000.), px(700.)), cx)),
+        window_bounds: Some(bounds),
         titlebar: Some(TitlebarOptions {
             title: Some(title(shown.path()).into()),
             ..Default::default()
@@ -279,9 +290,19 @@ impl Shown {
     }
 }
 
+/// The last Find, for Find next and the next Find dialog, in every viewer.
+#[derive(Default)]
+struct Searches {
+    query: Query,
+    history: Vec<String>,
+}
+
+impl Global for Searches {}
+
 struct Viewer {
     shown: Shown,
-    text: TextFile,
+    /// Shared with a running Find.
+    text: Arc<TextFile>,
     /// The file's, HTML's text is shorter.
     size: u64,
     fit: bool,
@@ -290,9 +311,17 @@ struct Viewer {
     selection: (u64, u64),
     /// The left button is down for a selection.
     selecting: bool,
+    /// A running Find; setting it stops the search.
+    finding: Option<Arc<AtomicBool>>,
     view: ViewHandle,
     focus: FocusHandle,
     _poll: Task<()>,
+}
+
+impl Drop for Viewer {
+    fn drop(&mut self) {
+        self.stop_finding();
+    }
 }
 
 /// Scrolls by row, not by pixel, so a file of any size scrolls exactly.
@@ -310,6 +339,8 @@ struct Viewport {
     drawn: Vec<Row>,
     font: gpui_kit::Font,
     font_size: Pixels,
+    /// A Find result to scroll to, once the index reaches it.
+    reveal: Option<u64>,
 }
 
 impl Viewport {
@@ -372,11 +403,12 @@ impl Viewer {
         Self {
             size: file_size(&shown, &text),
             shown,
-            text,
+            text: Arc::new(text),
             fit: true,
             only_larger: false,
             selection: (0, 0),
             selecting: false,
+            finding: None,
             view: ViewHandle::default(),
             focus,
             _poll: Self::poll(cx),
@@ -417,8 +449,9 @@ impl Viewer {
         cx: &mut Context<Self>,
     ) {
         self.size = file_size(&self.shown, &text);
-        self.text = text;
+        self.text = Arc::new(text);
         self.selection = (0, 0);
+        self.stop_finding();
         if !keep_top {
             let mut view = self.view.0.borrow_mut();
             (view.top, view.x) = (0, px(0.));
@@ -623,6 +656,114 @@ impl Viewer {
         }
     }
 
+    fn stop_finding(&mut self) {
+        if let Some(stop) = self.finding.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Where a new Find starts, as in Lister: the first row shown.
+    fn screen_top(&self) -> u64 {
+        self.view
+            .0
+            .borrow()
+            .drawn
+            .first()
+            .map_or(0, |row| row.offset(0))
+    }
+
+    fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shown.mode == Mode::Picture {
+            return;
+        }
+        let searches = cx.default_global::<Searches>();
+        let (query, history) = (searches.query.clone(), searches.history.clone());
+        let viewer = cx.entity().downgrade();
+        find_dialog::open(query, history, window, cx, move |query, window, cx| {
+            let searches = cx.default_global::<Searches>();
+            if !query.text.is_empty() {
+                searches.history.retain(|text| *text != query.text);
+                searches.history.insert(0, query.text.clone());
+                searches.history.truncate(HISTORY);
+            }
+            searches.query = query.clone();
+            let _ = viewer.update(cx, |this, cx| {
+                let from = this.screen_top();
+                this.run_find(&query, from, query.backwards, window, cx);
+            });
+        });
+    }
+
+    /// F5 goes on as the dialog said, Shift+F5 the other way, from the selection.
+    fn find_next(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shown.mode == Mode::Picture {
+            return;
+        }
+        let query = cx
+            .try_global::<Searches>()
+            .map(|searches| searches.query.clone());
+        let Some(query) = query.filter(|query| !query.text.is_empty()) else {
+            return self.open_find(window, cx);
+        };
+        let backwards = query.backwards != reverse;
+        let selected = self.selected();
+        let from = match (selected.is_empty(), backwards) {
+            (true, _) => self.screen_top(),
+            (false, true) => selected.start,
+            (false, false) => selected.end,
+        };
+        self.run_find(&query, from, backwards, window, cx);
+    }
+
+    /// Searches in the background; the match becomes the selection.
+    fn run_find(
+        &mut self,
+        query: &Query,
+        from: u64,
+        backwards: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let pattern = match query.pattern() {
+            Ok(pattern) => pattern,
+            Err(err) => return window.push_notification(Notification::error(err), cx),
+        };
+        self.stop_finding();
+        let stop = Arc::new(AtomicBool::new(false));
+        self.finding = Some(stop.clone());
+        let (text, searched) = (self.text.clone(), query.text.clone());
+        cx.spawn_in(window, async move |this, cx| {
+            let stopped = stop.clone();
+            let search = async move { text.find(&pattern, from, backwards, &stopped) };
+            let found = cx.background_executor().spawn(search).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                // Stopped for another search or file.
+                if !this
+                    .finding
+                    .as_ref()
+                    .is_some_and(|ours| Arc::ptr_eq(ours, &stop))
+                {
+                    return;
+                }
+                this.finding = None;
+                match found {
+                    Ok(Some(found)) => {
+                        this.selection = (found.start, found.end);
+                        this.view.0.borrow_mut().reveal = Some(found.start);
+                    }
+                    Ok(None) => {
+                        let text = format!("Not found: {searched}");
+                        window.push_notification(Notification::warning(text), cx);
+                    }
+                    Err(err) => this.failed(err, window, cx),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn scroll(&mut self, by: impl FnOnce(&mut Viewport), cx: &mut Context<Self>) {
         by(&mut self.view.0.borrow_mut());
         cx.notify();
@@ -678,12 +819,13 @@ impl Viewer {
                 .separator()
                 .menu("Close", Box::new(Close))
         };
+        let picture_shown = mode == Mode::Picture;
         let edit = move |menu: PopupMenu| {
             menu.menu_with_disabled("Copy as text", Box::new(CopyText), none)
                 .menu("Select all", Box::new(SelectAll))
                 .separator()
-                .menu_with_disabled("Find...", Box::new(Find), true)
-                .menu_with_disabled("Find next", Box::new(FindNext), true)
+                .menu_with_disabled("Find...", Box::new(Find), picture_shown)
+                .menu_with_disabled("Find next", Box::new(FindNext), picture_shown)
         };
         let options = move |mut menu: PopupMenu| {
             let modes: [(&str, Mode, Box<dyn Action>); 7] = [
@@ -781,6 +923,10 @@ impl Viewer {
         let top = {
             let mut view = self.view.0.borrow_mut();
             view.rows = rows;
+            // A Find result shows on the fourth row, as in Lister.
+            if let Some(row) = view.reveal.and_then(|at| self.text.row_of(at)) {
+                (view.top, view.reveal) = (row.saturating_sub(3), None);
+            }
             view.top = view.top.min(view.max_top());
             view.top
         };
@@ -806,6 +952,7 @@ impl Viewer {
         };
         let shown = self.view.0.borrow().visible().min(rows.saturating_sub(top));
         let status = match done {
+            _ if self.finding.is_some() => "Searching…".into(),
             true => format!(
                 "{}–{} of {} rows",
                 pc_core::grouped(top as u64 + 1),
@@ -995,6 +1142,9 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &CopyText, w, cx| this.copy(false, w, cx)))
             .on_action(cx.listener(|this, _: &CopyHex, w, cx| this.copy(true, w, cx)))
             .on_action(cx.listener(|this, _: &SearchGoogle, w, cx| this.search(w, cx)))
+            .on_action(cx.listener(|this, _: &Find, w, cx| this.open_find(w, cx)))
+            .on_action(cx.listener(|this, _: &FindNext, w, cx| this.find_next(false, w, cx)))
+            .on_action(cx.listener(|this, _: &FindPrevious, w, cx| this.find_next(true, w, cx)))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
                 this.selection = (0, this.text.len());
                 cx.notify()

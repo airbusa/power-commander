@@ -19,6 +19,61 @@ const CHUNK: usize = 1 << 20;
 pub const HEX_ROW: usize = 16;
 /// The most Copy puts on the clipboard.
 pub const COPY_LIMIT: u64 = 64 << 20;
+/// Find reads this much past each chunk, for matches across its end.
+const OVERLAP: usize = 4 << 10;
+
+/// What Lister's Find dialog asks.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Query {
+    pub text: String,
+    pub whole_words: bool,
+    pub case_sensitive: bool,
+    pub backwards: bool,
+    /// `text` is bytes as hex digits: `77 6F 72 64`.
+    pub hex: bool,
+    pub regex: bool,
+}
+
+pub enum Pattern {
+    Text(regex::bytes::Regex),
+    Bytes(Vec<u8>),
+}
+
+impl Query {
+    pub fn pattern(&self) -> Result<Pattern, String> {
+        if self.text.is_empty() {
+            return Err("Nothing to find.".into());
+        }
+        if self.hex {
+            let digits: String = self.text.split_whitespace().collect();
+            let bytes = match digits.len().is_multiple_of(2)
+                && digits.chars().all(|c| c.is_ascii_hexdigit())
+            {
+                true => (0..digits.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&digits[i..i + 2], 16).unwrap())
+                    .collect(),
+                false => return Err(format!("Not a hex string: {}", self.text)),
+            };
+            return Ok(Pattern::Bytes(bytes));
+        }
+        let text = match self.regex {
+            true => self.text.clone(),
+            false => regex::escape(&self.text),
+        };
+        let text = match self.whole_words {
+            true => format!(r"\b(?:{text})\b"),
+            false => text,
+        };
+        regex::bytes::RegexBuilder::new(&text)
+            .case_insensitive(!self.case_sensitive)
+            .multi_line(true)
+            .crlf(true)
+            .build()
+            .map(Pattern::Text)
+            .map_err(|err| err.to_string())
+    }
+}
 
 /// How bytes become characters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -284,10 +339,7 @@ impl TextFile {
     /// `range` as Lister's Copy as text gives it: line ends kept, other
     /// control characters as `.`.
     pub fn text_of(&self, range: Range<u64>) -> io::Result<String> {
-        let decoding = match self.layout {
-            Layout::Lines { .. } => self.decoding,
-            Layout::Fixed { .. } | Layout::Hex => Decoding::Page(self.decoding.page()),
-        };
+        let decoding = self.text_decoding();
         let bytes = self.bytes(range.clone())?;
         let chars = chars(&bytes, decoding).into_iter().map(|(c, _)| c);
         let text = chars.map(|c| match c {
@@ -300,6 +352,91 @@ impl TextFile {
             0 => text.trim_start_matches('\u{feff}').to_owned(),
             _ => text,
         })
+    }
+
+    /// How Copy and Find read the text: Binary and Hex in the code page.
+    fn text_decoding(&self) -> Decoding {
+        match self.layout {
+            Layout::Lines { .. } => self.decoding,
+            Layout::Fixed { .. } | Layout::Hex => Decoding::Page(self.decoding.page()),
+        }
+    }
+
+    /// The first match starting at or after `from`, or `backwards` the last
+    /// one ending at or before it. Setting `stop` gives up.
+    pub fn find(
+        &self,
+        pattern: &Pattern,
+        from: u64,
+        backwards: bool,
+        stop: &AtomicBool,
+    ) -> io::Result<Option<Range<u64>>> {
+        let decoding = self.text_decoding();
+        let (step, end) = (CHUNK as u64, if backwards { from } else { self.len });
+        let mut start = if backwards {
+            from.saturating_sub(step)
+        } else {
+            from
+        };
+        let mut buf = vec![0; CHUNK + OVERLAP];
+        while !stop.load(Ordering::Relaxed) {
+            let window = end.saturating_sub(start).min((CHUNK + OVERLAP) as u64) as usize;
+            let read = read_at(&mut self.data.lock().unwrap(), start, &mut buf[..window])?;
+            // Matches starting in the overlap are the next chunk's, but at the end.
+            let last = start + read as u64 >= end;
+            let mut found = matches(pattern, &buf[..read], decoding)
+                .into_iter()
+                .filter(|m| last || m.start < CHUNK)
+                .map(|m| start + m.start as u64..start + m.end as u64);
+            let found = match backwards {
+                true => found.next_back(),
+                false => found.next(),
+            };
+            if found.is_some() {
+                return Ok(found);
+            }
+            match backwards {
+                true if start == 0 => break,
+                true => start = start.saturating_sub(step),
+                false if last => break,
+                false => start += step,
+            }
+        }
+        Ok(None)
+    }
+
+    /// The row `offset` is in; none while the index has not reached it.
+    pub fn row_of(&self, offset: u64) -> Option<usize> {
+        let width = match self.layout {
+            Layout::Lines { width } => width,
+            Layout::Fixed { width } => return Some((offset / width as u64) as usize),
+            Layout::Hex => return Some((offset / HEX_ROW as u64) as usize),
+        };
+        let (start, first) = {
+            let progress = self.index.progress.lock().unwrap();
+            if !progress.done && progress.scanned <= offset {
+                return None;
+            }
+            let block = progress
+                .starts
+                .partition_point(|&start| start <= offset)
+                .max(1)
+                - 1;
+            (progress.starts[block], block * STEP)
+        };
+        let size = (STEP * (width * 4 + 2)).min((self.len - start) as usize);
+        let mut buf = vec![0; size];
+        let read = read_at(&mut self.data.lock().unwrap(), start, &mut buf).ok()?;
+        let eof = start + read as u64 >= self.len;
+        let (mut at, mut row) = (0, first);
+        while let Some(len) = row_len(&buf[at..read], eof, width, self.decoding) {
+            if start + (at + len) as u64 > offset {
+                break;
+            }
+            at += len;
+            row += 1;
+        }
+        Some(row)
     }
 
     /// `range` as Copy as Hex characters gives it: `77 6F 72 64`.
@@ -489,6 +626,43 @@ fn chars(bytes: &[u8], decoding: Decoding) -> Vec<(char, usize)> {
         }
         Decoding::Page(page) => codepage::chars(page, bytes),
     }
+}
+
+/// Where `pattern` matches in `bytes`, read as `decoding` says.
+fn matches(pattern: &Pattern, bytes: &[u8], decoding: Decoding) -> Vec<Range<usize>> {
+    let regex = match pattern {
+        Pattern::Bytes(needle) => {
+            let found = memchr::memmem::find_iter(bytes, needle);
+            return found.map(|at| at..at + needle.len()).collect();
+        }
+        Pattern::Text(regex) => regex,
+    };
+    // A chunk may start inside a UTF-8 character.
+    let cut = bytes
+        .iter()
+        .take(3)
+        .take_while(|&&b| b & 0xC0 == 0x80)
+        .count();
+    let utf8 = match decoding {
+        Decoding::Utf8 => true,
+        Decoding::Auto(_) => is_utf8(&bytes[cut..], true),
+        Decoding::Utf16 { .. } | Decoding::Page(_) => false,
+    };
+    if utf8 {
+        return regex.find_iter(bytes).map(|m| m.range()).collect();
+    }
+    // Searched as UTF-8 text, each of its bytes knowing its character's offset.
+    let mut text = String::with_capacity(bytes.len());
+    let mut source = Vec::with_capacity(bytes.len() + 1);
+    let mut at = 0;
+    for (c, len) in chars(bytes, decoding) {
+        text.push(c);
+        source.extend(std::iter::repeat_n(at, c.len_utf8()));
+        at += len;
+    }
+    source.push(at);
+    let found = regex.find_iter(text.as_bytes());
+    found.map(|m| source[m.start()]..source[m.end()]).collect()
 }
 
 /// Tabs expanded, control characters as `·`, the line end and BOM hidden.
@@ -778,6 +952,100 @@ mod tests {
         assert_eq!(
             search_url(" a b&\u{e9} "),
             "https://www.google.com/search?q=a+b%26%C3%A9"
+        );
+    }
+
+    #[test]
+    fn finds_as_lister_does() {
+        let query = |text: &str| Query {
+            text: text.into(),
+            ..Query::default()
+        };
+        let find = |file: &TextFile, query: &Query, from: u64, backwards: bool| {
+            let pattern = query.pattern().unwrap();
+            file.find(&pattern, from, backwards, &AtomicBool::new(false))
+                .unwrap()
+        };
+        // Matches near each chunk's end, and one across it.
+        let mut text = "x".repeat(CHUNK - 3);
+        text += "needle";
+        text += &"y".repeat(CHUNK);
+        text += "Needle needles\n";
+        let path = temp("find", text.as_bytes());
+        let file = TextFile::open(&path, Layout::Lines { width: 81 }, AUTO).unwrap();
+        let first = (CHUNK - 3) as u64..(CHUNK + 3) as u64;
+        assert_eq!(find(&file, &query("needle"), 0, false), Some(first.clone()));
+        let second = find(&file, &query("needle"), first.end, false).unwrap();
+        assert_eq!(second.start, (2 * CHUNK + 3) as u64, "case-insensitive");
+        let last = find(&file, &query("needle"), file.len(), true).unwrap();
+        assert_eq!(last.start, second.start + 7);
+        assert_eq!(
+            find(&file, &query("needle"), second.start, true),
+            Some(first.clone())
+        );
+        let exact = Query {
+            case_sensitive: true,
+            whole_words: true,
+            ..query("needle")
+        };
+        assert_eq!(find(&file, &exact, first.end, false), None);
+        let hex = Query {
+            hex: true,
+            ..query("4E 65")
+        };
+        assert_eq!(
+            find(&file, &hex, 0, false).map(|m| m.start),
+            Some(second.start)
+        );
+        while !file.indexed().2 {
+            std::thread::yield_now();
+        }
+        assert_eq!(file.row_of(0), Some(0));
+        assert_eq!(file.row_of(81), Some(1));
+        assert_eq!(file.row_of(second.start), Some(file.indexed().0 - 1));
+        std::fs::remove_file(&path).unwrap();
+
+        let path = temp("find1250", b"line\r\n\xc1rv\xedzt\xfbr\xf5");
+        let file =
+            TextFile::open(&path, Layout::Lines { width: 81 }, Decoding::Page(1250)).unwrap();
+        assert_eq!(find(&file, &query("ÍZTŰ"), 0, false), Some(9..13));
+        let regex = Query {
+            regex: true,
+            ..query("^á")
+        };
+        assert_eq!(find(&file, &regex, 0, false), Some(6..7));
+        std::fs::remove_file(&path).unwrap();
+
+        let utf16: Vec<u8> = "\u{feff}a Für b"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        let path = temp("find16", &utf16);
+        let file = TextFile::open(
+            &path,
+            Layout::Lines { width: 81 },
+            Decoding::Utf16 { big_endian: false },
+        )
+        .unwrap();
+        assert_eq!(find(&file, &query("für"), 0, false), Some(6..12));
+        std::fs::remove_file(&path).unwrap();
+
+        assert!(query("").pattern().is_err());
+        assert!(
+            Query {
+                hex: true,
+                ..query("4G")
+            }
+            .pattern()
+            .is_err()
+        );
+        assert!(
+            Query {
+                regex: true,
+                ..query("(")
+            }
+            .pattern()
+            .is_err()
         );
     }
 

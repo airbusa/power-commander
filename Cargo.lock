@@ -4474,6 +4474,7 @@ dependencies = [
  "dirs 6.0.0",
  "encoding_rs",
  "memchr",
+ "regex",
  "serde",
  "serde_json",
  "trash",
