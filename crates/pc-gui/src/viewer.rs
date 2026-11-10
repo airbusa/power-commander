@@ -11,6 +11,7 @@ use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenu};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarHandle};
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::settings::{StartFont, StartMode, ViewerSettings};
 use pc_core::viewer::{
@@ -19,6 +20,7 @@ use pc_core::viewer::{
 use pc_core::{codepage, html};
 
 use crate::find_dialog;
+use crate::minimap::{self, Minimap};
 
 actions!(
     viewer,
@@ -51,6 +53,7 @@ actions!(
         OpenFile,
         SaveAs,
         Configure,
+        ToggleMinimap,
         CopyText,
         CopyHex,
         SearchGoogle,
@@ -313,6 +316,7 @@ struct Viewer {
     selecting: bool,
     /// A running Find; setting it stops the search.
     finding: Option<Arc<AtomicBool>>,
+    minimap: Entity<Minimap>,
     view: ViewHandle,
     focus: FocusHandle,
     _poll: Task<()>,
@@ -321,6 +325,45 @@ struct Viewer {
 impl Drop for Viewer {
     fn drop(&mut self) {
         self.stop_finding();
+    }
+}
+
+/// The minimap's view of the rows.
+struct ViewerMap(WeakEntity<Viewer>);
+
+impl minimap::Source for ViewerMap {
+    fn position(&self, _: f32, cx: &App) -> Option<minimap::Position> {
+        let viewer = self.0.upgrade()?;
+        let view = viewer.read(cx).view.0.borrow();
+        Some(minimap::Position {
+            first: view.top as f32,
+            visible: view.visible() as f32,
+            max_first: view.max_top() as f32,
+        })
+    }
+
+    fn lines(&self, rows: std::ops::Range<usize>, cx: &App) -> Vec<String> {
+        let Some(viewer) = self.0.upgrade() else {
+            return Vec::new();
+        };
+        viewer.read(cx).text.sketch(rows, minimap::COLUMNS)
+    }
+
+    fn scroll_to(&self, first: f32, cx: &mut App) {
+        if let Some(viewer) = self.0.upgrade() {
+            viewer.update(cx, |this, cx| {
+                this.scroll(
+                    |view| view.top = (first.round() as usize).min(view.max_top()),
+                    cx,
+                )
+            });
+        }
+    }
+
+    fn wheel(&self, event: &ScrollWheelEvent, window: &mut Window, cx: &mut App) {
+        if let Some(viewer) = self.0.upgrade() {
+            viewer.update(cx, |this, cx| this.wheel(event, window, cx));
+        }
     }
 }
 
@@ -409,6 +452,10 @@ impl Viewer {
             selection: (0, 0),
             selecting: false,
             finding: None,
+            minimap: {
+                let viewer = ViewerMap(cx.entity().downgrade());
+                cx.new(|_| Minimap::new(viewer))
+            },
             view: ViewHandle::default(),
             focus,
             _poll: Self::poll(cx),
@@ -806,6 +853,7 @@ impl Viewer {
             ..
         } = self.shown;
         let (fit, only_larger) = (self.fit, self.only_larger);
+        let minimap = crate::minimap_shown(cx);
         let columns = self.shown.settings.text_width;
         let none = self.selected().is_empty();
         let file = |menu: PopupMenu| {
@@ -874,6 +922,8 @@ impl Viewer {
                     !image,
                 )
                 .menu_with_check_and_disabled(larger, only_larger, Box::new(FitLarger), !image)
+                .separator()
+                .menu_with_check("Minimap", minimap, Box::new(ToggleMinimap))
                 .separator()
                 .menu("Configure...", Box::new(Configure))
         };
@@ -1092,6 +1142,7 @@ impl Render for Viewer {
             _ => self.render_rows(window, cx),
         };
         let menus = self.render_menus(cx);
+        let minimap = self.shown.mode != Mode::Picture && crate::minimap_shown(cx);
         let theme = cx.theme();
         v_flex()
             .key_context(CONTEXT)
@@ -1150,6 +1201,7 @@ impl Render for Viewer {
                 cx.notify()
             }))
             .on_action(cx.listener(|_, _: &Configure, _, cx| crate::configure_viewer(cx)))
+            .on_action(cx.listener(|_, _: &ToggleMinimap, _, cx| crate::toggle_minimap(cx)))
             .on_action(
                 cx.listener(|this, _: &LineUp, _, cx| this.scroll(|v| v.scroll_rows(-1), cx)),
             )
@@ -1167,7 +1219,13 @@ impl Render for Viewer {
                 cx.listener(|this, _: &Bottom, _, cx| this.scroll(|v| v.top = v.max_top(), cx)),
             )
             .child(menus)
-            .child(div().flex_1().min_h_0().relative().child(content))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(div().flex_1().min_w_0().h_full().relative().child(content))
+                    .when(minimap, |el| el.child(self.minimap.clone())),
+            )
             .child(status_bar(
                 self.shown.path(),
                 self.size,

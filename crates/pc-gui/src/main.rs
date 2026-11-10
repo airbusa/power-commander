@@ -5,6 +5,7 @@ mod appearance;
 mod editor;
 mod find_dialog;
 mod menus;
+mod minimap;
 mod name_dialog;
 mod settings_dialog;
 mod viewer;
@@ -151,6 +152,30 @@ fn configure_viewer(cx: &mut App) {
     });
 }
 
+/// The setting, for windows that render while the main window updates.
+struct ShowMinimap(bool);
+
+impl Global for ShowMinimap {}
+
+/// Whether the Viewer and the Editor show their minimap.
+fn minimap_shown(cx: &App) -> bool {
+    cx.try_global::<ShowMinimap>().is_none_or(|shown| shown.0)
+}
+
+/// Shows or hides the minimap, and saves the setting.
+fn toggle_minimap(cx: &mut App) {
+    let Some(MainWindow(main, commander)) = cx.try_global::<MainWindow>().cloned() else {
+        return;
+    };
+    let _ = main.update(cx, |_, window, cx| {
+        let _ = commander.update(cx, |this, cx| {
+            let mut settings = this.settings.clone();
+            settings.viewer.minimap = !settings.viewer.minimap;
+            this.apply_settings(settings, window, cx);
+        });
+    });
+}
+
 struct Commander {
     panels: [Side; 2],
     active: usize,
@@ -193,6 +218,7 @@ impl Commander {
             problems.push(format!("Could not read the settings: {err}"));
             Settings::default()
         });
+        cx.set_global(ShowMinimap(settings.viewer.minimap));
         let session = Session::load().unwrap_or_else(|err| {
             problems.push(format!("Could not read the open tabs: {err}"));
             Session::default()
@@ -286,6 +312,10 @@ impl Commander {
                 side.tabs.set_filter(settings.filter());
                 side.scroll_to_cursor();
             }
+        }
+        if settings.viewer.minimap != self.settings.viewer.minimap {
+            cx.set_global(ShowMinimap(settings.viewer.minimap));
+            cx.refresh_windows();
         }
         self.settings = settings;
         self.save_settings(window, cx);

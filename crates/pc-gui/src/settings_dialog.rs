@@ -180,6 +180,15 @@ impl SettingsDialog {
                         })),
                 )
                 .child(
+                    Checkbox::new("viewer-minimap")
+                        .label("Show the minimap (Viewer and Editor)")
+                        .checked(viewer.minimap)
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.draft.viewer.minimap = *checked;
+                            cx.notify();
+                        })),
+                )
+                .child(
                     h_flex()
                         .gap_6()
                         .child("Display width (characters):")

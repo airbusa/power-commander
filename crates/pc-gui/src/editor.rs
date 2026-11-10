@@ -2,10 +2,13 @@ use std::io;
 use std::path::PathBuf;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::{Editor, EditorState, InputEvent};
+use gpui_kit::component::input::{Editor, EditorState, InputEvent, RopeExt};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, WindowExt, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+
+use crate::minimap::{self, Minimap};
 use pc_core::edit;
 
 actions!(editor, [Save]);
@@ -44,7 +47,62 @@ struct TextEditor {
     path: PathBuf,
     editor: Entity<EditorState>,
     edited: bool,
+    minimap: Entity<Minimap>,
     _changes: Subscription,
+}
+
+/// The minimap's view of the text.
+struct EditorMap(Entity<EditorState>);
+
+impl EditorMap {
+    fn line_height(&self, cx: &App) -> Option<f32> {
+        self.0.read(cx).line_height().map(f32::from)
+    }
+}
+
+impl minimap::Source for EditorMap {
+    fn position(&self, height: f32, cx: &App) -> Option<minimap::Position> {
+        let line_height = self.line_height(cx)?;
+        let editor = self.0.read(cx);
+        let rows = editor.text().lines_len().max(1) as f32;
+        let visible = height / line_height;
+        // The editor scrolls past its last line by half its height, at least three lines.
+        let beyond = (visible / 2.).max(3.);
+        Some(minimap::Position {
+            first: -f32::from(editor.scroll_offset().y) / line_height,
+            visible,
+            max_first: (rows + beyond - visible).max(0.),
+        })
+    }
+
+    fn lines(&self, rows: std::ops::Range<usize>, cx: &App) -> Vec<String> {
+        let text = self.0.read(cx).text();
+        let rows = rows.start..rows.end.min(text.lines_len());
+        let lines = rows.map(|row| {
+            text.slice_line(row)
+                .chars()
+                .take(minimap::COLUMNS)
+                .collect()
+        });
+        lines.collect()
+    }
+
+    fn scroll_to(&self, first: f32, cx: &mut App) {
+        let line_height = self.line_height(cx).unwrap_or(16.);
+        self.0.update(cx, |editor, cx| {
+            let x = editor.scroll_offset().x;
+            editor.set_scroll_offset(point(x, px(-first * line_height)), cx);
+        });
+    }
+
+    fn wheel(&self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut App) {
+        self.0.update(cx, |editor, cx| {
+            let line_height = editor.line_height().unwrap_or(px(16.));
+            let offset = editor.scroll_offset();
+            let delta = event.delta.pixel_delta(line_height);
+            editor.set_scroll_offset(point(offset.x, offset.y + delta.y), cx);
+        });
+    }
 }
 
 impl TextEditor {
@@ -73,10 +131,12 @@ impl TextEditor {
             this.update(cx, |this, cx| this.may_close(window, cx))
                 .unwrap_or(true)
         });
+        let map = EditorMap(editor.clone());
         Self {
             path,
             editor,
             edited: false,
+            minimap: cx.new(|_| Minimap::new(map)),
             _changes: changes,
         }
     }
@@ -156,7 +216,15 @@ impl Render for TextEditor {
             .on_action(cx.listener(|this, _: &Save, window, cx| {
                 this.save(window, cx);
             }))
-            .child(Editor::new(&self.editor).bordered(false).size_full())
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(Editor::new(&self.editor).bordered(false).flex_1().h_full())
+                    .when(crate::minimap_shown(cx), |el| {
+                        el.child(self.minimap.clone())
+                    }),
+            )
             .child(
                 h_flex()
                     .px_2()

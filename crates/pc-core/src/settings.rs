@@ -47,6 +47,8 @@ pub struct ViewerSettings {
     /// Characters a row of wrapped text, and of Binary.
     pub text_width: usize,
     pub binary_width: usize,
+    /// Beside the Viewer and the Editor.
+    pub minimap: bool,
 }
 
 /// Lister's defaults.
@@ -58,6 +60,7 @@ impl Default for ViewerSettings {
             wrap: true,
             text_width: 81,
             binary_width: 75,
+            minimap: true,
         }
     }
 }

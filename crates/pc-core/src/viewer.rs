@@ -312,7 +312,9 @@ impl TextFile {
     /// The rows of `range` as shown: tabs expanded, control characters as `·`.
     pub fn rows(&self, range: Range<usize>) -> Vec<Row> {
         match self.layout {
-            Layout::Lines { width } => self.lines(range, width),
+            Layout::Lines { width } => {
+                self.lines(range, width, |bytes, at| display(bytes, self.decoding, at))
+            }
             Layout::Fixed { width } => self.fixed(range, width, |start, bytes| {
                 let mut row = Row::new(start + bytes.len() as u64);
                 let mut at = start;
@@ -325,6 +327,23 @@ impl TextFile {
             }),
             Layout::Hex => self.fixed(range, HEX_ROW, hex_row),
         }
+    }
+
+    /// The rows' first `columns` characters, as a minimap draws them: far
+    /// cheaper than `rows` for long ones.
+    pub fn sketch(&self, range: Range<usize>, columns: usize) -> Vec<String> {
+        let Layout::Lines { width } = self.layout else {
+            let rows = self.rows(range).into_iter();
+            return rows
+                .map(|row| row.text.chars().take(columns).collect())
+                .collect();
+        };
+        self.lines(range, width, |bytes, at| {
+            let head = &bytes[..bytes.len().min(columns * 4)];
+            let chars = chars(head, self.decoding).into_iter();
+            let chars = chars.skip(usize::from(at == 0 && head.starts_with(b"\xef\xbb\xbf")));
+            chars.take(columns).map(|(c, _)| c).collect()
+        })
     }
 
     /// The bytes of `range`, as in the file.
@@ -446,7 +465,12 @@ impl TextFile {
         Ok(hex.join(" "))
     }
 
-    fn lines(&self, range: Range<usize>, width: usize) -> Vec<Row> {
+    fn lines<T>(
+        &self,
+        range: Range<usize>,
+        width: usize,
+        show: impl Fn(&[u8], u64) -> T,
+    ) -> Vec<T> {
         let (start, first) = {
             let progress = self.index.progress.lock().unwrap();
             let block = range.start / STEP;
@@ -468,11 +492,7 @@ impl TextFile {
                 break;
             };
             if row >= range.start {
-                rows.push(display(
-                    &buf[at..at + len],
-                    self.decoding,
-                    start + at as u64,
-                ));
+                rows.push(show(&buf[at..at + len], start + at as u64));
             }
             at += len;
             row += 1;
@@ -944,6 +964,7 @@ mod tests {
             "one tw\u{f6}\tx\r\nnext."
         );
         assert_eq!(file.hex_of(3..6).unwrap(), "6F 6E 65");
+        assert_eq!(file.sketch(0..2, 3), ["one", "nex"]);
         let hex = TextFile::open(&path, Layout::Hex, AUTO).unwrap();
         let row = &hex.rows(0..1)[0];
         assert_eq!(row.highlights(&(1..2)), [13..15, 61..62]);
