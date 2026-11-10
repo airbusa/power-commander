@@ -1,7 +1,7 @@
 //! Drawing, in Midnight Commander's colors: the terminal's own palette, so
 //! its theme decides the shades.
 
-use pc_core::menu::{Command, MENUS};
+use pc_core::menu::MENUS;
 use pc_core::{Entry, Panel, archive};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -12,28 +12,19 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::App;
 
-const PANEL: Style = Style::new().fg(Color::Gray).bg(Color::Blue);
+pub const PANEL: Style = Style::new().fg(Color::Gray).bg(Color::Blue);
 const HEADER: Style = Style::new()
     .fg(Color::Yellow)
     .bg(Color::Blue)
     .add_modifier(Modifier::BOLD);
-const BAR: Style = Style::new().fg(Color::Black).bg(Color::Cyan);
+pub const BAR: Style = Style::new().fg(Color::Black).bg(Color::Cyan);
 const KEY_NUMBER: Style = Style::new().fg(Color::Gray).bg(Color::Black);
-const DIALOG: Style = Style::new().fg(Color::Black).bg(Color::Gray);
+pub const DIALOG: Style = Style::new().fg(Color::Black).bg(Color::Gray);
 const ERROR: Style = Style::new().fg(Color::White).bg(Color::Red);
 
-/// The function keys' labels; F1 and F2 have none yet.
-pub const KEY_BAR: [(&str, Option<Command>); 10] = [
-    ("", None),
-    ("", None),
-    ("View", Some(Command::View)),
-    ("Edit", Some(Command::Edit)),
-    ("Copy", Some(Command::Copy)),
-    ("Move", Some(Command::Move)),
-    ("Mkdir", Some(Command::NewFolder)),
-    ("Delete", Some(Command::Delete)),
-    ("Menu", None),
-    ("Quit", Some(Command::Quit)),
+/// The panels' function keys; F1 and F2 have none yet.
+const KEYS: [&str; 10] = [
+    "", "", "View", "Edit", "Copy", "Move", "Mkdir", "Delete", "Menu", "Quit",
 ];
 
 /// Where the last frame put what the mouse can hit.
@@ -45,6 +36,21 @@ pub struct Places {
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    let area = frame.area();
+    app.places.keys = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1);
+    match app.viewer.as_mut() {
+        Some(viewer) => crate::viewer::draw(frame, viewer),
+        None => draw_panels(frame, app),
+    }
+    if let Some((form, _)) = &app.form {
+        form.draw(frame);
+    }
+    if let Some(message) = &app.message {
+        dialog(frame, &message.text, message.error);
+    }
+}
+
+fn draw_panels(frame: &mut Frame, app: &mut App) {
     let [menu, panels, command, keys] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Fill(1),
@@ -58,12 +64,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     for (side, area) in halves.into_iter().enumerate() {
         app.places.rows[side] = panel(buf, area, app, side);
     }
-    key_bar(buf, keys);
-    app.places.keys = keys;
+    key_bar(buf, keys, &KEYS);
     command_line(frame, command, app);
-    if let Some(message) = &app.message {
-        dialog(frame, &message.text, message.error);
-    }
 }
 
 fn menu_bar(buf: &mut Buffer, area: Rect) {
@@ -300,7 +302,7 @@ fn tilde(path: &str) -> String {
 }
 
 /// The end of `text` in `width` columns, `…` first when cut.
-fn tail(text: &str, width: usize) -> String {
+pub fn tail(text: &str, width: usize) -> String {
     if text.width() <= width || width == 0 {
         return text.into();
     }
@@ -321,9 +323,9 @@ fn take_width(chars: impl Iterator<Item = char>, width: usize) -> String {
         .collect()
 }
 
-fn key_bar(buf: &mut Buffer, area: Rect) {
+pub fn key_bar(buf: &mut Buffer, area: Rect, labels: &[&str; 10]) {
     let slot = area.width / 10;
-    for (n, (label, _)) in KEY_BAR.iter().enumerate() {
+    for (n, label) in labels.iter().enumerate() {
         let x = area.x + slot * n as u16;
         let width = match n {
             9 => area.right() - x,
@@ -359,7 +361,7 @@ fn command_line(frame: &mut Frame, area: Rect, app: &App) {
     let shown = take_width(shown.chars(), room);
     buf.set_string(x, area.y, &shown, Style::new());
     let before: String = chars[start..app.command.cursor()].iter().collect();
-    if app.message.is_none() {
+    if app.message.is_none() && app.form.is_none() {
         frame.set_cursor_position(Position::new(x + before.width() as u16, area.y));
     }
 }

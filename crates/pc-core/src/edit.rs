@@ -60,6 +60,42 @@ pub fn start_editor(line: &str, file: &Path) -> io::Result<Child> {
         .map_err(|err| io::Error::new(err.kind(), format!("{}: {err}", program.to_string_lossy())))
 }
 
+/// Editors for when neither `$VISUAL` nor `$EDITOR` is set.
+const TERMINAL_EDITORS: &[&str] = if cfg!(windows) {
+    &["notepad"]
+} else {
+    &["nano", "vi"]
+};
+
+/// F4 in the terminal: `$VISUAL`, `$EDITOR`, else nano or vi, in this
+/// terminal until it ends.
+pub fn edit_in_terminal(file: &Path) -> io::Result<()> {
+    let set = ["VISUAL", "EDITOR"].iter().find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .filter(|line| !line.trim().is_empty())
+    });
+    let lines = match &set {
+        Some(line) => vec![line.as_str()],
+        None => TERMINAL_EDITORS.to_vec(),
+    };
+    for line in lines {
+        let Some((program, args)) = command_line(line, file) else {
+            continue;
+        };
+        match Command::new(&program).args(args).status() {
+            Err(err) if err.kind() == io::ErrorKind::NotFound && set.is_none() => continue,
+            Err(err) => {
+                let program = program.to_string_lossy();
+                return Err(io::Error::new(err.kind(), format!("{program}: {err}")));
+            }
+            Ok(_) => return Ok(()),
+        }
+    }
+    let why = "no editor found; set $EDITOR";
+    Err(io::Error::new(io::ErrorKind::NotFound, why))
+}
+
 /// Words of `line`, `"quoted"` ones with their spaces; `%1` becomes `file`,
 /// which goes last when no word has it.
 fn command_line(line: &str, file: &Path) -> Option<(OsString, Vec<OsString>)> {

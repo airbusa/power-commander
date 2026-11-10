@@ -140,7 +140,7 @@ pub fn open(
     bounds: WindowBounds,
     cx: &mut App,
 ) -> io::Result<()> {
-    let mut shown = Shown::new(files, at, settings, Img::extensions());
+    let mut shown = Shown::new(files, at, settings, Img::extensions(), true);
     let text = shown.start()?;
     let options = WindowOptions {
         window_bounds: Some(bounds),

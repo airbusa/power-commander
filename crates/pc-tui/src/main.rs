@@ -1,29 +1,36 @@
 //! Power Commander in the terminal: the window's panels, keys and core,
 //! drawn as Midnight Commander does.
 
+mod dialog;
 mod input;
 mod keys;
 mod ui;
+mod viewer;
 
 use std::collections::HashMap;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use pc_core::command;
 use pc_core::menu::{self, Command};
+use pc_core::origin::{self, Upload};
 use pc_core::session::{self, Session};
 use pc_core::settings::Settings;
-use pc_core::{Panel, Sort, SortKey, Tabs, archive};
+use pc_core::viewer::Searches;
+use pc_core::{Panel, Sort, SortKey, Tabs, archive, command, edit};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
-use ratatui::crossterm::{execute, terminal::SetTitle};
+use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::SetTitle;
 
+use crate::dialog::{Answer, Form};
 use crate::input::Input;
-use crate::ui::{KEY_BAR, Places};
+use crate::ui::Places;
+use crate::viewer::Viewer;
 
 pub struct Side {
     pub tabs: Tabs,
@@ -36,6 +43,22 @@ pub struct Message {
     pub error: bool,
 }
 
+/// What work done in the background does to the app, back in its loop.
+pub type Done = Box<dyn FnOnce(&mut App) + Send>;
+
+/// What a dialog's answer is for.
+pub enum Purpose {
+    Find,
+}
+
+/// Programs that take the terminal over until they end; the loop runs them.
+enum Foreground {
+    /// A command line for the shell, and its folder.
+    Shell(String, PathBuf),
+    /// The file, and for a copy how saves go back.
+    Editor(PathBuf, Option<Upload>),
+}
+
 pub struct App {
     pub sides: [Side; 2],
     pub active: usize,
@@ -43,15 +66,21 @@ pub struct App {
     pub command: Input,
     pub message: Option<Message>,
     pub places: Places,
+    pub viewer: Option<Viewer>,
+    pub form: Option<(Form, Purpose)>,
     bindings: HashMap<&'static str, Command>,
     /// For double clicks: when, and on which side's row.
     clicked: Option<(Instant, usize, usize)>,
-    /// A command line for the shell, and its folder: the loop runs it.
-    shell: Option<(String, PathBuf)>,
+    foreground: Option<Foreground>,
+    /// Read at the first Find.
+    searches: Option<Searches>,
+    done: (mpsc::Sender<Done>, mpsc::Receiver<Done>),
     quit: bool,
 }
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+/// How long the loop waits for a key before it looks at background work.
+const TICK: Duration = Duration::from_millis(100);
 
 fn main() -> io::Result<()> {
     let mut problems = Vec::new();
@@ -81,6 +110,8 @@ fn main() -> io::Result<()> {
 }
 
 /// Full screen, raw keys, the mouse.
+// shortcut: no kitty keyboard protocol, so most terminals send Ctrl+Tab as Tab (Alt+1..9
+// pick tabs); turn it on once it is tried in kitty, foot or WezTerm.
 fn start() -> DefaultTerminal {
     let terminal = ratatui::init();
     let _ = execute!(
@@ -121,9 +152,13 @@ impl App {
             command: Input::default(),
             message: None,
             places: Places::default(),
+            viewer: None,
+            form: None,
             bindings: menu::key_bindings().into_iter().collect(),
             clicked: None,
-            shell: None,
+            foreground: None,
+            searches: None,
+            done: mpsc::channel(),
             quit: false,
         };
         for (ix, folder) in folders.take(2).enumerate() {
@@ -137,18 +172,45 @@ impl App {
     }
 
     fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+        let mut redraw = true;
         while !self.quit {
-            terminal.draw(|frame| ui::draw(frame, self))?;
-            match event::read()? {
-                Event::Key(key) if key.kind != KeyEventKind::Release => self.key(key),
-                Event::Mouse(mouse) => self.mouse(mouse),
-                _ => {}
+            // Asked before drawing: work that ends while it draws gets one more frame.
+            let busy = self.viewer.as_ref().is_some_and(Viewer::busy);
+            if redraw {
+                terminal.draw(|frame| ui::draw(frame, self))?;
             }
-            if let Some((line, folder)) = self.shell.take() {
-                *terminal = self.run_shell(&line, &folder);
+            redraw = busy;
+            if event::poll(TICK)? {
+                match event::read()? {
+                    Event::Key(key) if key.kind != KeyEventKind::Release => self.key(key),
+                    Event::Mouse(mouse) => self.mouse(mouse),
+                    _ => {}
+                }
+                redraw = true;
+            }
+            while let Ok(done) = self.done.1.try_recv() {
+                done(self);
+                redraw = true;
+            }
+            if let Some(foreground) = self.foreground.take() {
+                *terminal = self.run_foreground(foreground);
+                redraw = true;
             }
         }
         Ok(())
+    }
+
+    /// `work` on a thread of its own; what it gives back runs in the loop.
+    fn background(&self, work: impl FnOnce() -> Done + Send + 'static) {
+        let sender = self.done.0.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(work());
+        });
+    }
+
+    fn searches(&mut self) -> &mut Searches {
+        self.searches
+            .get_or_insert_with(|| Searches::load().unwrap_or_default())
     }
 
     fn save_session(&self) {
@@ -197,6 +259,21 @@ impl App {
     fn key(&mut self, key: KeyEvent) {
         if self.message.take().is_some() {
             return;
+        }
+        if let Some((form, _)) = self.form.as_mut() {
+            let answer = form.key(&key);
+            if answer != Answer::Open
+                && let Some((form, purpose)) = self.form.take()
+                && answer == Answer::Ok
+            {
+                match purpose {
+                    Purpose::Find => self.find_answered(&form),
+                }
+            }
+            return;
+        }
+        if self.viewer.is_some() {
+            return self.viewer_key(key);
         }
         let typing = !self.command.is_empty();
         let plain = key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
@@ -259,7 +336,26 @@ impl App {
             }
             return;
         }
+        if self.form.is_some() {
+            return;
+        }
         let at = ratatui::layout::Position::new(mouse.column, mouse.row);
+        // A click on the key bar presses that key.
+        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind
+            && self.places.keys.contains(at)
+        {
+            let slot = (mouse.column - self.places.keys.x) / (self.places.keys.width / 10).max(1);
+            let key = KeyCode::F(slot.min(9) as u8 + 1);
+            return self.key(KeyEvent::new(key, KeyModifiers::NONE));
+        }
+        if self.viewer.is_some() {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => self.viewer_scroll(-3),
+                MouseEventKind::ScrollDown => self.viewer_scroll(3),
+                _ => {}
+            }
+            return;
+        }
         let side = (0..2).find(|&ix| self.places.rows[ix].contains(at));
         match (mouse.kind, side) {
             (MouseEventKind::ScrollUp, Some(ix)) => {
@@ -282,13 +378,6 @@ impl App {
                 if double {
                     self.clicked = None;
                     self.navigate(|panel| panel.open().map(drop));
-                }
-            }
-            (MouseEventKind::Down(MouseButton::Left), None) if self.places.keys.contains(at) => {
-                let slot =
-                    (mouse.column - self.places.keys.x) / (self.places.keys.width / 10).max(1);
-                if let Some((_, Some(command))) = KEY_BAR.get(slot as usize) {
-                    self.command(*command);
                 }
             }
             _ => {}
@@ -323,9 +412,9 @@ impl App {
             Command::PreviousTab => self.sides[side].tabs.step(-1),
             Command::CloseAllTabs => self.sides[side].tabs.close_all(),
             Command::CloseDuplicateTabs => self.sides[side].tabs.close_duplicates(),
-            Command::View | Command::Edit | Command::EditExternally => {
-                self.not_yet("Viewing and editing")
-            }
+            Command::View => self.view(),
+            Command::Edit => self.edit(),
+            Command::EditExternally => self.edit_externally(),
             Command::Copy
             | Command::Move
             | Command::NewFolder
@@ -366,24 +455,131 @@ impl App {
         if self.panel().remote().is_some() {
             return self.say("Commands run on this computer, not on the server.", true);
         }
-        self.shell = Some((line, folder));
+        self.foreground = Some(Foreground::Shell(line, folder));
     }
 
-    /// In sight of the user, the panels hidden until Enter brings them back.
-    fn run_shell(&mut self, line: &str, folder: &std::path::Path) -> DefaultTerminal {
+    /// The terminal is the program's until it ends.
+    fn run_foreground(&mut self, foreground: Foreground) -> DefaultTerminal {
         stop();
-        println!("{}> {line}", folder.display());
-        let ran = command::shell(line).current_dir(folder).status();
-        if let Err(err) = ran {
-            println!("{err}");
-        }
-        print!("\nPress Enter to return to Power Commander...");
-        let _ = io::stdout().flush();
-        let _ = io::stdin().read_line(&mut String::new());
+        let folder = match foreground {
+            Foreground::Shell(line, folder) => {
+                println!("{}> {line}", folder.display());
+                let ran = command::shell(&line).current_dir(&folder).status();
+                if let Err(err) = ran {
+                    println!("{err}");
+                }
+                print!("\nPress Enter to return to Power Commander...");
+                let _ = io::stdout().flush();
+                let _ = io::stdin().read_line(&mut String::new());
+                folder
+            }
+            Foreground::Editor(file, upload) => {
+                let before = origin::modified(&file).ok().flatten();
+                if let Err(err) = edit::edit_in_terminal(&file) {
+                    self.say(format!("{}: {err}", file.display()), true);
+                }
+                if let Some(upload) = upload {
+                    self.send_back(file.clone(), before, upload);
+                }
+                file.parent().map(Path::to_owned).unwrap_or_default()
+            }
+        };
         for side in &mut self.sides {
-            side.tabs.reload_folder(folder);
+            side.tabs.reload_folder(&folder);
         }
         start()
+    }
+
+    /// A changed copy goes back to its server or archive, in the background.
+    fn send_back(&self, file: PathBuf, before: Option<std::time::SystemTime>, upload: Upload) {
+        self.background(move || {
+            let sent = origin::send_back(&file, before, &upload);
+            Box::new(move |app: &mut App| match sent {
+                Some(Ok(text)) => app.say(text, false),
+                Some(Err(err)) => app.say(format!("Could not save it back: {err}"), true),
+                None => {}
+            })
+        });
+    }
+
+    /// F3: a server's or an archive's file is copied out first.
+    fn view(&mut self) {
+        let panel = self.panel();
+        let Some(origin) = panel.origin() else {
+            return;
+        };
+        let settings = self.settings.viewer.clone();
+        if origin.is_local() {
+            let (files, at) = panel.files_around();
+            match Viewer::open(files, at, settings, None) {
+                Ok(viewer) => self.viewer = Some(viewer),
+                Err(err) => self.say(format!("{}: {err}", origin.name()), true),
+            }
+            return;
+        }
+        let name = origin.name();
+        self.say(format!("Copying {name}..."), false);
+        self.background(move || {
+            let opened = origin
+                .view()
+                .and_then(|file| Viewer::open(vec![file], 0, settings, Some(name.clone())));
+            Box::new(move |app: &mut App| {
+                app.message = None;
+                match opened {
+                    Ok(viewer) => app.viewer = Some(viewer),
+                    Err(err) => app.say(format!("{name}: {err}"), true),
+                }
+            })
+        });
+    }
+
+    /// F4 in the terminal's editor; a server's or an archive's file is
+    /// copied out first, and what the editor saves goes back.
+    fn edit(&mut self) {
+        let Some(origin) = self.panel().origin() else {
+            return;
+        };
+        if let origin::Origin::Local(path) = origin {
+            self.foreground = Some(Foreground::Editor(path, None));
+            return;
+        }
+        let name = origin.name();
+        self.say(format!("Copying {name}..."), false);
+        self.background(move || {
+            let prepared = origin.edit();
+            Box::new(move |app: &mut App| {
+                app.message = None;
+                match prepared {
+                    Ok((file, upload)) => app.foreground = Some(Foreground::Editor(file, upload)),
+                    Err(err) => app.say(format!("{name}: {err}"), true),
+                }
+            })
+        });
+    }
+
+    /// The external editor of Settings, a window of its own; a copy goes
+    /// back once it ends.
+    fn edit_externally(&mut self) {
+        let Some(origin) = self.panel().origin() else {
+            return;
+        };
+        let (line, name) = (self.settings.editor.external.clone(), origin.name());
+        self.background(move || {
+            let edited = origin.edit().and_then(|(file, upload)| {
+                let Some(upload) = upload else {
+                    return edit::edit_externally(&line, &file).map(|()| None);
+                };
+                let before = origin::modified(&file)?;
+                edit::start_editor(&line, &file)?.wait()?;
+                Ok(origin::send_back(&file, before, &upload))
+            });
+            Box::new(move |app: &mut App| match edited {
+                Ok(Some(Ok(text))) => app.say(text, false),
+                Ok(Some(Err(err))) => app.say(format!("Could not save it back: {err}"), true),
+                Ok(None) => {}
+                Err(err) => app.say(format!("{name}: {err}"), true),
+            })
+        });
     }
 }
 
@@ -440,9 +636,8 @@ mod tests {
         assert_eq!(app.panel().path(), root, "back up, the line being empty");
         app.key(key(KeyCode::Char('l')));
         app.key(key(KeyCode::Enter));
-        assert_eq!(
-            app.shell.take(),
-            Some(("l".into(), root.clone())),
+        assert!(
+            matches!(app.foreground.take(), Some(Foreground::Shell(line, at)) if line == "l" && at == root),
             "for the shell"
         );
         std::fs::remove_dir_all(&root).unwrap();

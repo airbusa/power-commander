@@ -861,6 +861,8 @@ pub struct Shown {
     pub pdf: bool,
     /// Extensions of the pictures the viewer can show.
     pictures: &'static [&'static str],
+    /// The viewer renders Markdown and PDF pages; else they are text.
+    pages: bool,
 }
 
 impl Shown {
@@ -869,6 +871,7 @@ impl Shown {
         at: usize,
         settings: ViewerSettings,
         pictures: &'static [&'static str],
+        pages: bool,
     ) -> Self {
         let font = match settings.font {
             StartFont::Ascii => Font::Ascii,
@@ -887,6 +890,7 @@ impl Shown {
             picture: false,
             pdf: false,
             pictures,
+            pages,
         }
     }
 
@@ -901,7 +905,8 @@ impl Shown {
         let extension = extension.as_deref().unwrap_or_default();
         let picture = self.pictures.contains(&extension);
         let html = matches!(extension, "htm" | "html" | "xhtml");
-        let markdown = matches!(extension, "md" | "markdown")
+        let markdown = self.pages
+            && matches!(extension, "md" | "markdown")
             && std::fs::metadata(path)?.len() <= MARKDOWN_LIMIT;
         let detected = detect(path)?;
         self.picture = picture;
@@ -913,7 +918,7 @@ impl Shown {
             StartMode::Binary => Mode::Binary,
             StartMode::Hex => Mode::Hex,
             StartMode::Auto if picture => Mode::Picture,
-            StartMode::Auto if self.pdf => Mode::Pdf,
+            StartMode::Auto if self.pdf && self.pages => Mode::Pdf,
             StartMode::Auto if html => Mode::Html,
             StartMode::Auto if markdown => Mode::Markdown,
             StartMode::Auto => match detected {
@@ -996,7 +1001,8 @@ impl Shown {
     pub fn set_mode(&mut self, mode: Mode) -> bool {
         if mode == self.mode
             || mode == Mode::Picture && !self.picture
-            || mode == Mode::Pdf && !self.pdf
+            || mode == Mode::Pdf && !(self.pdf && self.pages)
+            || mode == Mode::Markdown && !self.pages
         {
             return false;
         }
