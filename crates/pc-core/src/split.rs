@@ -55,9 +55,9 @@ pub fn split(file: PathBuf, dir: PathBuf, size: u64) -> Task {
                             break;
                         }
                         if out.is_none() {
-                            written.push(path.clone());
                             report.progress.current = path.clone();
-                            out = Some(File::create(&path)?);
+                            out = Some(File::create_new(&path).map_err(|err| exists(&path, err))?);
+                            written.push(path.clone());
                         }
                         out.as_mut().expect("created").write_all(&buf[..read])?;
                         crc.update(&buf[..read]);
@@ -85,6 +85,16 @@ pub fn split(file: PathBuf, dir: PathBuf, size: u64) -> Task {
             }
             result.map(|()| String::new())
         }),
+    }
+}
+
+fn exists(path: &Path, err: io::Error) -> io::Error {
+    match err.kind() {
+        io::ErrorKind::AlreadyExists => {
+            let text = format!("{} exists already", path.display());
+            io::Error::new(err.kind(), text)
+        }
+        _ => err,
     }
 }
 
@@ -170,8 +180,9 @@ pub fn combine(parts: Parts, target: PathBuf) -> Task {
                 .filter_map(|path| std::fs::metadata(path).ok())
                 .map(|meta| meta.len())
                 .sum();
+            // Never over a file already there, as the target is typed.
+            let mut out = File::create_new(&target).map_err(|err| exists(&target, err))?;
             let combined = (|| {
-                let mut out = File::create(&target)?;
                 let mut crc = crc32fast::Hasher::new();
                 let mut buf = vec![0; 1 << 20];
                 for path in &paths {
@@ -273,6 +284,12 @@ mod tests {
         let found = parts_of(&parts.join("a.crc")).unwrap();
         let id = queue.push_task(combine(found, root.join("c.bin")));
         let job = wait(&queue, id);
+        let again = parts_of(&parts.join("a.crc")).unwrap();
+        let id = queue.push_task(combine(again, root.join("b.bin")));
+        assert!(
+            wait(&queue, id).note.unwrap().contains("exists already"),
+            "b.bin is kept"
+        );
         assert_eq!(job.status, Status::Failed);
         assert!(job.note.unwrap().contains("missing or damaged"));
         std::fs::remove_dir_all(&root).unwrap();
