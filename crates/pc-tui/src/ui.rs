@@ -13,8 +13,14 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::App;
 
 pub const PANEL: Style = Style::new().fg(Color::Gray).bg(Color::Blue);
+// Fixed 256-colour shades: themes repaint only the first 16, and Breeze's
+// magenta and yellow are unreadable on its blue.
+const YELLOW: Color = Color::Indexed(228);
+const PINK: Color = Color::Indexed(219);
+const GREEN: Color = Color::Indexed(120);
+
 const HEADER: Style = Style::new()
-    .fg(Color::Yellow)
+    .fg(YELLOW)
     .bg(Color::Blue)
     .add_modifier(Modifier::BOLD);
 pub const BAR: Style = Style::new().fg(Color::Black).bg(Color::Cyan);
@@ -167,11 +173,11 @@ fn entry_style(panel: &Panel, entry: &Entry, cursor: bool) -> Style {
     let marked = panel.is_marked(entry);
     let base = if cursor { BAR } else { PANEL };
     let fg = match () {
-        _ if marked => Some(Color::Yellow),
+        _ if marked => Some(YELLOW),
         _ if cursor => None,
         _ if entry.is_dir => Some(Color::White),
-        _ if archive::is_archive(&entry.name) => Some(Color::LightMagenta),
-        _ if entry.attributes.contains('x') => Some(Color::LightGreen),
+        _ if archive::is_archive(&entry.name) => Some(PINK),
+        _ if entry.attributes.contains('x') => Some(GREEN),
         _ => None,
     };
     let style = match fg {
