@@ -5,9 +5,11 @@ pub mod edit;
 pub mod html;
 pub mod icons;
 pub mod menu;
+pub mod ops;
 pub mod session;
 pub mod settings;
 pub mod theme;
+pub mod vfs;
 pub mod viewer;
 
 use std::cmp::Ordering;
