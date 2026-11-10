@@ -10,6 +10,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenu};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarHandle};
+use gpui_kit::component::text::TextView;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -42,6 +43,7 @@ actions!(
         ShowHtml,
         ShowUnicode,
         ShowUtf8,
+        ShowMarkdown,
         FontAnsi,
         FontAscii,
         FontVariable,
@@ -78,6 +80,10 @@ const PAD: Pixels = px(8.);
 const FIRST_DRAWN: usize = 60;
 /// The scrollbar's height in rows: small enough for f32 pixels to stay exact.
 const VIRTUAL_HEIGHT: f32 = 1_000_000.;
+/// Larger Markdown is shown as text: the renderer lays out all of it.
+const MARKDOWN_LIMIT: u64 = 4 << 20;
+/// DOS text draws boxes and blocks, which join only in rows as high as their characters.
+const DOS_PAGES: [u16; 4] = [437, 850, 852, 866];
 /// Larger HTML is shown as plain text.
 const HTML_LIMIT: u64 = 64 << 20;
 
@@ -107,6 +113,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("5", ShowHtml, keys),
         KeyBinding::new("6", ShowUnicode, keys),
         KeyBinding::new("7", ShowUtf8, keys),
+        KeyBinding::new("8", ShowMarkdown, keys),
         KeyBinding::new("a", FontAnsi, keys),
         KeyBinding::new("s", FontAscii, keys),
         KeyBinding::new("v", FontVariable, keys),
@@ -134,6 +141,8 @@ enum Mode {
     Html,
     Unicode,
     Utf8,
+    /// Not Lister's: rendered, as the UI kit does.
+    Markdown,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -223,6 +232,8 @@ impl Shown {
         let extension = extension.as_deref().unwrap_or_default();
         let picture = Img::extensions().contains(&extension);
         let html = matches!(extension, "htm" | "html" | "xhtml");
+        let markdown = matches!(extension, "md" | "markdown")
+            && std::fs::metadata(path)?.len() <= MARKDOWN_LIMIT;
         let detected = detect(path)?;
         self.picture = picture;
         self.big_endian = detected == Detected::Utf16 { big_endian: true };
@@ -233,12 +244,17 @@ impl Shown {
             StartMode::Hex => Mode::Hex,
             StartMode::Auto if picture => Mode::Picture,
             StartMode::Auto if html => Mode::Html,
+            StartMode::Auto if markdown => Mode::Markdown,
             StartMode::Auto => match detected {
                 Detected::Plain => Mode::Text,
                 Detected::Utf8 => Mode::Utf8,
                 Detected::Utf16 { .. } => Mode::Unicode,
             },
         };
+        // NFO art is always in the IBM PC's code page.
+        if matches!(extension, "nfo" | "diz") && self.mode == Mode::Text {
+            self.page = Some(437);
+        }
         self.text()
     }
 
@@ -280,7 +296,7 @@ impl Shown {
                 let big_endian = self.big_endian;
                 TextFile::open(path, lines, Decoding::Utf16 { big_endian })?
             }
-            Mode::Utf8 => TextFile::open(path, lines, Decoding::Utf8)?,
+            Mode::Utf8 | Mode::Markdown => TextFile::open(path, lines, Decoding::Utf8)?,
             Mode::Text | Mode::Picture | Mode::Html => TextFile::open(path, lines, plain)?,
         })
     }
@@ -296,6 +312,7 @@ impl Shown {
             Mode::Html => "HTML text".into(),
             Mode::Unicode => "UTF-16".into(),
             Mode::Utf8 => "UTF-8".into(),
+            Mode::Markdown => "Markdown".into(),
         }
     }
 }
@@ -319,6 +336,8 @@ struct Viewer {
     text: Arc<TextFile>,
     /// The file's, HTML's text is shorter.
     size: u64,
+    /// The source the Markdown mode renders.
+    markdown: Option<SharedString>,
     fit: bool,
     only_larger: bool,
     /// Anchor and head, as file offsets: what Copy copies.
@@ -395,11 +414,17 @@ struct Viewport {
     font_size: Pixels,
     /// A Find result to scroll to, once the index reaches it.
     reveal: Option<u64>,
+    /// Set as rows are drawn; `ROW` before.
+    row_height: Option<Pixels>,
 }
 
 impl Viewport {
+    fn row(&self) -> Pixels {
+        self.row_height.unwrap_or(ROW)
+    }
+
     fn visible(&self) -> usize {
-        (self.bounds.size.height / ROW) as usize
+        (self.bounds.size.height / self.row()) as usize
     }
 
     fn max_top(&self) -> usize {
@@ -411,7 +436,7 @@ impl Viewport {
     }
 
     fn row_px(&self) -> f32 {
-        (VIRTUAL_HEIGHT / self.rows.max(1) as f32).min(f32::from(ROW))
+        (VIRTUAL_HEIGHT / self.rows.max(1) as f32).min(f32::from(self.row()))
     }
 
     fn scroll_rows(&mut self, rows: isize) {
@@ -456,6 +481,7 @@ impl Viewer {
         window.focus(&focus, cx);
         Self {
             size: file_size(&shown, &text),
+            markdown: markdown(&shown, &text),
             shown,
             text: Arc::new(text),
             fit: true,
@@ -507,6 +533,7 @@ impl Viewer {
         cx: &mut Context<Self>,
     ) {
         self.size = file_size(&self.shown, &text);
+        self.markdown = markdown(&self.shown, &text);
         self.text = Arc::new(text);
         self.selection = (0, 0);
         self.stop_finding();
@@ -620,7 +647,7 @@ impl Viewer {
     fn hit(&self, position: Point<Pixels>, window: &mut Window) -> Option<(usize, usize)> {
         let view = self.view.0.borrow();
         let last = view.drawn.len().checked_sub(1)?;
-        let y = ((position.y - view.bounds.origin.y) / ROW).floor();
+        let y = ((position.y - view.bounds.origin.y) / view.row()).floor();
         if y > last as f32 {
             return Some((last, usize::MAX));
         }
@@ -731,7 +758,8 @@ impl Viewer {
     }
 
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.shown.mode == Mode::Picture {
+        // Find goes through rows, which these modes do not show.
+        if matches!(self.shown.mode, Mode::Picture | Mode::Markdown) {
             return;
         }
         let Searches { query, history } = searches(cx).clone();
@@ -752,7 +780,8 @@ impl Viewer {
 
     /// F3 and F5 go on as the dialog said, with Shift the other way, from the selection.
     fn find_next(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.shown.mode == Mode::Picture {
+        // Find goes through rows, which these modes do not show.
+        if matches!(self.shown.mode, Mode::Picture | Mode::Markdown) {
             return;
         }
         let query = searches(cx).query.clone();
@@ -824,12 +853,13 @@ impl Viewer {
     }
 
     fn wheel(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let delta = event.delta.pixel_delta(ROW);
+        let row = self.view.0.borrow().row();
+        let delta = event.delta.pixel_delta(row);
         self.scroll(
             |view| {
                 view.wheel += delta.y;
-                let rows = (view.wheel / ROW).trunc();
-                view.wheel -= ROW * rows;
+                let rows = (view.wheel / row).trunc();
+                view.wheel -= row * rows;
                 view.scroll_rows(-(rows as isize));
                 view.scroll_x(-delta.x);
             },
@@ -874,7 +904,7 @@ impl Viewer {
                 .separator()
                 .menu("Close", Box::new(Close))
         };
-        let picture_shown = mode == Mode::Picture;
+        let picture_shown = matches!(mode, Mode::Picture | Mode::Markdown);
         let edit = move |menu: PopupMenu| {
             menu.menu_with_disabled("Copy as text", Box::new(CopyText), none)
                 .menu("Select all", Box::new(SelectAll))
@@ -883,7 +913,7 @@ impl Viewer {
                 .menu_with_disabled("Find next", Box::new(FindNext), picture_shown)
         };
         let options = move |mut menu: PopupMenu| {
-            let modes: [(&str, Mode, Box<dyn Action>); 7] = [
+            let modes: [(&str, Mode, Box<dyn Action>); 8] = [
                 ("Text only", Mode::Text, Box::new(ShowText)),
                 (
                     "Binary (fixed line length)",
@@ -895,6 +925,7 @@ impl Viewer {
                 ("HTML text (strip tags)", Mode::Html, Box::new(ShowHtml)),
                 ("Unicode (UTF-16)", Mode::Unicode, Box::new(ShowUnicode)),
                 ("UTF-8", Mode::Utf8, Box::new(ShowUtf8)),
+                ("Markdown", Mode::Markdown, Box::new(ShowMarkdown)),
             ];
             for (label, this, action) in modes {
                 let off = this == Mode::Picture && !picture;
@@ -961,7 +992,7 @@ impl Viewer {
         // Text in UTF-8 or UTF-16 has no code page.
         let unpaged = matches!(
             mode,
-            Mode::Unicode | Mode::Utf8 | Mode::Html | Mode::Picture
+            Mode::Unicode | Mode::Utf8 | Mode::Html | Mode::Picture | Mode::Markdown
         );
         h_flex()
             .px_1()
@@ -977,6 +1008,23 @@ impl Viewer {
     fn render_rows(&self, window: &mut Window, cx: &mut Context<Self>) -> (AnyElement, String) {
         let theme = cx.theme();
         let (rows, scanned, done) = self.text.indexed();
+        let (family, font_size) = match self.shown.font {
+            Font::Variable => (theme.font_family.clone(), theme.font_size),
+            Font::Ansi | Font::Ascii => (theme.mono_font_family.clone(), theme.mono_font_size),
+        };
+        let text_system = window.text_system();
+        let font_id = text_system.resolve_font(&font(family.clone()));
+        let tight = matches!(self.shown.mode, Mode::Text | Mode::Binary)
+            && DOS_PAGES.contains(&self.shown.page());
+        let row = match tight {
+            true => {
+                let glyphs = text_system.ascent(font_id, font_size)
+                    + text_system.descent(font_id, font_size);
+                px(f32::from(glyphs).ceil())
+            }
+            false => ROW,
+        };
+        self.view.0.borrow_mut().row_height = Some(row);
         let top = {
             let mut view = self.view.0.borrow_mut();
             view.rows = rows;
@@ -992,14 +1040,7 @@ impl Viewer {
             visible => visible + 1,
         };
         let lines = self.text.rows(top..top + drawn);
-        let (family, font_size) = match self.shown.font {
-            Font::Variable => (theme.font_family.clone(), theme.font_size),
-            Font::Ansi | Font::Ascii => (theme.mono_font_family.clone(), theme.mono_font_size),
-        };
-        let text_system = window.text_system();
-        let em = text_system
-            .em_advance(text_system.resolve_font(&font(family.clone())), font_size)
-            .unwrap_or(px(8.));
+        let em = text_system.em_advance(font_id, font_size).unwrap_or(px(8.));
         let widest = lines.iter().map(|line| line.text.chars().count()).max();
         let x = {
             let mut view = self.view.0.borrow_mut();
@@ -1090,10 +1131,11 @@ impl Viewer {
                     // Not on the rows' parent: its context menu keeps the UI font.
                     .font_family(family)
                     .text_size(font_size)
+                    .line_height(row)
                     .children(
                         texts
                             .into_iter()
-                            .map(|text| div().h(ROW).whitespace_nowrap().child(text)),
+                            .map(|text| div().h(row).whitespace_nowrap().child(text)),
                     ),
             )
             .child(
@@ -1112,6 +1154,23 @@ impl Viewer {
                     .menu_with_disabled(google, Box::new(SearchGoogle), none)
             });
         (rows.into_any_element(), status)
+    }
+
+    fn render_markdown(&self) -> AnyElement {
+        let source = self.markdown.clone().unwrap_or_else(|| {
+            let limit = MARKDOWN_LIMIT >> 20;
+            format!("*Over {limit} MB: 1 shows it as text.*").into()
+        });
+        let view = TextView::markdown("viewer-markdown", source)
+            .scrollable(true)
+            .selectable(true);
+        v_flex()
+            .absolute()
+            .inset_0()
+            .px_4()
+            .py_2()
+            .child(view)
+            .into_any_element()
     }
 
     fn render_picture(&self) -> AnyElement {
@@ -1146,10 +1205,12 @@ impl Render for Viewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (content, status) = match self.shown.mode {
             Mode::Picture => (self.render_picture(), String::new()),
+            Mode::Markdown => (self.render_markdown(), String::new()),
             _ => self.render_rows(window, cx),
         };
         let menus = self.render_menus(cx);
-        let minimap = self.shown.mode != Mode::Picture && crate::minimap_shown(cx);
+        let minimap =
+            !matches!(self.shown.mode, Mode::Picture | Mode::Markdown) && crate::minimap_shown(cx);
         let theme = cx.theme();
         v_flex()
             .key_context(CONTEXT)
@@ -1171,6 +1232,9 @@ impl Render for Viewer {
                 cx.listener(|this, _: &ShowUnicode, w, cx| this.set_mode(Mode::Unicode, w, cx)),
             )
             .on_action(cx.listener(|this, _: &ShowUtf8, w, cx| this.set_mode(Mode::Utf8, w, cx)))
+            .on_action(
+                cx.listener(|this, _: &ShowMarkdown, w, cx| this.set_mode(Mode::Markdown, w, cx)),
+            )
             .on_action(
                 cx.listener(|this, _: &FontAnsi, w, cx| this.set_font(Font::Ansi, None, w, cx)),
             )
@@ -1241,6 +1305,12 @@ impl Render for Viewer {
                 cx,
             ))
     }
+}
+
+fn markdown(shown: &Shown, text: &TextFile) -> Option<SharedString> {
+    let rendered = shown.mode == Mode::Markdown && text.len() <= MARKDOWN_LIMIT;
+    let source = rendered.then(|| text.text_of(0..text.len()));
+    source?.ok().map(SharedString::from)
 }
 
 fn file_size(shown: &Shown, text: &TextFile) -> u64 {
