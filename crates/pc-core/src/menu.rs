@@ -325,7 +325,7 @@ pub const BUTTON_BAR: &[Item] = &[
     cmd("Edit", "f4", Edit),
     cmd("Copy", "f5", Copy),
     cmd("Move", "f6", Move),
-    cmd("NewFolder", "f7", NewFolder),
+    cmd("New Folder", "f7", NewFolder),
     cmd("Delete", "f8", Delete),
     cmd("Exit", "alt-f4", Quit),
 ];

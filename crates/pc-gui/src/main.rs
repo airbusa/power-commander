@@ -18,7 +18,7 @@ use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{AppMenuBar, ContextMenuExt, PopupMenu};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::command::{self, Outcome};
@@ -69,8 +69,21 @@ impl AssetSource for AppAssets {
 
 const CONTEXT: &str = "Commander";
 const ROW: Pixels = px(22.);
-const SIZE_WIDTH: Pixels = px(110.);
-const DATE_WIDTH: Pixels = px(130.);
+/// Ext, Size, Date and Attr; Name takes the rest.
+const COLUMN_WIDTHS: [f32; 4] = [56., 100., 132., 92.];
+const COLUMN_MIN: f32 = 24.;
+/// Row and header padding plus border, left of Name and right of Attr.
+const ROW_INSET: Pixels = px(5.);
+/// Within this share of the middle, the splitter snaps to it.
+const SPLIT_MAGNET: f32 = 0.02;
+
+/// Dragging the left edge of a column (Ext 0 … Attr 3) in a panel.
+struct ColumnDrag {
+    panel: usize,
+    column: usize,
+}
+
+struct SplitDrag;
 
 fn main() {
     let app = gpui_kit::application().with_assets(AppAssets);
@@ -126,6 +139,10 @@ struct Commander {
     path_edit: Option<(usize, Entity<InputState>, Subscription)>,
     _appearance: Subscription,
     command: Entity<InputState>,
+    /// Widths of Ext, Size, Date and Attr, both panels'.
+    columns: [f32; 4],
+    /// The left panel's share of the width.
+    split: f32,
     _quit: Subscription,
     _command: Subscription,
 }
@@ -217,6 +234,11 @@ impl Commander {
         Self {
             panels: [side(0), side(1)],
             active: session.active.min(1),
+            columns: <[f32; 4]>::try_from(session.columns.as_slice()).unwrap_or(COLUMN_WIDTHS),
+            split: match session.split {
+                split if (0.15..=0.85).contains(&split) => split,
+                _ => 0.5,
+            },
             focus,
             menu_bar: AppMenuBar::new(cx),
             themes,
@@ -540,6 +562,8 @@ impl Commander {
         Session {
             sides: self.panels.iter().map(|side| side.tabs.state()).collect(),
             active: self.active,
+            columns: self.columns.to_vec(),
+            split: self.split,
         }
     }
 
@@ -665,28 +689,81 @@ impl Commander {
             (theme.muted, theme.muted_foreground)
         };
         let sort = panel.sort();
-        let column = |label: &'static str, key: SortKey| {
-            let arrow = match (sort.key == key, sort.descending) {
-                (false, _) => "",
-                (true, true) => "↓",
-                (true, false) => "↑",
+        let title = |label: &'static str, key: SortKey, right: bool| {
+            let sorted = sort.key == key;
+            let arrow = match sort.descending {
+                true => IconName::ArrowDown,
+                false => IconName::ArrowUp,
             };
-            div()
+            h_flex()
                 .id((label, ix))
+                .h_full()
+                .px_1()
+                .gap_1()
                 .cursor_pointer()
+                .when(sorted, |el| {
+                    el.bg(theme.accent).text_color(theme.accent_foreground)
+                })
                 .on_click(cx.listener(move |this, _, _, cx| this.sort_by_column(ix, key, cx)))
-                .child(format!("{arrow}{label}"))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .when(right, |el| el.text_right())
+                        .child(label),
+                )
+                .when(sorted, |el| el.child(Icon::new(arrow).small()))
         };
+        let [ext, size, date, attr] = self.columns.map(px);
+        // A column's left edge, as far from the right as the columns right of it.
+        let handles = (0..4).map(|column| {
+            let right: f32 = self.columns[column..].iter().sum();
+            div()
+                .id(("resize", ix * 4 + column))
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right(ROW_INSET + px(right - 3.))
+                .w(px(6.))
+                .occlude()
+                .cursor(CursorStyle::ResizeColumn)
+                .on_drag(ColumnDrag { panel: ix, column }, |_, _, _, cx| {
+                    cx.new(|_| EmptyView)
+                })
+        });
         let column_titles = h_flex()
-            .px_2()
-            .py_1()
-            .gap_2()
+            .relative()
+            .h(ROW + px(4.))
+            .px_1()
             .bg(theme.list_head)
+            .border_x_1()
             .border_b_1()
             .border_color(theme.border)
-            .child(column("Name", SortKey::Name).flex_1())
-            .child(column("Size", SortKey::Size).w(SIZE_WIDTH).text_right())
-            .child(column("Modified", SortKey::Modified).w(DATE_WIDTH));
+            .on_drag_move(
+                cx.listener(move |this, event: &DragMoveEvent<ColumnDrag>, _, cx| {
+                    let drag = event.drag(cx);
+                    if drag.panel != ix {
+                        return;
+                    }
+                    let column = drag.column;
+                    let right: f32 = this.columns[column + 1..].iter().sum();
+                    let edge = event.bounds.right() - ROW_INSET - px(right);
+                    let width = f32::from(edge - event.event.position.x);
+                    this.columns[column] = width.clamp(COLUMN_MIN, 600.);
+                    cx.notify();
+                }),
+            )
+            .child(title("Name", SortKey::Name, false).flex_1().min_w_0())
+            .child(title("Ext", SortKey::Extension, false).w(ext).flex_none())
+            .child(title("Size", SortKey::Size, true).w(size).flex_none())
+            .child(title("Date", SortKey::Modified, false).w(date).flex_none())
+            .child(
+                title("Attr", SortKey::Attributes, false)
+                    .w(attr)
+                    .flex_none(),
+            )
+            .children(handles);
         let editing = self
             .path_edit
             .as_ref()
@@ -703,9 +780,8 @@ impl Commander {
         .flex_1();
         let tab_list = self.tab_list.as_ref().filter(|(side, ..)| *side == ix);
         v_flex()
-            .flex_1()
+            .size_full()
             .min_w_0()
-            .h_full()
             .border_1()
             .border_color(theme.border)
             .when_some(tab_list, |el, (_, list, _)| {
@@ -813,12 +889,13 @@ impl Commander {
             true => self.colors.active,
             false => self.colors.inactive,
         });
+        let (name, extension) = entry.name_and_extension();
+        let [ext, size, date, attr] = self.columns.map(px);
         h_flex()
             .id(("row", row))
             .w_full()
             .h(ROW)
-            .px_2()
-            .gap_2()
+            .px_1()
             .border_1()
             .border_color(gpui_kit::transparent_black())
             .when_some(cursor, |el, cursor| {
@@ -838,12 +915,37 @@ impl Commander {
                 h_flex()
                     .flex_1()
                     .min_w_0()
+                    .px_1()
                     .gap_1()
                     .child(img(format!("material/{icon}")).size(px(16.)).flex_none())
-                    .child(div().truncate().child(entry.display_name())),
+                    .child(div().truncate().child(name)),
             )
-            .child(div().w(SIZE_WIDTH).text_right().child(entry.size_text()))
-            .child(div().w(DATE_WIDTH).child(entry.modified_text()))
+            .child(div().w(ext).flex_none().px_1().truncate().child(extension))
+            .child(
+                div()
+                    .w(size)
+                    .flex_none()
+                    .px_1()
+                    .text_right()
+                    .truncate()
+                    .child(entry.size_text()),
+            )
+            .child(
+                div()
+                    .w(date)
+                    .flex_none()
+                    .px_1()
+                    .truncate()
+                    .child(entry.modified_text()),
+            )
+            .child(
+                div()
+                    .w(attr)
+                    .flex_none()
+                    .px_1()
+                    .truncate()
+                    .child(entry.attributes.clone()),
+            )
     }
 }
 
@@ -854,10 +956,10 @@ impl Render for Commander {
         let panels = h_flex()
             .when(self.path_edit.is_none(), |el| el.key_context(CONTEXT))
             .track_focus(&self.focus)
+            .relative()
             .flex_1()
             .min_h_0()
             .p_1()
-            .gap_1()
             .on_action(cx.listener(|this, _: &SwitchPanel, _, cx| {
                 this.active = 1 - this.active;
                 cx.notify();
@@ -924,8 +1026,48 @@ impl Render for Commander {
             .on_action(cx.listener(|this, SetTheme(name): &SetTheme, window, cx| {
                 this.set_theme(name.as_ref().map(|name| name.to_string()), window, cx)
             }))
-            .child(self.render_panel(0, cx))
-            .child(self.render_panel(1, cx));
+            .on_drag_move(
+                cx.listener(|this, event: &DragMoveEvent<SplitDrag>, _, cx| {
+                    let bounds = event.bounds;
+                    let share = (event.event.position.x - bounds.left()) / bounds.size.width;
+                    this.split = match (share - 0.5).abs() < SPLIT_MAGNET {
+                        true => 0.5,
+                        false => share.clamp(0.15, 0.85),
+                    };
+                    cx.notify();
+                }),
+            )
+            .child(
+                div()
+                    .h_full()
+                    .min_w_0()
+                    .flex_none()
+                    .w(relative(self.split))
+                    .pr(px(2.))
+                    .child(self.render_panel(0, cx)),
+            )
+            .child(
+                div()
+                    .h_full()
+                    .min_w_0()
+                    .flex_1()
+                    .pl(px(2.))
+                    .child(self.render_panel(1, cx)),
+            )
+            .child(
+                div()
+                    .id("splitter")
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(relative(self.split))
+                    .ml(px(-3.))
+                    .w(px(6.))
+                    .occlude()
+                    .cursor(CursorStyle::ResizeLeftRight)
+                    .hover(|style| style.bg(cx.theme().list_active))
+                    .on_drag(SplitDrag, |_, _, _, cx| cx.new(|_| EmptyView)),
+            );
         v_flex()
             .size_full()
             .bg(cx.theme().background)

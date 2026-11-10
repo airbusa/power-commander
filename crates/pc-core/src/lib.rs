@@ -32,6 +32,8 @@ pub struct Entry {
     pub hidden: bool,
     /// The system attribute; Windows only.
     pub system: bool,
+    /// As the Attr column shows them: `rwxr-xr-x`, or `rahs` on Windows.
+    pub attributes: String,
 }
 
 /// Which entries a panel lists besides the usual ones.
@@ -54,6 +56,7 @@ pub enum SortKey {
     Extension,
     Modified,
     Size,
+    Attributes,
     /// As the folder lists them.
     Unsorted,
 }
@@ -85,6 +88,7 @@ impl Sort {
             SortKey::Extension => extension(a).cmp(&extension(b)).then_with(|| by_name(a, b)),
             SortKey::Modified => a.modified.cmp(&b.modified).then_with(|| by_name(a, b)),
             SortKey::Size => a.size.cmp(&b.size).then_with(|| by_name(a, b)),
+            SortKey::Attributes => a.attributes.cmp(&b.attributes).then_with(|| by_name(a, b)),
             SortKey::Unsorted => Ordering::Equal,
         };
         dirs.then(if self.descending {
@@ -109,6 +113,17 @@ impl Entry {
 
     pub fn display_name(&self) -> String {
         self.name.to_string_lossy().into_owned()
+    }
+
+    /// For the Name and Ext columns; folders keep their name whole.
+    pub fn name_and_extension(&self) -> (String, String) {
+        let name = self.display_name();
+        match name.rfind('.') {
+            Some(dot) if dot > 0 && !self.is_dir => {
+                (name[..dot].to_owned(), name[dot + 1..].to_owned())
+            }
+            _ => (name, String::new()),
+        }
     }
 
     pub fn size_text(&self) -> String {
@@ -641,7 +656,7 @@ fn read_dir(path: &Path) -> io::Result<Vec<Entry>> {
             // Follow links; a broken link stays itself.
             let meta = fs::metadata(item.path()).or_else(|_| item.metadata()).ok();
             let name = item.file_name();
-            let (hidden, system) = attributes(&name, meta.as_ref());
+            let (hidden, system, attributes) = attributes(&name, meta.as_ref());
             Entry {
                 name,
                 is_dir: meta.as_ref().is_some_and(fs::Metadata::is_dir),
@@ -649,6 +664,7 @@ fn read_dir(path: &Path) -> io::Result<Vec<Entry>> {
                 modified: meta.and_then(|m| m.modified().ok()),
                 hidden,
                 system,
+                attributes,
             }
         })
         .collect();
@@ -682,23 +698,45 @@ fn parent_entry(modified: Option<SystemTime>) -> Entry {
         modified,
         hidden: false,
         system: false,
+        attributes: String::new(),
     }
 }
 
-/// Hidden and system.
+/// Hidden, system, and the Attr column's text.
 #[cfg(windows)]
-fn attributes(_: &OsStr, meta: Option<&fs::Metadata>) -> (bool, bool) {
+fn attributes(_: &OsStr, meta: Option<&fs::Metadata>) -> (bool, bool, String) {
     use std::os::windows::fs::MetadataExt;
+    const READ_ONLY: u32 = 0x1;
     const HIDDEN: u32 = 0x2;
     const SYSTEM: u32 = 0x4;
-    let attributes = meta.map_or(0, MetadataExt::file_attributes);
-    (attributes & HIDDEN != 0, attributes & SYSTEM != 0)
+    const ARCHIVE: u32 = 0x20;
+    let bits = meta.map_or(0, MetadataExt::file_attributes);
+    let flag = |bit, letter| if bits & bit != 0 { letter } else { '-' };
+    let text = [
+        flag(READ_ONLY, 'r'),
+        flag(ARCHIVE, 'a'),
+        flag(HIDDEN, 'h'),
+        flag(SYSTEM, 's'),
+    ];
+    (
+        bits & HIDDEN != 0,
+        bits & SYSTEM != 0,
+        text.iter().collect(),
+    )
 }
 
-/// Hidden and system.
-#[cfg(not(windows))]
-fn attributes(name: &OsStr, _: Option<&fs::Metadata>) -> (bool, bool) {
-    (dot_file(name), false)
+/// Hidden, system, and the Attr column's text.
+#[cfg(unix)]
+fn attributes(name: &OsStr, meta: Option<&fs::Metadata>) -> (bool, bool, String) {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = meta.map_or(0, |meta| meta.permissions().mode());
+    let text = (0..9)
+        .map(|i| match mode & (0o400 >> i) {
+            0 => '-',
+            _ => b"rwxrwxrwx"[i] as char,
+        })
+        .collect();
+    (dot_file(name), false, text)
 }
 
 pub(crate) fn dot_file(name: &OsStr) -> bool {
@@ -883,6 +921,47 @@ mod tests {
     }
 
     #[test]
+    fn splits_names_and_shows_attributes() {
+        let entry = |name: &str, is_dir| Entry {
+            name: name.into(),
+            is_dir,
+            size: 0,
+            modified: None,
+            hidden: false,
+            system: false,
+            attributes: String::new(),
+        };
+        let parts = |name, is_dir| entry(name, is_dir).name_and_extension();
+        assert_eq!(
+            parts("backup.tar.gz", false),
+            ("backup.tar".into(), "gz".into())
+        );
+        assert_eq!(parts(".bashrc", false), (".bashrc".into(), String::new()));
+        assert_eq!(
+            parts("v1.2", true),
+            ("v1.2".into(), String::new()),
+            "folders whole"
+        );
+        assert_eq!(
+            crate::archive::tests::attributes_of(" -rw-r--r--"),
+            "rw-r--r--"
+        );
+        assert_eq!(crate::archive::tests::attributes_of("RA"), "ra--");
+        #[cfg(unix)]
+        {
+            let root = std::env::temp_dir().join(format!("pc-attr-test-{}", std::process::id()));
+            fs::create_dir_all(&root).unwrap();
+            let file = root.join("f");
+            fs::write(&file, "").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&file, fs::Permissions::from_mode(0o640)).unwrap();
+            let panel = Panel::new(&root, Filter::default()).unwrap();
+            assert_eq!(panel.entries()[1].attributes, "rw-r-----");
+            fs::remove_dir_all(&root).unwrap();
+        }
+    }
+
+    #[test]
     fn separates_thousands() {
         let entry = |size| Entry {
             name: "f".into(),
@@ -891,6 +970,7 @@ mod tests {
             modified: None,
             hidden: false,
             system: false,
+            attributes: String::new(),
         };
         assert_eq!(entry(1234567).size_text(), "1 234 567");
         assert_eq!(entry(123456).size_text(), "123 456");

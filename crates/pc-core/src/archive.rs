@@ -159,6 +159,7 @@ fn parse(listing: &str) -> Vec<Item> {
         let entry = Entry {
             hidden: crate::dot_file(&name),
             system: false,
+            attributes: attributes(field("Mode").or(field("Attributes")).unwrap_or("")),
             name,
             is_dir,
             size: field("Size").and_then(|s| s.parse().ok()).unwrap_or(0),
@@ -178,6 +179,7 @@ fn parse(listing: &str) -> Vec<Item> {
             let entry = Entry {
                 hidden: crate::dot_file(&name),
                 system: false,
+                attributes: String::new(),
                 name,
                 is_dir: true,
                 size: 0,
@@ -187,6 +189,22 @@ fn parse(listing: &str) -> Vec<Item> {
         }
     }
     items
+}
+
+/// 7-Zip's `-rw-r--r--` (tar, zip from Unix) or `RAHS` letters (zip from Windows).
+fn attributes(text: &str) -> String {
+    let last = text.split_whitespace().last().unwrap_or_default();
+    if last.len() >= 9 && last.is_ascii() {
+        return last[last.len() - 9..].to_owned();
+    }
+    if last.is_empty() {
+        return String::new();
+    }
+    let flags = [('R', 'r'), ('A', 'a'), ('H', 'h'), ('S', 's')];
+    flags
+        .iter()
+        .map(|&(letter, shown)| if last.contains(letter) { shown } else { '-' })
+        .collect()
 }
 
 /// Relative and without `.`; none for paths that climb out with `..`.
@@ -208,8 +226,12 @@ fn parse_time(text: &str) -> Option<SystemTime> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    pub(crate) fn attributes_of(text: &str) -> String {
+        attributes(text)
+    }
     use crate::Panel;
     use std::fs;
 

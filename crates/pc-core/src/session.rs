@@ -12,6 +12,10 @@ pub struct Session {
     pub sides: Vec<SideState>,
     /// The side the keys go to.
     pub active: usize,
+    /// Widths of the Ext, Size, Date and Attr columns.
+    pub columns: Vec<f32>,
+    /// The left panel's share of the width.
+    pub split: f32,
 }
 
 #[derive(Default, Serialize, Deserialize)]
