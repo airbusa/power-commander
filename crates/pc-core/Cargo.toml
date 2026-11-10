@@ -16,7 +16,13 @@ encoding_rs = "0.8"
 memchr = "2"
 # The viewer's Find; GPUI builds it already.
 regex = "1"
+# SFTP in pure Rust: ring, as GPUI has it, rather than a C crypto build.
+russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-config = "0.58"
+russh-sftp = "3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Runs the SSH connections; GPUI builds it already.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "io-util", "sync"] }
 # F8 moves to the trash, as each platform keeps one.
 trash = "5.3.0"

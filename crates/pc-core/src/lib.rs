@@ -8,6 +8,7 @@ pub mod menu;
 pub mod ops;
 pub mod session;
 pub mod settings;
+pub mod sftp;
 pub mod theme;
 pub mod vfs;
 pub mod viewer;

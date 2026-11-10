@@ -1,16 +1,12 @@
 //! Copy and move, one at a time, from a queue that can be reordered and cancelled.
 
-use std::io::{self, Read, Write};
+use std::io;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use crate::command;
-use crate::vfs::{Fs, Meta};
-
-const BUFFER: usize = 1 << 20;
-/// A file being written is named so until it is whole.
-const PART: &str = ".pc-part";
+use crate::vfs::{self, Fs, Meta};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -541,39 +537,16 @@ impl Run<'_> {
     /// cancelled copy leaves the target as it was.
     fn copy_file(&mut self, source: &Path, target: &Path, meta: &Meta) -> io::Result<()> {
         let (from, to) = (self.op.from.clone(), self.op.to.clone());
-        let name = target.file_name().unwrap_or_default().to_string_lossy();
-        let part = target.with_file_name(format!("{name}{PART}"));
         let before = self.progress.bytes;
-        let mut write = || -> io::Result<()> {
-            let mut reader = from.open(source)?;
-            let mut writer = to.create(&part)?;
-            let mut buffer = vec![0; BUFFER];
-            loop {
-                if self.cancel.load(Ordering::Relaxed) {
-                    return Err(io::ErrorKind::Interrupted.into());
-                }
-                let read = match reader.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(read) => read,
-                    Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(err) => return Err(err),
-                };
-                writer.write_all(&buffer[..read])?;
-                self.progress.bytes += read as u64;
-                self.report();
+        let written = vfs::copy_file(&*from, source, &*to, target, meta, &mut |bytes| {
+            if self.cancel.load(Ordering::Relaxed) {
+                return Err(io::ErrorKind::Interrupted.into());
             }
-            writer.flush()?;
-            drop(writer);
-            if to.metadata(target).is_ok() {
-                to.remove(target, false)?;
-            }
-            to.rename(&part, target)?;
-            let _ = to.set_meta(target, meta);
+            self.progress.bytes += bytes;
+            self.report();
             Ok(())
-        };
-        let written = write();
+        });
         if written.is_err() {
-            let _ = to.remove(&part, false);
             self.progress.bytes = before;
         }
         written
@@ -743,7 +716,7 @@ mod tests {
                 .unwrap()
                 .file_name()
                 .to_string_lossy()
-                .ends_with(PART)
+                .ends_with(vfs::PART)
         });
         assert_eq!(parts.count(), 0);
         fs::remove_dir_all(&dir).unwrap();

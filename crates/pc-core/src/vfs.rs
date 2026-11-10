@@ -1,10 +1,16 @@
-//! What file operations read and write: the local disk now, servers later.
+//! What file operations read and write: the local disk and servers.
 
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+
+use crate::Entry;
+
+/// A file being written is named so until it is whole.
+pub const PART: &str = ".pc-part";
+const BUFFER: usize = 1 << 20;
 
 #[derive(Clone, Debug, Default)]
 pub struct Meta {
@@ -34,6 +40,84 @@ pub trait Fs: Send + Sync {
     fn copy_link(&self, _from: &Path, _to: &Path) -> io::Result<()> {
         Err(io::ErrorKind::Unsupported.into())
     }
+}
+
+/// A server's file system, as a panel lists it.
+pub trait Remote: Fs {
+    /// `sftp://user@host`: titles show it, and typing it again reconnects.
+    fn url(&self) -> String;
+    /// Where a fresh connection starts.
+    fn home(&self) -> PathBuf;
+    /// `..` first, except at the root.
+    fn entries(&self, dir: &Path) -> io::Result<Vec<Entry>>;
+}
+
+/// Streams `source` to `target` under a part name, renamed when whole, so
+/// a failed copy leaves the target as it was. `copied` hears of each
+/// buffer; its error stops the copy.
+pub fn copy_file(
+    from: &dyn Fs,
+    source: &Path,
+    to: &dyn Fs,
+    target: &Path,
+    meta: &Meta,
+    copied: &mut dyn FnMut(u64) -> io::Result<()>,
+) -> io::Result<()> {
+    let name = target.file_name().unwrap_or_default().to_string_lossy();
+    let part = target.with_file_name(format!("{name}{PART}"));
+    let mut write = || -> io::Result<()> {
+        let mut reader = from.open(source)?;
+        let mut writer = to.create(&part)?;
+        let mut buffer = vec![0; BUFFER];
+        loop {
+            let read = match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+                Err(err) => return Err(err),
+            };
+            writer.write_all(&buffer[..read])?;
+            copied(read as u64)?;
+        }
+        writer.flush()?;
+        drop(writer);
+        if to.metadata(target).is_ok() {
+            to.remove(target, false)?;
+        }
+        to.rename(&part, target)?;
+        let _ = to.set_meta(target, meta);
+        Ok(())
+    };
+    let written = write();
+    if written.is_err() {
+        let _ = to.remove(&part, false);
+    }
+    written
+}
+
+/// Removes a folder and all in it, or a file.
+pub fn remove_all(fs: &dyn Fs, path: &Path) -> io::Result<()> {
+    let meta = fs.metadata(path)?;
+    if meta.is_dir && !meta.is_link {
+        for name in fs.list(path)? {
+            remove_all(fs, &path.join(name))?;
+        }
+    }
+    fs.remove(path, meta.is_dir && !meta.is_link)
+}
+
+/// Creates `path` and the folders above it that are missing.
+pub fn create_all(fs: &dyn Fs, path: &Path) -> io::Result<()> {
+    if fs.metadata(path).is_ok_and(|meta| meta.is_dir) {
+        return Ok(());
+    }
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        create_all(fs, parent)?;
+    }
+    fs.mkdir(path)
 }
 
 pub struct Local;
