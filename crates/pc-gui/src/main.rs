@@ -7,6 +7,7 @@ mod find_dialog;
 mod menus;
 mod minimap;
 mod name_dialog;
+mod pdf_view;
 mod remote;
 mod settings_dialog;
 mod transfer;

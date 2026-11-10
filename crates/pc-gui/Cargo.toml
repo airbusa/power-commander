@@ -11,6 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 gpui-kit = "0.7.3"
+# Rendered PDF pages become GPUI images; GPUI builds it already.
+image = { version = "0.25", default-features = false }
 # Server prompts reach the window by a channel; GPUI builds it already.
 futures = "0.3"
 pc-core.workspace = true

@@ -12,7 +12,6 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarHandle};
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
-use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::settings::{StartFont, StartMode, ViewerSettings};
 use pc_core::viewer::{
@@ -23,6 +22,7 @@ use pc_core::{codepage, html};
 
 use crate::find_dialog;
 use crate::minimap::{self, Minimap};
+use crate::pdf_view::PdfView;
 
 actions!(
     viewer,
@@ -44,6 +44,7 @@ actions!(
         ShowUnicode,
         ShowUtf8,
         ShowMarkdown,
+        ShowPdf,
         FontAnsi,
         FontAscii,
         FontVariable,
@@ -80,6 +81,8 @@ const PAD: Pixels = px(8.);
 const FIRST_DRAWN: usize = 60;
 /// The scrollbar's height in rows: small enough for f32 pixels to stay exact.
 const VIRTUAL_HEIGHT: f32 = 1_000_000.;
+/// Arrow keys move PDF pages by this much.
+const PDF_LINE: Pixels = px(48.);
 /// Larger Markdown is shown as text: the renderer lays out all of it.
 const MARKDOWN_LIMIT: u64 = 4 << 20;
 /// DOS text draws boxes and blocks, which join only in rows as high as their characters.
@@ -114,6 +117,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("6", ShowUnicode, keys),
         KeyBinding::new("7", ShowUtf8, keys),
         KeyBinding::new("8", ShowMarkdown, keys),
+        KeyBinding::new("9", ShowPdf, keys),
         KeyBinding::new("a", FontAnsi, keys),
         KeyBinding::new("s", FontAscii, keys),
         KeyBinding::new("v", FontVariable, keys),
@@ -143,6 +147,8 @@ enum Mode {
     Utf8,
     /// Not Lister's: rendered, as the UI kit does.
     Markdown,
+    /// Not Lister's: pages rendered by PDFium.
+    Pdf,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -176,6 +182,7 @@ pub fn open(
         page: None,
         big_endian: false,
         picture: false,
+        pdf: false,
     };
     let text = shown.start()?;
     let options = WindowOptions {
@@ -218,6 +225,8 @@ struct Shown {
     big_endian: bool,
     /// GPUI can show it as a picture.
     picture: bool,
+    /// A PDF, and PDFium is there.
+    pdf: bool,
 }
 
 impl Shown {
@@ -236,6 +245,7 @@ impl Shown {
             && std::fs::metadata(path)?.len() <= MARKDOWN_LIMIT;
         let detected = detect(path)?;
         self.picture = picture;
+        self.pdf = extension == "pdf" && pc_core::pdf::available();
         self.big_endian = detected == Detected::Utf16 { big_endian: true };
         self.page = None;
         self.mode = match self.settings.start {
@@ -243,6 +253,7 @@ impl Shown {
             StartMode::Binary => Mode::Binary,
             StartMode::Hex => Mode::Hex,
             StartMode::Auto if picture => Mode::Picture,
+            StartMode::Auto if self.pdf => Mode::Pdf,
             StartMode::Auto if html => Mode::Html,
             StartMode::Auto if markdown => Mode::Markdown,
             StartMode::Auto => match detected {
@@ -297,7 +308,11 @@ impl Shown {
                 TextFile::open(path, lines, Decoding::Utf16 { big_endian })?
             }
             Mode::Utf8 | Mode::Markdown => TextFile::open(path, lines, Decoding::Utf8)?,
-            Mode::Text | Mode::Picture | Mode::Html => TextFile::open(path, lines, plain)?,
+            // A PDF's text is what its pages say, not its bytes.
+            Mode::Text if self.pdf => TextFile::text(pc_core::pdf::text(path)?, lines),
+            Mode::Text | Mode::Picture | Mode::Html | Mode::Pdf => {
+                TextFile::open(path, lines, plain)?
+            }
         })
     }
 
@@ -313,6 +328,7 @@ impl Shown {
             Mode::Unicode => "UTF-16".into(),
             Mode::Utf8 => "UTF-8".into(),
             Mode::Markdown => "Markdown".into(),
+            Mode::Pdf => "PDF".into(),
         }
     }
 }
@@ -338,6 +354,8 @@ struct Viewer {
     size: u64,
     /// The source the Markdown mode renders.
     markdown: Option<SharedString>,
+    /// The PDF mode's pages.
+    pdf: Option<Entity<PdfView>>,
     fit: bool,
     only_larger: bool,
     /// Anchor and head, as file offsets: what Copy copies.
@@ -347,6 +365,9 @@ struct Viewer {
     /// A running Find; setting it stops the search.
     finding: Option<Arc<AtomicBool>>,
     minimap: Entity<Minimap>,
+    /// The Markdown mode's: its source beside the rendered page.
+    markdown_minimap: Entity<Minimap>,
+    markdown_scroll: ScrollHandle,
     view: ViewHandle,
     focus: FocusHandle,
     _poll: Task<()>,
@@ -360,6 +381,74 @@ impl Drop for Viewer {
 
 /// The minimap's view of the rows.
 struct ViewerMap(WeakEntity<Viewer>);
+
+/// The minimap's view of a rendered Markdown page: its source lines,
+/// scrolled as far through as the page.
+struct MarkdownMap(WeakEntity<Viewer>);
+
+impl MarkdownMap {
+    /// Source lines, and the page's scroll, visible and scrollable heights.
+    fn page(&self, cx: &App) -> Option<(usize, f32, f32, f32)> {
+        let viewer = self.0.upgrade()?.read(cx);
+        let lines = viewer.markdown.as_ref()?.lines().count().max(1);
+        let scroll = &viewer.markdown_scroll;
+        let shown = f32::from(scroll.bounds().size.height);
+        let max = f32::from(scroll.max_offset().y);
+        Some((lines, -f32::from(scroll.offset().y), shown, max))
+    }
+}
+
+impl minimap::Source for MarkdownMap {
+    fn position(&self, _: f32, cx: &App) -> Option<minimap::Position> {
+        let (lines, scrolled, shown, max) = self.page(cx)?;
+        let total = (shown + max).max(1.);
+        let visible = lines as f32 * shown / total;
+        Some(minimap::Position {
+            first: lines as f32 * scrolled / total,
+            visible,
+            max_first: (lines as f32 - visible).max(0.),
+        })
+    }
+
+    fn lines(&self, rows: std::ops::Range<usize>, cx: &App) -> Vec<String> {
+        let Some(source) = self
+            .0
+            .upgrade()
+            .and_then(|viewer| viewer.read(cx).markdown.clone())
+        else {
+            return Vec::new();
+        };
+        let lines = source.lines().skip(rows.start).take(rows.len());
+        lines
+            .map(|line| line.chars().take(minimap::COLUMNS).collect())
+            .collect()
+    }
+
+    fn scroll_to(&self, first: f32, cx: &mut App) {
+        let Some((lines, _, shown, max)) = self.page(cx) else {
+            return;
+        };
+        let y = (first / lines as f32 * (shown + max)).clamp(0., max);
+        if let Some(viewer) = self.0.upgrade() {
+            viewer.update(cx, |this, cx| {
+                this.markdown_scroll.set_offset(point(px(0.), px(-y)));
+                cx.notify();
+            });
+        }
+    }
+
+    fn wheel(&self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut App) {
+        if let Some(viewer) = self.0.upgrade() {
+            viewer.update(cx, |this, cx| {
+                let scroll = &this.markdown_scroll;
+                let (offset, max) = (scroll.offset(), scroll.max_offset());
+                let y = (offset.y + event.delta.pixel_delta(ROW).y).clamp(-max.y, px(0.));
+                scroll.set_offset(point(offset.x, y));
+                cx.notify();
+            });
+        }
+    }
+}
 
 impl minimap::Source for ViewerMap {
     fn position(&self, _: f32, cx: &App) -> Option<minimap::Position> {
@@ -482,6 +571,7 @@ impl Viewer {
         Self {
             size: file_size(&shown, &text),
             markdown: markdown(&shown, &text),
+            pdf: pdf_view(&shown, cx),
             shown,
             text: Arc::new(text),
             fit: true,
@@ -493,6 +583,11 @@ impl Viewer {
                 let viewer = ViewerMap(cx.entity().downgrade());
                 cx.new(|_| Minimap::new(viewer))
             },
+            markdown_minimap: {
+                let viewer = MarkdownMap(cx.entity().downgrade());
+                cx.new(|_| Minimap::new(viewer))
+            },
+            markdown_scroll: ScrollHandle::new(),
             view: ViewHandle::default(),
             focus,
             _poll: Self::poll(cx),
@@ -534,6 +629,7 @@ impl Viewer {
     ) {
         self.size = file_size(&self.shown, &text);
         self.markdown = markdown(&self.shown, &text);
+        self.pdf = pdf_view(&self.shown, cx);
         self.text = Arc::new(text);
         self.selection = (0, 0);
         self.stop_finding();
@@ -553,7 +649,11 @@ impl Viewer {
     }
 
     fn set_mode(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
-        if mode == self.shown.mode || mode == Mode::Picture && !self.shown.picture {
+        let shown = &self.shown;
+        if mode == shown.mode
+            || mode == Mode::Picture && !shown.picture
+            || mode == Mode::Pdf && !shown.pdf
+        {
             return;
         }
         self.shown.mode = mode;
@@ -759,7 +859,7 @@ impl Viewer {
 
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Find goes through rows, which these modes do not show.
-        if matches!(self.shown.mode, Mode::Picture | Mode::Markdown) {
+        if matches!(self.shown.mode, Mode::Picture | Mode::Markdown | Mode::Pdf) {
             return;
         }
         let Searches { query, history } = searches(cx).clone();
@@ -781,7 +881,7 @@ impl Viewer {
     /// F3 and F5 go on as the dialog said, with Shift the other way, from the selection.
     fn find_next(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
         // Find goes through rows, which these modes do not show.
-        if matches!(self.shown.mode, Mode::Picture | Mode::Markdown) {
+        if matches!(self.shown.mode, Mode::Picture | Mode::Markdown | Mode::Pdf) {
             return;
         }
         let query = searches(cx).query.clone();
@@ -887,6 +987,7 @@ impl Viewer {
             page,
             wrap,
             picture,
+            pdf,
             ..
         } = self.shown;
         let (fit, only_larger) = (self.fit, self.only_larger);
@@ -904,7 +1005,7 @@ impl Viewer {
                 .separator()
                 .menu("Close", Box::new(Close))
         };
-        let picture_shown = matches!(mode, Mode::Picture | Mode::Markdown);
+        let picture_shown = matches!(mode, Mode::Picture | Mode::Markdown | Mode::Pdf);
         let edit = move |menu: PopupMenu| {
             menu.menu_with_disabled("Copy as text", Box::new(CopyText), none)
                 .menu("Select all", Box::new(SelectAll))
@@ -913,7 +1014,7 @@ impl Viewer {
                 .menu_with_disabled("Find next", Box::new(FindNext), picture_shown)
         };
         let options = move |mut menu: PopupMenu| {
-            let modes: [(&str, Mode, Box<dyn Action>); 8] = [
+            let modes: [(&str, Mode, Box<dyn Action>); 9] = [
                 ("Text only", Mode::Text, Box::new(ShowText)),
                 (
                     "Binary (fixed line length)",
@@ -926,9 +1027,10 @@ impl Viewer {
                 ("Unicode (UTF-16)", Mode::Unicode, Box::new(ShowUnicode)),
                 ("UTF-8", Mode::Utf8, Box::new(ShowUtf8)),
                 ("Markdown", Mode::Markdown, Box::new(ShowMarkdown)),
+                ("PDF", Mode::Pdf, Box::new(ShowPdf)),
             ];
             for (label, this, action) in modes {
-                let off = this == Mode::Picture && !picture;
+                let off = this == Mode::Picture && !picture || this == Mode::Pdf && !pdf;
                 menu = menu.menu_with_check_and_disabled(label, mode == this, action, off);
             }
             menu = menu.separator();
@@ -992,7 +1094,7 @@ impl Viewer {
         // Text in UTF-8 or UTF-16 has no code page.
         let unpaged = matches!(
             mode,
-            Mode::Unicode | Mode::Utf8 | Mode::Html | Mode::Picture | Mode::Markdown
+            Mode::Unicode | Mode::Utf8 | Mode::Html | Mode::Picture | Mode::Markdown | Mode::Pdf
         );
         h_flex()
             .px_1()
@@ -1161,15 +1263,25 @@ impl Viewer {
             let limit = MARKDOWN_LIMIT >> 20;
             format!("*Over {limit} MB: 1 shows it as text.*").into()
         });
-        let view = TextView::markdown("viewer-markdown", source)
-            .scrollable(true)
-            .selectable(true);
-        v_flex()
+        // Scrolled here, not by the view, so the minimap can follow it.
+        let view = TextView::markdown("viewer-markdown", source).selectable(true);
+        div()
             .absolute()
             .inset_0()
-            .px_4()
-            .py_2()
-            .child(view)
+            .child(
+                div()
+                    .id("viewer-markdown-scroll")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.markdown_scroll)
+                    .child(v_flex().px_4().py_2().child(view)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(Scrollbar::new(&self.markdown_scroll)),
+            )
             .into_any_element()
     }
 
@@ -1206,11 +1318,20 @@ impl Render for Viewer {
         let (content, status) = match self.shown.mode {
             Mode::Picture => (self.render_picture(), String::new()),
             Mode::Markdown => (self.render_markdown(), String::new()),
+            Mode::Pdf => match &self.pdf {
+                Some(pdf) => (pdf.clone().into_any_element(), pdf.read(cx).status()),
+                None => (div().into_any_element(), String::new()),
+            },
             _ => self.render_rows(window, cx),
         };
         let menus = self.render_menus(cx);
-        let minimap =
-            !matches!(self.shown.mode, Mode::Picture | Mode::Markdown) && crate::minimap_shown(cx);
+        // The PDF view has its own, of page thumbnails.
+        let minimap = match self.shown.mode {
+            Mode::Picture | Mode::Pdf => None,
+            _ if !crate::minimap_shown(cx) => None,
+            Mode::Markdown => Some(self.markdown_minimap.clone()),
+            _ => Some(self.minimap.clone()),
+        };
         let theme = cx.theme();
         v_flex()
             .key_context(CONTEXT)
@@ -1235,6 +1356,7 @@ impl Render for Viewer {
             .on_action(
                 cx.listener(|this, _: &ShowMarkdown, w, cx| this.set_mode(Mode::Markdown, w, cx)),
             )
+            .on_action(cx.listener(|this, _: &ShowPdf, w, cx| this.set_mode(Mode::Pdf, w, cx)))
             .on_action(
                 cx.listener(|this, _: &FontAnsi, w, cx| this.set_font(Font::Ansi, None, w, cx)),
             )
@@ -1273,29 +1395,37 @@ impl Render for Viewer {
             }))
             .on_action(cx.listener(|_, _: &Configure, _, cx| crate::configure_viewer(cx)))
             .on_action(cx.listener(|_, _: &ToggleMinimap, _, cx| crate::toggle_minimap(cx)))
-            .on_action(
-                cx.listener(|this, _: &LineUp, _, cx| this.scroll(|v| v.scroll_rows(-1), cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &LineDown, _, cx| this.scroll(|v| v.scroll_rows(1), cx)),
-            )
-            .on_action(cx.listener(|this, _: &PageUp, _, cx| {
-                this.scroll(|v| v.scroll_rows(-(v.visible().max(2) as isize - 1)), cx)
+            .on_action(cx.listener(|this, _: &LineUp, _, cx| match &this.pdf {
+                Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_by(-PDF_LINE, cx)),
+                None => this.scroll(|v| v.scroll_rows(-1), cx),
             }))
-            .on_action(cx.listener(|this, _: &PageDown, _, cx| {
-                this.scroll(|v| v.scroll_rows(v.visible().max(2) as isize - 1), cx)
+            .on_action(cx.listener(|this, _: &LineDown, _, cx| match &this.pdf {
+                Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_by(PDF_LINE, cx)),
+                None => this.scroll(|v| v.scroll_rows(1), cx),
             }))
-            .on_action(cx.listener(|this, _: &Top, _, cx| this.scroll(|v| v.top = 0, cx)))
-            .on_action(
-                cx.listener(|this, _: &Bottom, _, cx| this.scroll(|v| v.top = v.max_top(), cx)),
-            )
+            .on_action(cx.listener(|this, _: &PageUp, _, cx| match &this.pdf {
+                Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_by(-pdf.page_height(), cx)),
+                None => this.scroll(|v| v.scroll_rows(-(v.visible().max(2) as isize - 1)), cx),
+            }))
+            .on_action(cx.listener(|this, _: &PageDown, _, cx| match &this.pdf {
+                Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_by(pdf.page_height(), cx)),
+                None => this.scroll(|v| v.scroll_rows(v.visible().max(2) as isize - 1), cx),
+            }))
+            .on_action(cx.listener(|this, _: &Top, _, cx| match &this.pdf {
+                Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_to_end(false, cx)),
+                None => this.scroll(|v| v.top = 0, cx),
+            }))
+            .on_action(cx.listener(|this, _: &Bottom, _, cx| match &this.pdf {
+                Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_to_end(true, cx)),
+                None => this.scroll(|v| v.top = v.max_top(), cx),
+            }))
             .child(menus)
             .child(
                 h_flex()
                     .flex_1()
                     .min_h_0()
                     .child(div().flex_1().min_w_0().h_full().relative().child(content))
-                    .when(minimap, |el| el.child(self.minimap.clone())),
+                    .children(minimap),
             )
             .child(status_bar(
                 self.shown.path(),
@@ -1305,6 +1435,11 @@ impl Render for Viewer {
                 cx,
             ))
     }
+}
+
+fn pdf_view(shown: &Shown, cx: &mut App) -> Option<Entity<PdfView>> {
+    let path = shown.path().to_owned();
+    (shown.mode == Mode::Pdf).then(|| cx.new(|cx| PdfView::new(path, cx)))
 }
 
 fn markdown(shown: &Shown, text: &TextFile) -> Option<SharedString> {

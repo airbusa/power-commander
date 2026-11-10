@@ -14,6 +14,8 @@ dirs = "6"
 encoding_rs = "0.8"
 # Finds the line ends of big files fast.
 memchr = "2"
+# PDF pages for the viewer, by the bundled PDFium (vendor/pdfium).
+pdfium-render = { version = "0.9", default-features = false, features = ["pdfium_8125", "thread_safe"] }
 # The viewer's Find; GPUI builds it already.
 regex = "1"
 # SFTP in pure Rust: ring, as GPUI has it, rather than a C crypto build.

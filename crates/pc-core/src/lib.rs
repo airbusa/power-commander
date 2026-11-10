@@ -6,6 +6,7 @@ pub mod html;
 pub mod icons;
 pub mod menu;
 pub mod ops;
+pub mod pdf;
 pub mod session;
 pub mod settings;
 pub mod sftp;

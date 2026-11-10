@@ -2,3 +2,5 @@
 # Fetched by vendor/7zip/fetch.sh or fetch.bat.
 /vendor/7zip/*/
 /vendor/7zip/*.tar.xz
+# Fetched by vendor/pdfium/fetch.sh or fetch.bat.
+/vendor/pdfium/*/
