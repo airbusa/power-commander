@@ -9,28 +9,12 @@ pub enum Outcome {
     Started,
 }
 
-/// Runs a command line typed in `dir`.
+/// Runs a command line typed in `dir`, on its own.
 pub fn run(line: &str, dir: &Path) -> io::Result<Outcome> {
-    let line = line.trim();
-    if let Some(target) = line
-        .strip_prefix("cd")
-        .filter(|rest| rest.is_empty() || rest.starts_with(' '))
-    {
-        return Ok(Outcome::ChangeDir(resolve(
-            target.trim().trim_matches('"'),
-            dir,
-        )));
+    if let Some(target) = change_dir(line, dir) {
+        return Ok(Outcome::ChangeDir(target));
     }
-    let mut command = if cfg!(windows) {
-        let mut command = Command::new("cmd");
-        command.args(["/C", line]);
-        command
-    } else {
-        let mut command = Command::new("sh");
-        command.args(["-c", line]);
-        command
-    };
-    let mut child = command
+    let mut child = shell(line)
         .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -39,6 +23,29 @@ pub fn run(line: &str, dir: &Path) -> io::Result<Outcome> {
     // Reaps it once it ends.
     std::thread::spawn(move || child.wait());
     Ok(Outcome::Started)
+}
+
+/// Where a `cd` line goes; none for other lines.
+pub fn change_dir(line: &str, dir: &Path) -> Option<PathBuf> {
+    let target = line
+        .trim()
+        .strip_prefix("cd")
+        .filter(|rest| rest.is_empty() || rest.starts_with(' '))?;
+    Some(resolve(target.trim().trim_matches('"'), dir))
+}
+
+/// The system's shell, to run `line`.
+pub fn shell(line: &str) -> Command {
+    let line = line.trim();
+    if cfg!(windows) {
+        let mut command = Command::new("cmd");
+        command.args(["/C", line]);
+        command
+    } else {
+        let mut command = Command::new("sh");
+        command.args(["-c", line]);
+        command
+    }
 }
 
 /// A typed path: `~`, relative to `dir`, `..` resolved.

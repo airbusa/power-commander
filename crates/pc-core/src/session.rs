@@ -38,12 +38,24 @@ pub struct TabState {
     pub url: Option<String>,
 }
 
+/// The window's tabs; the terminal's are its own.
+pub const WINDOW: &str = "session.json";
+pub const TERMINAL: &str = "session-terminal.json";
+
 impl Session {
     pub fn load() -> io::Result<Self> {
-        settings::read_json("session.json")
+        Self::load_from(WINDOW)
     }
 
     pub fn save(&self) -> io::Result<()> {
-        settings::write_json("session.json", self)
+        self.save_to(WINDOW)
+    }
+
+    pub fn load_from(file: &str) -> io::Result<Self> {
+        settings::read_json(file)
+    }
+
+    pub fn save_to(&self, file: &str) -> io::Result<()> {
+        settings::write_json(file, self)
     }
 }

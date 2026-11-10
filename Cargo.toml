@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/pc-core", "crates/pc-gui"]
+members = ["crates/pc-core", "crates/pc-gui", "crates/pc-tui"]
 # Patched third-party crates are not workspace members (no tests or lints run).
 exclude = ["vendor"]
 
