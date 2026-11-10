@@ -155,6 +155,8 @@ pub struct Panel {
     archive: Option<Archive>,
     entries: Vec<Entry>,
     cursor: usize,
+    /// Names of the marked entries: what F5, F6 and F8 work on.
+    marked: HashSet<OsString>,
     /// Moves from a locked tab open a new tab.
     locked: bool,
     /// The tab's own name.
@@ -176,6 +178,7 @@ impl Panel {
             archive: None,
             entries: Vec::new(),
             cursor: 0,
+            marked: HashSet::new(),
             locked: false,
             name: None,
             filter,
@@ -323,6 +326,7 @@ impl Panel {
     fn enter_archive(&mut self, path: PathBuf) -> io::Result<()> {
         // shortcut: lists on the UI thread; move to the background if big archives freeze it.
         let items = archive::list(&path)?;
+        self.marked.clear();
         self.path = path;
         self.archive = Some(Archive {
             items,
@@ -366,6 +370,50 @@ impl Panel {
         self.entries.get(self.cursor)
     }
 
+    pub fn is_marked(&self, entry: &Entry) -> bool {
+        self.marked.contains(&entry.name)
+    }
+
+    /// Insert and Space: the entry at the cursor, then the next one.
+    pub fn toggle_mark(&mut self) {
+        if let Some(entry) = self.current_entry().filter(|e| !e.is_parent()) {
+            let name = entry.name.clone();
+            if !self.marked.remove(&name) {
+                self.marked.insert(name);
+            }
+        }
+        self.move_cursor(1);
+    }
+
+    /// All but `..`, or none.
+    pub fn mark_all(&mut self, marked: bool) {
+        self.marked.clear();
+        if marked {
+            let names = self.entries.iter().filter(|e| !e.is_parent());
+            self.marked.extend(names.map(|e| e.name.clone()));
+        }
+    }
+
+    pub fn invert_marks(&mut self) {
+        let names = self.entries.iter().filter(|e| !e.is_parent());
+        let inverted = names.filter(|e| !self.marked.contains(&e.name));
+        self.marked = inverted.map(|e| e.name.clone()).collect();
+    }
+
+    /// What an operation works on, as in Total Commander: the marked
+    /// entries, or else the one at the cursor.
+    pub fn chosen(&self) -> Vec<&Entry> {
+        let marked: Vec<&Entry> = self.entries.iter().filter(|e| self.is_marked(e)).collect();
+        match marked.is_empty() {
+            true => self
+                .current_entry()
+                .filter(|e| !e.is_parent())
+                .into_iter()
+                .collect(),
+            false => marked,
+        }
+    }
+
     /// `name` may be a path; the cursor goes to its first folder here.
     pub fn new_folder(&mut self, name: &str) -> io::Result<()> {
         self.on_disk()?;
@@ -386,25 +434,28 @@ impl Panel {
         self.go_to(self.path.clone(), first)
     }
 
-    /// The entry under the cursor, to the trash or for good.
+    /// The chosen entries, to the trash or for good; stops at the first error.
     pub fn delete(&mut self, to_trash: bool) -> io::Result<()> {
         self.on_disk()?;
-        let Some(entry) = self.current_entry().filter(|e| !e.is_parent()) else {
-            return Ok(());
-        };
-        let path = self.path.join(&entry.name);
-        if to_trash {
-            trash::delete(&path).map_err(io::Error::other)?;
-        } else if fs::symlink_metadata(&path)?.is_dir() {
-            fs::remove_dir_all(&path)?;
-        } else {
-            // A link goes, never what it points to.
-            fs::remove_file(&path)?;
-        }
+        let paths: Vec<PathBuf> = self
+            .chosen()
+            .iter()
+            .map(|e| self.path.join(&e.name))
+            .collect();
+        let deleted = paths.iter().try_for_each(|path| {
+            if to_trash {
+                trash::delete(path).map_err(io::Error::other)
+            } else if fs::symlink_metadata(path)?.is_dir() {
+                fs::remove_dir_all(path)
+            } else {
+                // A link goes, never what it points to.
+                fs::remove_file(path)
+            }
+        });
         let cursor = self.cursor;
         self.go_to(self.path.clone(), None)?;
         self.set_cursor(cursor);
-        Ok(())
+        deleted
     }
 
     // shortcut: files change only on disk; add archive updates (7-Zip `a`, `d`) when needed.
@@ -430,22 +481,29 @@ impl Panel {
         }
     }
 
-    /// As Total Commander's status bar: selected / all.
+    /// As Total Commander's status bar: marked / all.
     pub fn status_text(&self) -> String {
         let listed = self.entries.iter().filter(|e| !e.is_parent());
         let (dirs, files): (Vec<&Entry>, Vec<&Entry>) = listed.partition(|e| e.is_dir);
-        let bytes: u64 = files.iter().map(|e| e.size).sum();
-        // shortcut: nothing is selected until marking exists.
+        let marked = |list: &[&Entry]| list.iter().filter(|e| self.is_marked(e)).count();
+        let bytes =
+            |list: &mut dyn Iterator<Item = &&Entry>| list.map(|e| e.size).sum::<u64>() / 1024;
         format!(
-            "0 k / {} k in 0 / {} file(s), 0 / {} dir(s)",
-            grouped(bytes / 1024),
+            "{} k / {} k in {} / {} file(s), {} / {} dir(s)",
+            grouped(bytes(&mut files.iter().filter(|e| self.is_marked(e)))),
+            grouped(bytes(&mut files.iter())),
+            marked(&files),
             files.len(),
+            marked(&dirs),
             dirs.len()
         )
     }
 
     fn go_to(&mut self, path: PathBuf, select: Option<OsString>) -> io::Result<()> {
         let entries = read_dir(&path)?;
+        if path != self.path || self.archive.is_some() {
+            self.marked.clear();
+        }
         self.archive = None;
         self.path = path;
         self.show(entries, select);
@@ -455,12 +513,19 @@ impl Panel {
     fn show_archive_dir(&mut self, dir: PathBuf, select: Option<OsString>) {
         let archive = self.archive.as_mut().expect("in an archive");
         let entries = archive::entries(&archive.items, &dir);
+        if archive.dir != dir {
+            self.marked.clear();
+        }
+        let archive = self.archive.as_mut().expect("in an archive");
         archive.dir = dir;
         self.show(entries, select);
     }
 
     fn show(&mut self, mut entries: Vec<Entry>, select: Option<OsString>) {
         entries.retain(|entry| self.filter.shows(entry));
+        // Marks stay on what is still there.
+        let names: HashSet<&OsString> = entries.iter().map(|e| &e.name).collect();
+        self.marked.retain(|name| names.contains(name));
         entries.sort_by(|a, b| self.sort.compare(a, b));
         self.cursor = select
             .and_then(|name| entries.iter().position(|e| e.name == name))
@@ -934,6 +999,45 @@ mod tests {
         panel.delete(false).unwrap();
         assert!(!root.join("new").exists());
         assert_eq!(names(&panel), ["..", "z-dir", "b.txt", "a.rs"]);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn marks_what_operations_work_on() {
+        let root = std::env::temp_dir().join(format!("pc-marks-test-{}", std::process::id()));
+        fs::create_dir_all(root.join("dir")).unwrap();
+        fs::write(root.join("a.txt"), vec![0; 2048]).unwrap();
+        fs::write(root.join("b.txt"), "b").unwrap();
+        let mut panel = Panel::new(&root, Filter::default()).unwrap();
+        let chosen = |panel: &Panel| -> Vec<String> {
+            panel.chosen().iter().map(|e| e.display_name()).collect()
+        };
+        assert!(chosen(&panel).is_empty(), "not ..");
+        panel.toggle_mark();
+        assert_eq!(panel.cursor(), 1, "not .. but the cursor moves on");
+        panel.set_cursor(2);
+        assert_eq!(chosen(&panel), ["a.txt"], "the cursor's, none marked");
+        panel.toggle_mark();
+        panel.toggle_mark();
+        assert_eq!(chosen(&panel), ["a.txt", "b.txt"]);
+        assert_eq!(
+            panel.status_text(),
+            "2 k / 2 k in 2 / 2 file(s), 0 / 1 dir(s)"
+        );
+        panel.reload().unwrap();
+        assert_eq!(chosen(&panel).len(), 2, "kept on reload");
+        panel.invert_marks();
+        assert_eq!(chosen(&panel), ["dir"]);
+        panel.mark_all(true);
+        assert_eq!(chosen(&panel).len(), 3);
+        panel.delete(false).unwrap();
+        assert_eq!(panel.entries().len(), 1, "only .. left");
+        fs::create_dir(root.join("again")).unwrap();
+        panel.reload().unwrap();
+        panel.mark_all(true);
+        panel.set_cursor(1);
+        panel.open().unwrap();
+        assert!(chosen(&panel).is_empty(), "a new folder, no marks");
         fs::remove_dir_all(&root).unwrap();
     }
 

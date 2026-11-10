@@ -458,27 +458,35 @@ impl Commander {
         );
     }
 
+    fn mark(&mut self, change: impl FnOnce(&mut Panel), cx: &mut Context<Self>) {
+        let side = &mut self.panels[self.active];
+        change(side.tabs.current_mut());
+        side.scroll_to_cursor();
+        cx.notify();
+    }
+
     fn confirm_delete(&mut self, to_trash: bool, window: &mut Window, cx: &mut Context<Self>) {
         let side = self.active;
         let panel = self.panels[side].tabs.current();
-        let Some(entry) = panel.current_entry().filter(|e| !e.is_parent()) else {
+        let chosen = panel.chosen();
+        if chosen.is_empty() {
             return;
-        };
+        }
         if panel.in_archive() {
             let text = "Deleting inside archives is not possible yet.";
             window.push_notification(Notification::warning(text), cx);
             return;
         }
-        let what = if entry.is_dir { "folder" } else { "file" };
-        let name = entry.display_name();
+        let what = match chosen.as_slice() {
+            [one] if one.is_dir => format!("the folder \"{}\"", one.display_name()),
+            [one] => format!("the file \"{}\"", one.display_name()),
+            many => format!("{} items", many.len()),
+        };
         let (title, text) = match to_trash {
-            true => (
-                "Delete",
-                format!("Move the {what} \"{name}\" to the trash?"),
-            ),
+            true => ("Delete", format!("Move {what} to the trash?")),
             false => (
                 "Delete permanently",
-                format!("Delete the {what} \"{name}\" permanently? This cannot be undone."),
+                format!("Delete {what} permanently? This cannot be undone."),
             ),
         };
         let commander = cx.entity().downgrade();
@@ -1004,6 +1012,7 @@ impl Commander {
         });
         let (name, extension) = entry.name_and_extension();
         let [ext, size, date, attr] = self.columns.map(px);
+        let marked = panel.is_marked(entry);
         h_flex()
             .id(("row", row))
             .w_full()
@@ -1016,6 +1025,7 @@ impl Commander {
                     .when_some(cursor.background, |el, bg| el.bg(bg))
                     .when_some(cursor.border, |el, border| el.border_color(border))
             })
+            .when(marked, |el| el.text_color(self.colors.marked))
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 this.active = ix;
                 this.panels[ix].tabs.current_mut().set_cursor(row);
@@ -1105,6 +1115,10 @@ impl Render for Commander {
                     Command::EditExternally => this.edit_externally(window, cx),
                     Command::Delete => this.confirm_delete(true, window, cx),
                     Command::DeletePermanently => this.confirm_delete(false, window, cx),
+                    Command::ToggleMark => this.mark(Panel::toggle_mark, cx),
+                    Command::SelectAll => this.mark(|panel| panel.mark_all(true), cx),
+                    Command::UnselectAll => this.mark(|panel| panel.mark_all(false), cx),
+                    Command::InvertSelection => this.mark(Panel::invert_marks, cx),
                     Command::SortByName => this.set_sort(this.active, Sort::by(SortKey::Name), cx),
                     Command::SortByExtension => {
                         this.set_sort(this.active, Sort::by(SortKey::Extension), cx)

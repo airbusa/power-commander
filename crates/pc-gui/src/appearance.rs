@@ -16,6 +16,8 @@ pub struct PanelColors {
     pub inactive: Cursor,
     /// High contrast only.
     pub active_title_border: Option<Hsla>,
+    /// Marked files' names.
+    pub marked: Hsla,
 }
 
 pub fn apply(theme: &Theme, cx: &mut App) -> PanelColors {
@@ -74,5 +76,6 @@ pub fn apply(theme: &Theme, cx: &mut App) -> PanelColors {
         active_title_border: high_contrast
             .then(|| color("contrastActiveBorder"))
             .flatten(),
+        marked: color("errorForeground").unwrap_or(foreground),
     }
 }

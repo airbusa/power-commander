@@ -82,6 +82,7 @@ pub enum Command {
     View,
     Edit,
     EditExternally,
+    ToggleMark,
     Copy,
     Move,
     NewFolder,
@@ -334,6 +335,9 @@ pub const BUTTON_BAR: &[Item] = &[
 
 /// Keys of commands on no menu or button.
 pub const OTHER_KEYS: &[Item] = &[
+    cmd("Mark", "insert", ToggleMark),
+    cmd("Mark", "space", ToggleMark),
+    cmd("Select All", "ctrl-a", SelectAll),
     cmd("Delete", "delete", Delete),
     cmd("Delete permanently", "shift-f8", DeletePermanently),
     cmd("Delete permanently", "shift-delete", DeletePermanently),

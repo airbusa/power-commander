@@ -277,6 +277,11 @@ const DEFAULTS: &[(&str, [D; 4])] = &[
         "foreground",
         [Rgb(0xCCCCCC), Rgb(0x616161), Rgb(0xFFFFFF), Rgb(0x292929)],
     ),
+    // Marked files, red as in Total Commander.
+    (
+        "errorForeground",
+        [Rgb(0xF48771), Rgb(0xA1260D), Rgb(0xF48771), Rgb(0xB5200D)],
+    ),
     (
         "descriptionForeground",
         [
