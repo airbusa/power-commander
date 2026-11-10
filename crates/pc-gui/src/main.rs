@@ -9,6 +9,7 @@ mod connections_dialog;
 mod editor;
 mod file_tools;
 mod find_dialog;
+mod mark_menu;
 mod menus;
 mod minimap;
 mod name_dialog;
@@ -217,6 +218,8 @@ struct Commander {
     _quit: Subscription,
     _command: Subscription,
     transfers: transfer::Transfers,
+    /// Save Selection's names, for Restore Selection.
+    saved_selection: Vec<std::ffi::OsString>,
 }
 
 struct Side {
@@ -330,6 +333,7 @@ impl Commander {
             _quit: quit,
             _command: command_entered,
             transfers: transfer::Transfers::default(),
+            saved_selection: Vec::new(),
         }
     }
 
@@ -1313,7 +1317,11 @@ impl Render for Commander {
                         let commander = cx.entity().downgrade();
                         settings_dialog::open(commander, this.settings.clone(), 0, window, cx)
                     }
-                    _ => cx.propagate(),
+                    other => {
+                        if !this.mark_command(*other, window, cx) {
+                            cx.propagate()
+                        }
+                    }
                 }),
             )
             .on_action(cx.listener(|this, SelectTab(tab): &SelectTab, _, cx| {

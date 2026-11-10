@@ -584,6 +584,128 @@ impl Panel {
         self.marked = inverted.map(|e| e.name.clone()).collect();
     }
 
+    /// Select or Unselect Group: entries matching `masks` (`*.txt *.md`);
+    /// a mask ending in `/` or `\\` is for folders.
+    pub fn mark_group(&mut self, masks: &str, mark: bool) {
+        let (mut files, mut dirs) = (Vec::new(), Vec::new());
+        for mask in masks.split([' ', ';']).filter(|m| !m.is_empty()) {
+            match mask.strip_suffix(['/', '\\']) {
+                Some(dir) => dirs.push(dir),
+                None => files.push(mask),
+            }
+        }
+        let (files, dirs) = (files.join(" "), dirs.join(" "));
+        for entry in self.entries.iter().filter(|e| !e.is_parent()) {
+            let masks = if entry.is_dir { &dirs } else { &files };
+            if associations::matches(masks, &entry.name.to_string_lossy()) {
+                match mark {
+                    true => self.marked.insert(entry.name.clone()),
+                    false => self.marked.remove(&entry.name),
+                };
+            }
+        }
+    }
+
+    /// Select All With Same Extension: the cursor's file's.
+    pub fn mark_same_extension(&mut self) {
+        let Some(cursor) = self.current_entry().filter(|e| !e.is_dir) else {
+            return;
+        };
+        let wanted = extension(cursor);
+        let same = self
+            .entries
+            .iter()
+            .filter(|e| !e.is_dir && extension(e) == wanted);
+        let names: Vec<OsString> = same.map(|e| e.name.clone()).collect();
+        self.marked.extend(names);
+    }
+
+    /// The marked entries' names, for Save Selection.
+    pub fn marked_names(&self) -> Vec<OsString> {
+        let marked = self.entries.iter().filter(|e| self.is_marked(e));
+        marked.map(|e| e.name.clone()).collect()
+    }
+
+    /// Restore Selection: those of `names` that are here.
+    pub fn mark_names(&mut self, names: &[OsString]) {
+        let here: HashSet<&OsString> = self.entries.iter().map(|e| &e.name).collect();
+        let found: Vec<OsString> = names.iter().filter(|n| here.contains(n)).cloned().collect();
+        self.marked.clear();
+        self.marked.extend(found);
+    }
+
+    /// The chosen entries for the clipboard, a line each: the name or the
+    /// path, and with details its size, date and attributes, tab apart.
+    pub fn names_text(&self, path: bool, details: bool) -> String {
+        let mut text = String::new();
+        for entry in self.chosen() {
+            match path {
+                true => text += &self.folder().join(&entry.name).to_string_lossy(),
+                false => text += &entry.name.to_string_lossy(),
+            }
+            if details {
+                let size = self.size_text(entry);
+                text += &format!("\t{size}\t{}\t{}", entry.modified_text(), entry.attributes);
+            }
+            text += if cfg!(windows) { "\r\n" } else { "\n" };
+        }
+        text
+    }
+
+    /// Compare Directories: marks here the files the other panel lacks or
+    /// has older, and there the other way round; with `hide_same`, files of
+    /// the same size and time leave both lists. Gives the files marked.
+    pub fn compare_with(&mut self, other: &mut Panel, hide_same: bool) -> usize {
+        let files =
+            |panel: &Panel| -> std::collections::HashMap<OsString, (u64, Option<SystemTime>)> {
+                let files = panel.entries.iter().filter(|e| !e.is_dir);
+                files
+                    .map(|e| (e.name.clone(), (e.size, e.modified)))
+                    .collect()
+            };
+        let (mine, theirs) = (files(self), files(other));
+        // Within two seconds is the same time: FAT keeps even seconds.
+        let newer = |a: Option<SystemTime>, b: Option<SystemTime>| match (a, b) {
+            (Some(a), Some(b)) => a.duration_since(b).is_ok_and(|d| d.as_secs() >= 2),
+            _ => false,
+        };
+        let same = |a: &(u64, Option<SystemTime>), b: &(u64, Option<SystemTime>)| {
+            a.0 == b.0 && !newer(a.1, b.1) && !newer(b.1, a.1)
+        };
+        let pick =
+            |own: &std::collections::HashMap<OsString, (u64, Option<SystemTime>)>,
+             other: &std::collections::HashMap<OsString, (u64, Option<SystemTime>)>| {
+                own.iter()
+                    .filter(|(name, meta)| match other.get(*name) {
+                        None => true,
+                        Some(theirs) => {
+                            newer(meta.1, theirs.1)
+                                || (!same(meta, theirs) && !newer(theirs.1, meta.1))
+                        }
+                    })
+                    .map(|(name, _)| name.clone())
+                    .collect::<Vec<_>>()
+            };
+        let (here, there) = (pick(&mine, &theirs), pick(&theirs, &mine));
+        let count = here.len() + there.len();
+        self.marked = here.into_iter().collect();
+        other.marked = there.into_iter().collect();
+        if hide_same {
+            let hidden: HashSet<OsString> = mine
+                .iter()
+                .filter(|(name, meta)| theirs.get(*name).is_some_and(|t| same(meta, t)))
+                .map(|(name, _)| name.clone())
+                .collect();
+            for panel in [&mut *self, &mut *other] {
+                panel
+                    .entries
+                    .retain(|e| e.is_dir || !hidden.contains(&e.name));
+                panel.cursor = panel.cursor.min(panel.entries.len().saturating_sub(1));
+            }
+        }
+        count
+    }
+
     /// What an operation works on, as in Total Commander: the marked
     /// entries, or else the one at the cursor.
     pub fn chosen(&self) -> Vec<&Entry> {
@@ -947,6 +1069,25 @@ impl Tabs {
     }
 }
 
+/// Save Selection To File: a name a line.
+pub fn save_selection(path: &Path, names: &[OsString]) -> io::Result<()> {
+    let lines: Vec<String> = names
+        .iter()
+        .map(|n| n.to_string_lossy().into_owned())
+        .collect();
+    fs::write(path, lines.join("\n") + "\n")
+}
+
+/// Load Selection From File: the names it lists.
+pub fn load_selection(path: &Path) -> io::Result<Vec<OsString>> {
+    let text = fs::read_to_string(path)?;
+    let names = text.lines().map(|line| line.trim_end_matches('\r'));
+    Ok(names
+        .filter(|line| !line.is_empty())
+        .map(OsString::from)
+        .collect())
+}
+
 /// Unsorted, `..` first but in the root.
 fn read_dir(path: &Path) -> io::Result<Vec<Entry>> {
     let mut entries: Vec<Entry> = fs::read_dir(path)?
@@ -1086,6 +1227,75 @@ mod tests {
         panel.move_cursor(-1);
         assert!(panel.open().is_err());
         assert_eq!(panel.path(), root, "stays where it was");
+    }
+
+    #[test]
+    fn marks_groups_and_compares_folders() {
+        let root = std::env::temp_dir().join(format!("pc-mark-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for side in ["l", "r"] {
+            fs::create_dir_all(root.join(side).join("docs")).unwrap();
+        }
+        let old = SystemTime::now() - std::time::Duration::from_secs(3600);
+        let write = |path: &str, text: &str, time: SystemTime| {
+            fs::write(root.join(path), text).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(root.join(path))
+                .unwrap()
+                .set_modified(time)
+                .unwrap();
+        };
+        write("l/a.txt", "same", old);
+        write("r/a.txt", "same", old);
+        write("l/b.txt", "newer", SystemTime::now());
+        write("r/b.txt", "older", old);
+        write("l/c.md", "only left", old);
+        write("r/d.md", "only right", old);
+        let mut left = Panel::new(root.join("l"), Filter::default()).unwrap();
+        let mut right = Panel::new(root.join("r"), Filter::default()).unwrap();
+        left.mark_group("*.TXT docs/", true);
+        let names = |panel: &Panel| {
+            let mut names: Vec<String> = panel
+                .marked_names()
+                .iter()
+                .map(|n| n.to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(names(&left), ["a.txt", "b.txt", "docs"]);
+        left.mark_group("a.*", false);
+        assert_eq!(names(&left), ["b.txt", "docs"]);
+        let saved = left.marked_names();
+        left.mark_all(false);
+        left.mark_names(&saved);
+        assert_eq!(names(&left), ["b.txt", "docs"]);
+        save_selection(&root.join("sel.txt"), &left.marked_names()).unwrap();
+        assert_eq!(load_selection(&root.join("sel.txt")).unwrap().len(), 2);
+        let line = if cfg!(windows) { "\r\n" } else { "\n" };
+        assert_eq!(
+            left.names_text(false, false),
+            format!("docs{line}b.txt{line}"),
+            "folders first"
+        );
+        assert_eq!(left.compare_with(&mut right, true), 3);
+        assert_eq!(names(&left), ["b.txt", "c.md"]);
+        assert_eq!(names(&right), ["d.md"]);
+        assert!(
+            !left.entries().iter().any(|e| e.name == "a.txt"),
+            "the same file is hidden"
+        );
+        left.set_cursor(
+            left.entries()
+                .iter()
+                .position(|e| e.name == "c.md")
+                .unwrap(),
+        );
+        left.mark_all(false);
+        left.mark_same_extension();
+        assert_eq!(names(&left), ["c.md"]);
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
