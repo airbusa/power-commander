@@ -13,12 +13,11 @@ use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarHandle};
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::*;
-use pc_core::settings::{StartFont, StartMode, ViewerSettings};
+use pc_core::codepage;
+use pc_core::settings::ViewerSettings;
 use pc_core::viewer::{
-    COPY_LIMIT, Decoding, Detected, LONG_ROW, Layout, Query, Row, Searches, TextFile, detect,
-    search_url,
+    COPY_LIMIT, Font, MARKDOWN_LIMIT, Mode, Query, Row, Searches, Shown, TextFile, search_url,
 };
-use pc_core::{codepage, html};
 
 use crate::find_dialog;
 use crate::minimap::{self, Minimap};
@@ -83,12 +82,8 @@ const FIRST_DRAWN: usize = 60;
 const VIRTUAL_HEIGHT: f32 = 1_000_000.;
 /// Arrow keys move PDF pages by this much.
 const PDF_LINE: Pixels = px(48.);
-/// Larger Markdown is shown as text: the renderer lays out all of it.
-const MARKDOWN_LIMIT: u64 = 4 << 20;
 /// DOS text draws boxes and blocks, which join only in rows as high as their characters.
 const DOS_PAGES: [u16; 4] = [437, 850, 852, 866];
-/// Larger HTML is shown as plain text.
-const HTML_LIMIT: u64 = 64 << 20;
 
 pub fn bind_keys(cx: &mut App) {
     let keys = Some(CONTEXT);
@@ -136,28 +131,6 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Mode {
-    Text,
-    Binary,
-    Hex,
-    Picture,
-    Html,
-    Unicode,
-    Utf8,
-    /// Not Lister's: rendered, as the UI kit does.
-    Markdown,
-    /// Not Lister's: pages rendered by PDFium.
-    Pdf,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum Font {
-    Ansi,
-    Ascii,
-    Variable,
-}
-
 /// Shows `files[at]`; Next and Previous go through `files`. `bounds` are
 /// the main window's, which the viewer covers.
 pub fn open(
@@ -167,23 +140,7 @@ pub fn open(
     bounds: WindowBounds,
     cx: &mut App,
 ) -> io::Result<()> {
-    let font = match settings.font {
-        StartFont::Ascii => Font::Ascii,
-        StartFont::Variable => Font::Variable,
-        StartFont::Ansi | StartFont::Auto => Font::Ansi,
-    };
-    let mut shown = Shown {
-        files,
-        at,
-        wrap: settings.wrap,
-        settings,
-        mode: Mode::Text,
-        font,
-        page: None,
-        big_endian: false,
-        picture: false,
-        pdf: false,
-    };
+    let mut shown = Shown::new(files, at, settings, Img::extensions());
     let text = shown.start()?;
     let options = WindowOptions {
         window_bounds: Some(bounds),
@@ -209,128 +166,6 @@ pub fn open(
 
 fn title(path: &Path) -> String {
     format!("{} — Power Commander", path.display())
-}
-
-/// Which file, and how it is shown.
-struct Shown {
-    files: Vec<PathBuf>,
-    at: usize,
-    settings: ViewerSettings,
-    mode: Mode,
-    font: Font,
-    /// Chosen in the Encoding menu.
-    page: Option<u16>,
-    wrap: bool,
-    /// UTF-16's byte order, as its BOM says.
-    big_endian: bool,
-    /// GPUI can show it as a picture.
-    picture: bool,
-    /// A PDF, and PDFium is there.
-    pdf: bool,
-}
-
-impl Shown {
-    fn path(&self) -> &Path {
-        &self.files[self.at]
-    }
-
-    /// The mode the settings start with; Autodetect as Lister's.
-    fn start(&mut self) -> io::Result<TextFile> {
-        let path = self.path();
-        let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
-        let extension = extension.as_deref().unwrap_or_default();
-        let picture = Img::extensions().contains(&extension);
-        let html = matches!(extension, "htm" | "html" | "xhtml");
-        let markdown = matches!(extension, "md" | "markdown")
-            && std::fs::metadata(path)?.len() <= MARKDOWN_LIMIT;
-        let detected = detect(path)?;
-        self.picture = picture;
-        self.pdf = extension == "pdf" && pc_core::pdf::available();
-        self.big_endian = detected == Detected::Utf16 { big_endian: true };
-        self.page = None;
-        self.mode = match self.settings.start {
-            StartMode::Text => Mode::Text,
-            StartMode::Binary => Mode::Binary,
-            StartMode::Hex => Mode::Hex,
-            StartMode::Auto if picture => Mode::Picture,
-            StartMode::Auto if self.pdf => Mode::Pdf,
-            StartMode::Auto if html => Mode::Html,
-            StartMode::Auto if markdown => Mode::Markdown,
-            StartMode::Auto => match detected {
-                Detected::Plain => Mode::Text,
-                Detected::Utf8 => Mode::Utf8,
-                Detected::Utf16 { .. } => Mode::Unicode,
-            },
-        };
-        // NFO art is always in the IBM PC's code page.
-        if matches!(extension, "nfo" | "diz") && self.mode == Mode::Text {
-            self.page = Some(437);
-        }
-        self.text()
-    }
-
-    /// The chosen code page, else the font's.
-    fn page(&self) -> u16 {
-        let (ansi, dos) = codepage::system();
-        self.page.unwrap_or(match self.font {
-            Font::Ascii => dos,
-            Font::Ansi | Font::Variable => ansi,
-        })
-    }
-
-    fn text(&self) -> io::Result<TextFile> {
-        let path = self.path();
-        let page = self.page();
-        let width = match self.wrap {
-            true => self.settings.text_width.max(1),
-            false => LONG_ROW,
-        };
-        let lines = Layout::Lines { width };
-        let plain = match self.page {
-            Some(page) => Decoding::Page(page),
-            None => Decoding::Auto(page),
-        };
-        Ok(match self.mode {
-            Mode::Binary => {
-                let width = self.settings.binary_width.max(1);
-                TextFile::open(path, Layout::Fixed { width }, Decoding::Page(page))?
-            }
-            Mode::Hex => TextFile::open(path, Layout::Hex, Decoding::Page(page))?,
-            Mode::Html if std::fs::metadata(path)?.len() <= HTML_LIMIT => {
-                let source = match String::from_utf8(std::fs::read(path)?) {
-                    Ok(source) => source,
-                    Err(err) => codepage::decode(page, err.as_bytes()),
-                };
-                TextFile::text(html::to_text(&source), lines)
-            }
-            Mode::Unicode => {
-                let big_endian = self.big_endian;
-                TextFile::open(path, lines, Decoding::Utf16 { big_endian })?
-            }
-            Mode::Utf8 | Mode::Markdown => TextFile::open(path, lines, Decoding::Utf8)?,
-            // A PDF's text is what its pages say, not its bytes.
-            Mode::Text if self.pdf => TextFile::text(pc_core::pdf::text(path)?, lines),
-            Mode::Text | Mode::Picture | Mode::Html | Mode::Pdf => {
-                TextFile::open(path, lines, plain)?
-            }
-        })
-    }
-
-    /// For the status bar.
-    fn describe(&self) -> String {
-        let page = self.page();
-        match self.mode {
-            Mode::Text => format!("Text · {page}"),
-            Mode::Binary => format!("Binary · {page}"),
-            Mode::Hex => format!("Hex · {page}"),
-            Mode::Picture => "Image".into(),
-            Mode::Html => "HTML text".into(),
-            Mode::Unicode => "UTF-16".into(),
-            Mode::Utf8 => "UTF-8".into(),
-            Mode::Markdown => "Markdown".into(),
-            Mode::Pdf => "PDF".into(),
-        }
-    }
 }
 
 /// The searches, shared by the viewers.
@@ -649,15 +484,9 @@ impl Viewer {
     }
 
     fn set_mode(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
-        let shown = &self.shown;
-        if mode == shown.mode
-            || mode == Mode::Picture && !shown.picture
-            || mode == Mode::Pdf && !shown.pdf
-        {
-            return;
+        if self.shown.set_mode(mode) {
+            self.show(false, window, cx);
         }
-        self.shown.mode = mode;
-        self.show(false, window, cx);
     }
 
     /// ANSI and ASCII show text in their code page, as Lister does.
@@ -668,11 +497,7 @@ impl Viewer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.shown.font = font;
-        self.shown.page = page;
-        if !matches!(self.shown.mode, Mode::Binary | Mode::Hex) {
-            self.shown.mode = Mode::Text;
-        }
+        self.shown.set_font(font, page);
         self.show(true, window, cx);
     }
 
@@ -683,12 +508,9 @@ impl Viewer {
 
     /// The panel's next or previous file.
     fn step(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let at = self.shown.at.checked_add_signed(by);
-        let Some(at) = at.filter(|&at| at < self.shown.files.len()) else {
-            return;
-        };
-        self.shown.at = at;
-        self.restart(window, cx);
+        if self.shown.step(by) {
+            self.restart(window, cx);
+        }
     }
 
     fn restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -858,8 +680,7 @@ impl Viewer {
     }
 
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Find goes through rows, which these modes do not show.
-        if matches!(self.shown.mode, Mode::Picture | Mode::Markdown | Mode::Pdf) {
+        if !self.shown.has_rows() {
             return;
         }
         let Searches { query, history } = searches(cx).clone();
@@ -880,8 +701,7 @@ impl Viewer {
 
     /// F3 and F5 go on as the dialog said, with Shift the other way, from the selection.
     fn find_next(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
-        // Find goes through rows, which these modes do not show.
-        if matches!(self.shown.mode, Mode::Picture | Mode::Markdown | Mode::Pdf) {
+        if !self.shown.has_rows() {
             return;
         }
         let query = searches(cx).query.clone();

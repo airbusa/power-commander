@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{codepage, settings};
+use crate::settings::{StartFont, StartMode, ViewerSettings};
+use crate::{codepage, html, settings};
 
 /// Unwrapped lines are cut into rows of this many characters.
 pub const LONG_ROW: usize = 1024;
@@ -812,6 +813,220 @@ fn read_at(data: &mut Data, pos: u64, buf: &mut [u8]) -> io::Result<usize> {
         }
     }
     Ok(filled)
+}
+
+/// Larger Markdown is shown as text: the renderer lays out all of it.
+pub const MARKDOWN_LIMIT: u64 = 4 << 20;
+/// Larger HTML is shown as plain text.
+const HTML_LIMIT: u64 = 64 << 20;
+
+/// Lister's views, by the keys 1 to 9.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Text,
+    Binary,
+    Hex,
+    Picture,
+    Html,
+    Unicode,
+    Utf8,
+    /// Not Lister's: rendered, as the UI kit does.
+    Markdown,
+    /// Not Lister's: pages rendered by PDFium.
+    Pdf,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Font {
+    Ansi,
+    Ascii,
+    Variable,
+}
+
+/// Which file a viewer shows, and how.
+pub struct Shown {
+    pub files: Vec<std::path::PathBuf>,
+    pub at: usize,
+    pub settings: ViewerSettings,
+    pub mode: Mode,
+    pub font: Font,
+    /// Chosen in the Encoding menu.
+    pub page: Option<u16>,
+    pub wrap: bool,
+    /// UTF-16's byte order, as its BOM says.
+    pub big_endian: bool,
+    /// The viewer can show it as a picture.
+    pub picture: bool,
+    /// A PDF, and PDFium is there.
+    pub pdf: bool,
+    /// Extensions of the pictures the viewer can show.
+    pictures: &'static [&'static str],
+}
+
+impl Shown {
+    pub fn new(
+        files: Vec<std::path::PathBuf>,
+        at: usize,
+        settings: ViewerSettings,
+        pictures: &'static [&'static str],
+    ) -> Self {
+        let font = match settings.font {
+            StartFont::Ascii => Font::Ascii,
+            StartFont::Variable => Font::Variable,
+            StartFont::Ansi | StartFont::Auto => Font::Ansi,
+        };
+        Self {
+            files,
+            at,
+            wrap: settings.wrap,
+            settings,
+            mode: Mode::Text,
+            font,
+            page: None,
+            big_endian: false,
+            picture: false,
+            pdf: false,
+            pictures,
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.files[self.at]
+    }
+
+    /// The mode the settings start with; Autodetect as Lister's.
+    pub fn start(&mut self) -> io::Result<TextFile> {
+        let path = self.path();
+        let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+        let extension = extension.as_deref().unwrap_or_default();
+        let picture = self.pictures.contains(&extension);
+        let html = matches!(extension, "htm" | "html" | "xhtml");
+        let markdown = matches!(extension, "md" | "markdown")
+            && std::fs::metadata(path)?.len() <= MARKDOWN_LIMIT;
+        let detected = detect(path)?;
+        self.picture = picture;
+        self.pdf = extension == "pdf" && crate::pdf::available();
+        self.big_endian = detected == Detected::Utf16 { big_endian: true };
+        self.page = None;
+        self.mode = match self.settings.start {
+            StartMode::Text => Mode::Text,
+            StartMode::Binary => Mode::Binary,
+            StartMode::Hex => Mode::Hex,
+            StartMode::Auto if picture => Mode::Picture,
+            StartMode::Auto if self.pdf => Mode::Pdf,
+            StartMode::Auto if html => Mode::Html,
+            StartMode::Auto if markdown => Mode::Markdown,
+            StartMode::Auto => match detected {
+                Detected::Plain => Mode::Text,
+                Detected::Utf8 => Mode::Utf8,
+                Detected::Utf16 { .. } => Mode::Unicode,
+            },
+        };
+        // NFO art is always in the IBM PC's code page.
+        if matches!(extension, "nfo" | "diz") && self.mode == Mode::Text {
+            self.page = Some(437);
+        }
+        self.text()
+    }
+
+    /// The chosen code page, else the font's.
+    pub fn page(&self) -> u16 {
+        let (ansi, dos) = codepage::system();
+        self.page.unwrap_or(match self.font {
+            Font::Ascii => dos,
+            Font::Ansi | Font::Variable => ansi,
+        })
+    }
+
+    pub fn text(&self) -> io::Result<TextFile> {
+        let path = self.path();
+        let page = self.page();
+        let width = match self.wrap {
+            true => self.settings.text_width.max(1),
+            false => LONG_ROW,
+        };
+        let lines = Layout::Lines { width };
+        let plain = match self.page {
+            Some(page) => Decoding::Page(page),
+            None => Decoding::Auto(page),
+        };
+        Ok(match self.mode {
+            Mode::Binary => {
+                let width = self.settings.binary_width.max(1);
+                TextFile::open(path, Layout::Fixed { width }, Decoding::Page(page))?
+            }
+            Mode::Hex => TextFile::open(path, Layout::Hex, Decoding::Page(page))?,
+            Mode::Html if std::fs::metadata(path)?.len() <= HTML_LIMIT => {
+                let source = match String::from_utf8(std::fs::read(path)?) {
+                    Ok(source) => source,
+                    Err(err) => codepage::decode(page, err.as_bytes()),
+                };
+                TextFile::text(html::to_text(&source), lines)
+            }
+            Mode::Unicode => {
+                let big_endian = self.big_endian;
+                TextFile::open(path, lines, Decoding::Utf16 { big_endian })?
+            }
+            Mode::Utf8 | Mode::Markdown => TextFile::open(path, lines, Decoding::Utf8)?,
+            // A PDF's text is what its pages say, not its bytes.
+            Mode::Text if self.pdf => TextFile::text(crate::pdf::text(path)?, lines),
+            Mode::Text | Mode::Picture | Mode::Html | Mode::Pdf => {
+                TextFile::open(path, lines, plain)?
+            }
+        })
+    }
+
+    /// For the status bar.
+    pub fn describe(&self) -> String {
+        let page = self.page();
+        match self.mode {
+            Mode::Text => format!("Text · {page}"),
+            Mode::Binary => format!("Binary · {page}"),
+            Mode::Hex => format!("Hex · {page}"),
+            Mode::Picture => "Image".into(),
+            Mode::Html => "HTML text".into(),
+            Mode::Unicode => "UTF-16".into(),
+            Mode::Utf8 => "UTF-8".into(),
+            Mode::Markdown => "Markdown".into(),
+            Mode::Pdf => "PDF".into(),
+        }
+    }
+
+    /// False when it is the mode already, or one this file cannot have.
+    pub fn set_mode(&mut self, mode: Mode) -> bool {
+        if mode == self.mode
+            || mode == Mode::Picture && !self.picture
+            || mode == Mode::Pdf && !self.pdf
+        {
+            return false;
+        }
+        self.mode = mode;
+        true
+    }
+
+    /// ANSI and ASCII show text in their code page, as Lister does.
+    pub fn set_font(&mut self, font: Font, page: Option<u16>) {
+        self.font = font;
+        self.page = page;
+        if !matches!(self.mode, Mode::Binary | Mode::Hex) {
+            self.mode = Mode::Text;
+        }
+    }
+
+    /// The next (or with -1 the previous) of `files`; false at either end.
+    pub fn step(&mut self, by: isize) -> bool {
+        let at = self.at.checked_add_signed(by);
+        let Some(at) = at.filter(|&at| at < self.files.len()) else {
+            return false;
+        };
+        self.at = at;
+        true
+    }
+
+    /// Rows, not pictures or pages, which Find goes through.
+    pub fn has_rows(&self) -> bool {
+        !matches!(self.mode, Mode::Picture | Mode::Markdown | Mode::Pdf)
+    }
 }
 
 #[cfg(test)]

@@ -319,6 +319,8 @@ impl App {
             Command::DuplicateTab => self.sides[side].tabs.duplicate(),
             Command::LockTab => self.sides[side].tabs.toggle_lock(),
             Command::CloseTab => self.sides[side].tabs.close(),
+            Command::NextTab => self.sides[side].tabs.step(1),
+            Command::PreviousTab => self.sides[side].tabs.step(-1),
             Command::CloseAllTabs => self.sides[side].tabs.close_all(),
             Command::CloseDuplicateTabs => self.sides[side].tabs.close_duplicates(),
             Command::View | Command::Edit | Command::EditExternally => {

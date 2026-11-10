@@ -8,6 +8,7 @@ pub mod html;
 pub mod icons;
 pub mod menu;
 pub mod ops;
+pub mod origin;
 pub mod pdf;
 pub mod remote;
 pub mod secrets;
@@ -467,6 +468,31 @@ impl Panel {
         Some((self.remote.clone()?, origin))
     }
 
+    /// The file at the cursor, for viewers and editors.
+    pub fn origin(&self) -> Option<origin::Origin> {
+        let entry = self.current_entry().filter(|entry| !entry.is_dir)?;
+        if self.archive.is_some() {
+            let member = self.archive_member()?;
+            return Some(origin::Origin::Archive(member, self.archive_origin()));
+        }
+        let path = self.folder().join(&entry.name);
+        Some(match self.remote {
+            Some(_) => origin::Origin::Server(self.fs(), path),
+            None => origin::Origin::Local(path),
+        })
+    }
+
+    /// The folder's files, and which is at the cursor: the viewer's Next and Previous.
+    pub fn files_around(&self) -> (Vec<PathBuf>, usize) {
+        let files = self.entries.iter().filter(|entry| !entry.is_dir);
+        let files: Vec<PathBuf> = files.map(|entry| self.folder().join(&entry.name)).collect();
+        let at = self
+            .current_entry()
+            .map(|entry| self.folder().join(&entry.name));
+        let at = files.iter().position(|file| Some(file) == at.as_ref());
+        (files, at.unwrap_or(0))
+    }
+
     /// Inside an archive: the chosen entries taken out with their folders
     /// into a temporary folder, for F5 to copy from there. Blocks.
     pub fn extract_chosen(&self) -> io::Result<Vec<PathBuf>> {
@@ -755,6 +781,12 @@ impl Tabs {
         }
     }
 
+    /// The next (or with -1 the previous) tab, round from the end.
+    pub fn step(&mut self, by: isize) {
+        let count = self.panels.len() as isize;
+        self.active = (self.active as isize + by).rem_euclid(count) as usize;
+    }
+
     /// Moves in the current tab; from a locked tab the move opens a new tab.
     pub fn navigate(&mut self, go: impl FnOnce(&mut Panel) -> io::Result<()>) -> io::Result<()> {
         if !self.current().locked {
@@ -1029,6 +1061,10 @@ mod tests {
         assert_eq!(tabs.active(), 1);
         tabs.select(0);
         assert_eq!(tabs.current().path(), Path::new("/"));
+        tabs.step(-1);
+        assert_eq!(tabs.active(), 1, "round from the first to the last");
+        tabs.step(1);
+        assert_eq!(tabs.active(), 0);
     }
 
     #[test]

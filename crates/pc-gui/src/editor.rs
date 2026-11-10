@@ -1,6 +1,5 @@
 use std::io;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, RopeExt};
@@ -11,21 +10,8 @@ use gpui_kit::*;
 
 use crate::minimap::{self, Minimap};
 use pc_core::edit;
-use pc_core::vfs::{self, Fs};
 
-/// After each save, in the background: the copy goes back where it came
-/// from, a server or an archive, and says so.
-pub type Upload = Arc<dyn Fn(&Path) -> io::Result<String> + Send + Sync>;
-
-/// A server's file.
-pub fn upload_to(fs: Arc<dyn Fs>, path: PathBuf) -> Upload {
-    Arc::new(move |local| {
-        let named =
-            |err: io::Error| io::Error::new(err.kind(), format!("{}: {err}", path.display()));
-        vfs::upload(local, &*fs, &path).map_err(named)?;
-        Ok(format!("Uploaded {}", path.display()))
-    })
-}
+pub use pc_core::origin::Upload;
 
 actions!(editor, [Save]);
 

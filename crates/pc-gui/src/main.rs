@@ -17,7 +17,6 @@ mod viewer;
 use std::borrow::Cow;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -34,7 +33,7 @@ use pc_core::remote::Address;
 use pc_core::session::Session;
 use pc_core::settings::{self, Settings};
 use pc_core::theme::{self, Theme};
-use pc_core::{Panel, Sort, SortKey, Tabs, archive, edit, icons, ops, vfs};
+use pc_core::{Panel, Sort, SortKey, Tabs, archive, edit, icons, ops};
 
 use crate::appearance::PanelColors;
 use crate::menus::{ReopenTab, Run, SelectTab, SetTheme};
@@ -371,125 +370,38 @@ impl Commander {
     }
 
     /// F3 views, F4 edits the file under the cursor.
-    fn open_file(&mut self, edit: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// F3, F4 and Ctrl+Shift+F4. A server's or an archive's file is copied
+    /// out in the background; what the editors save goes back.
+    fn open_file(&mut self, how: remote::Open, window: &mut Window, cx: &mut Context<Self>) {
         let panel = self.panels[self.active].tabs.current();
-        let Some(entry) = panel.current_entry().filter(|e| !e.is_dir) else {
+        let Some(origin) = panel.origin() else {
             return;
         };
-        if panel.in_archive() {
-            return match edit {
-                true => self.edit_in_archive(remote::Open::Edit, window, cx),
-                false => self.view_in_archive(window, cx),
-            };
-        }
-        if panel.remote().is_some() {
-            let how = if edit {
-                remote::Open::Edit
-            } else {
-                remote::Open::View
-            };
-            return self.open_remote(how, window, cx);
-        }
-        let path = panel.folder().join(&entry.name);
-        let opened = match edit {
-            true => editor::open(path.clone(), self.settings.editor.limit_mb, None, cx),
-            false => {
-                let files = panel.entries().iter().filter(|e| !e.is_dir);
-                let files: Vec<_> = files.map(|e| panel.folder().join(&e.name)).collect();
-                let at = files.iter().position(|file| *file == path).unwrap_or(0);
-                let bounds = window.window_bounds();
-                viewer::open(files, at, self.settings.viewer.clone(), bounds, cx)
-            }
-        };
-        if let Err(err) = opened {
-            let text = format!("{}: {err}", path.display());
-            window.push_notification(Notification::error(text), cx);
-        }
-    }
-
-    /// The cursor's file in the external editor of Settings' Edit/View page.
-    fn edit_externally(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let panel = self.panels[self.active].tabs.current();
-        let Some(entry) = panel.current_entry().filter(|e| !e.is_dir) else {
-            return;
-        };
-        if panel.in_archive() {
-            return self.edit_in_archive(remote::Open::External, window, cx);
-        }
-        if panel.remote().is_some() {
-            return self.open_remote(remote::Open::External, window, cx);
-        }
-        let path = panel.folder().join(&entry.name);
-        if let Err(err) = edit::edit_externally(&self.settings.editor.external, &path) {
-            let text = format!("{}: {err}", path.display());
-            window.push_notification(Notification::error(text), cx);
-        }
-    }
-
-    /// Takes the file out into a temporary folder, in the background, and views it.
-    fn view_in_archive(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(member) = self.panels[self.active].tabs.current().archive_member() else {
-            return;
-        };
-        let (settings, bounds) = (self.settings.viewer.clone(), window.window_bounds());
+        let around = (how == remote::Open::View && origin.is_local()).then(|| panel.files_around());
+        let (settings, bounds, name) =
+            (self.settings.clone(), window.window_bounds(), origin.name());
         cx.spawn_in(window, async move |_, cx| {
-            let name = member.listed.clone();
-            let extract = async move { member.extract() };
-            let extracted = cx.background_executor().spawn(extract).await;
-            let _ = cx.update(|window, cx| {
-                let viewed =
-                    extracted.and_then(|path| viewer::open(vec![path], 0, settings, bounds, cx));
-                if let Err(err) = viewed {
-                    let text = format!("{name}: {err}");
-                    window.push_notification(Notification::error(text), cx);
+            let prepare = async move {
+                match how {
+                    remote::Open::View => origin.view().map(|file| (file, None)),
+                    _ => origin.edit(),
                 }
-            });
-        })
-        .detach();
-    }
-
-    /// F4 and Ctrl+Shift+F4 inside an archive: each save goes back into it,
-    /// and then to the server the archive came from.
-    fn edit_in_archive(&mut self, how: remote::Open, window: &mut Window, cx: &mut Context<Self>) {
-        let panel = self.panels[self.active].tabs.current();
-        let Some(member) = panel.archive_member() else {
-            return;
-        };
-        if !member.updatable() {
-            let text = "Only files in 7z, zip, jar and tar archives can be edited.";
-            return window.push_notification(Notification::warning(text), cx);
-        }
-        let origin = panel.archive_origin();
-        let settings = self.settings.editor.clone();
-        cx.spawn_in(window, async move |_, cx| {
-            let member = Arc::new(member);
-            let taking = member.clone();
-            let taken = cx
-                .background_executor()
-                .spawn(async move { taking.extract_with_folders() })
-                .await;
-            let name = member.listed.clone();
+            };
+            let prepared = cx.background_executor().spawn(prepare).await;
             let _ = cx.update(|window, cx| {
-                let opened = taken.and_then(|(dir, file)| {
-                    let upload: editor::Upload = Arc::new(move |_| {
-                        member.update(&dir)?;
-                        let archive = member
-                            .archive
-                            .file_name()
-                            .unwrap_or_default()
-                            .display()
-                            .to_string();
-                        if let Some((remote, path)) = &origin {
-                            vfs::upload(&member.archive, &**remote, path)?;
-                            return Ok(format!("Updated {archive} on {}", remote.url()));
-                        }
-                        Ok(format!("Updated {archive}"))
-                    });
-                    match how {
-                        remote::Open::External => {
-                            remote::edit_externally(file, upload, &settings.external, window, cx)
-                        }
-                        _ => editor::open(file, settings.limit_mb, Some(upload), cx),
+                let opened = prepared.and_then(|(file, upload)| match (how, upload) {
+                    (remote::Open::View, _) => {
+                        let (files, at) = around.unwrap_or_else(|| (vec![file], 0));
+                        viewer::open(files, at, settings.viewer, bounds, cx)
+                    }
+                    (remote::Open::Edit, upload) => {
+                        editor::open(file, settings.editor.limit_mb, upload, cx)
+                    }
+                    (remote::Open::External, Some(upload)) => {
+                        remote::edit_externally(file, upload, &settings.editor.external, window, cx)
+                    }
+                    (remote::Open::External, None) => {
+                        edit::edit_externally(&settings.editor.external, &file)
                     }
                 });
                 if let Err(err) = opened {
@@ -1135,7 +1047,8 @@ impl Commander {
                     .on_action(cx.listener(|this, _: &CancelPathEdit, window, cx| {
                         this.cancel_path_edit(window, cx)
                     }))
-                    .child(Input::new(&input).small().h(PATH_HEIGHT))
+                    // Input::h sizes only multi-line boxes.
+                    .child(Styled::h(Input::new(&input).small(), PATH_HEIGHT))
                     .into_any_element(),
                 None => div()
                     .id(("path", ix))
@@ -1276,15 +1189,17 @@ impl Render for Commander {
                     Command::DuplicateTab => this.change_tabs(Tabs::duplicate, cx),
                     Command::LockTab => this.change_tabs(Tabs::toggle_lock, cx),
                     Command::CloseTab => this.change_tabs(Tabs::close, cx),
+                    Command::NextTab => this.change_tabs(|tabs| tabs.step(1), cx),
+                    Command::PreviousTab => this.change_tabs(|tabs| tabs.step(-1), cx),
                     Command::CloseAllTabs => this.change_tabs(Tabs::close_all, cx),
                     Command::CloseDuplicateTabs => this.change_tabs(Tabs::close_duplicates, cx),
                     Command::RenameTab => this.rename_tab(window, cx),
                     Command::CopyTabToOtherPanel => this.copy_tab_to_other_panel(cx),
                     Command::ListTabs => this.show_tab_list(window, cx),
                     Command::NewFolder => this.new_folder(window, cx),
-                    Command::View => this.open_file(false, window, cx),
-                    Command::Edit => this.open_file(true, window, cx),
-                    Command::EditExternally => this.edit_externally(window, cx),
+                    Command::View => this.open_file(remote::Open::View, window, cx),
+                    Command::Edit => this.open_file(remote::Open::Edit, window, cx),
+                    Command::EditExternally => this.open_file(remote::Open::External, window, cx),
                     Command::Delete => this.confirm_delete(true, window, cx),
                     Command::DeletePermanently => this.confirm_delete(false, window, cx),
                     Command::ToggleMark => this.mark(Panel::toggle_mark, cx),

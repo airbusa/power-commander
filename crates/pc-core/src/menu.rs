@@ -99,6 +99,8 @@ pub enum Command {
     CloseAllTabs,
     CloseDuplicateTabs,
     ListTabs,
+    NextTab,
+    PreviousTab,
 }
 
 pub enum Item {
@@ -348,6 +350,8 @@ pub const OTHER_KEYS: &[Item] = &[
     cmd("Delete", "delete", Delete),
     cmd("Delete permanently", "shift-f8", DeletePermanently),
     cmd("Delete permanently", "shift-delete", DeletePermanently),
+    cmd("Next tab", "ctrl-tab", NextTab),
+    cmd("Previous tab", "ctrl-shift-tab", PreviousTab),
 ];
 
 pub fn key_bindings() -> Vec<(&'static str, Command)> {

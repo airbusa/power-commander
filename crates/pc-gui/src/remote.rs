@@ -15,12 +15,12 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use pc_core::edit;
+use pc_core::origin::{self, Upload};
 use pc_core::remote::{self, Address, Ask, Prompt, Reply};
 use pc_core::secrets;
-use pc_core::vfs::{self, Local};
-use pc_core::{edit, vfs::Fs};
 
-use crate::{Commander, editor, viewer};
+use crate::Commander;
 
 impl Commander {
     /// `sftp://…`, `ftp://…`: connects in the background, then shows it on `side`.
@@ -100,45 +100,9 @@ impl Commander {
             cx,
         );
     }
-
-    /// F3, F4 and Ctrl+Shift+F4 on a server's file: a temporary copy;
-    /// what the editors save goes back.
-    pub(crate) fn open_remote(&mut self, how: Open, window: &mut Window, cx: &mut Context<Self>) {
-        let panel = self.panels[self.active].tabs.current();
-        let Some(entry) = panel.current_entry().filter(|e| !e.is_dir) else {
-            return;
-        };
-        let (fs, path) = (panel.fs(), panel.folder().join(&entry.name));
-        let (settings, bounds) = (self.settings.clone(), window.window_bounds());
-        let name = entry.display_name();
-        cx.spawn_in(window, async move |_, cx| {
-            let fetch = (fs.clone(), path.clone());
-            let fetched = cx
-                .background_executor()
-                .spawn(async move { vfs::fetch(&*fetch.0, &fetch.1) })
-                .await;
-            let _ = cx.update(|window, cx| {
-                let opened = fetched.and_then(|local| match how {
-                    Open::View => viewer::open(vec![local], 0, settings.viewer, bounds, cx),
-                    Open::Edit => {
-                        let upload = editor::upload_to(fs, path);
-                        editor::open(local, settings.editor.limit_mb, Some(upload), cx)
-                    }
-                    Open::External => {
-                        let upload = editor::upload_to(fs, path);
-                        edit_externally(local, upload, &settings.editor.external, window, cx)
-                    }
-                });
-                if let Err(err) = opened {
-                    window.push_notification(Notification::error(format!("{name}: {err}")), cx);
-                }
-            });
-        })
-        .detach();
-    }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Open {
     View,
     Edit,
@@ -149,21 +113,17 @@ pub(crate) enum Open {
 /// that returns at once (`xdg-open`, `code` without `--wait`) is not waited for.
 pub(crate) fn edit_externally(
     local: PathBuf,
-    upload: editor::Upload,
+    upload: Upload,
     line: &str,
     window: &mut Window,
     cx: &mut App,
 ) -> std::io::Result<()> {
-    let before = Local.metadata(&local)?.modified;
+    let before = origin::modified(&local)?;
     let mut child = edit::start_editor(line, &local)?;
     let (done, ended) = oneshot::channel();
     std::thread::spawn(move || {
         let _ = child.wait();
-        let changed = Local
-            .metadata(&local)
-            .is_ok_and(|meta| meta.modified != before);
-        let uploaded = changed.then(|| upload(&local));
-        let _ = done.send(uploaded);
+        let _ = done.send(origin::send_back(&local, before, &upload));
     });
     window
         .spawn(cx, async move |cx| {
