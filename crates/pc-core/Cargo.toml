@@ -10,6 +10,8 @@ license.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The configuration folder of each platform.
 dirs = "6"
+# Code pages of the viewer; GPUI builds it already.
+encoding_rs = "0.8"
 # Finds the line ends of big files fast.
 memchr = "2"
 serde = { version = "1", features = ["derive"] }

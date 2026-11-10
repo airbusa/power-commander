@@ -4472,6 +4472,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
+ "encoding_rs",
  "memchr",
  "serde",
  "serde_json",
