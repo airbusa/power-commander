@@ -2,6 +2,7 @@ pub mod archive;
 pub mod codepage;
 pub mod command;
 pub mod edit;
+pub mod html;
 pub mod icons;
 pub mod menu;
 pub mod session;
