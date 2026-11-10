@@ -244,6 +244,18 @@ impl Queue {
         });
     }
 
+    /// At quit: cancels every job, and waits a little for the running one
+    /// to remove its part file.
+    pub fn stop_all(&self) {
+        for job in self.jobs().iter().filter(|job| !job.status.finished()) {
+            self.cancel(job.id);
+        }
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while self.lock().working && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     pub fn clear_finished(&self) {
         let mut state = self.lock();
         state.jobs.retain(|job| !job.view.status.finished());
@@ -356,6 +368,7 @@ impl Run<'_> {
             totals.push((files - before.0, bytes - before.1));
         }
         self.progress.scanning = false;
+        self.report();
         for (source, (files, bytes)) in op.sources.iter().zip(totals) {
             let target = match &op.target {
                 Target::Into(dir) => dir.join(source.file_name().unwrap_or_default()),

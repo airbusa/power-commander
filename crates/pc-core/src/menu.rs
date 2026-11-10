@@ -83,6 +83,7 @@ pub enum Command {
     Edit,
     EditExternally,
     ToggleMark,
+    OperationQueue,
     Copy,
     Move,
     NewFolder,
@@ -224,6 +225,7 @@ pub const MENUS: &[Menu] = &[
     Menu {
         label: "Commands",
         items: &[
+            cmd("Operation Queue...", "", OperationQueue),
             cmd("CD Tree...", "alt-f10", CdTree),
             cmd("Search...", "alt-f7", Search),
             cmd(

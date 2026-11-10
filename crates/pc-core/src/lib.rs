@@ -139,13 +139,27 @@ impl Entry {
 
     pub fn modified_text(&self) -> String {
         self.modified
-            .map(|time| {
-                chrono::DateTime::<chrono::Local>::from(time)
-                    .format("%Y-%m-%d %H:%M")
-                    .to_string()
-            })
+            .map(|time| local_time(time, "%Y-%m-%d %H:%M"))
             .unwrap_or_default()
     }
+}
+
+/// `1.5 MB`, for speeds and progress.
+pub fn human_size(bytes: u64) -> String {
+    const K: u64 = 1024;
+    match bytes {
+        0..K => format!("{bytes} B"),
+        K..1_048_576 => format!("{:.1} KB", bytes as f64 / K as f64),
+        1_048_576..1_073_741_824 => format!("{:.1} MB", bytes as f64 / 1_048_576.),
+        _ => format!("{:.2} GB", bytes as f64 / 1_073_741_824.),
+    }
+}
+
+/// `time` in the local zone, as `format` says.
+pub fn local_time(time: SystemTime, format: &str) -> String {
+    chrono::DateTime::<chrono::Local>::from(time)
+        .format(format)
+        .to_string()
 }
 
 #[derive(Clone)]
@@ -1080,6 +1094,12 @@ mod tests {
             assert_eq!(panel.entries()[1].attributes, "rw-r-----");
             fs::remove_dir_all(&root).unwrap();
         }
+    }
+
+    #[test]
+    fn shows_sizes_for_people() {
+        let sizes = [1023, 1536, 5 << 20, 3 << 30].map(human_size);
+        assert_eq!(sizes, ["1023 B", "1.5 KB", "5.0 MB", "3.00 GB"]);
     }
 
     #[test]

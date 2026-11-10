@@ -8,6 +8,7 @@ mod menus;
 mod minimap;
 mod name_dialog;
 mod settings_dialog;
+mod transfer;
 mod viewer;
 
 use std::borrow::Cow;
@@ -28,7 +29,7 @@ use pc_core::menu::{BUTTON_BAR, Command, Item, TAB_MENU};
 use pc_core::session::Session;
 use pc_core::settings::{self, Settings};
 use pc_core::theme::{self, Theme};
-use pc_core::{Panel, Sort, SortKey, Tabs, archive, edit, icons};
+use pc_core::{Panel, Sort, SortKey, Tabs, archive, edit, icons, ops};
 
 use crate::appearance::PanelColors;
 use crate::menus::{ReopenTab, Run, SelectTab, SetTheme};
@@ -203,6 +204,7 @@ struct Commander {
     split: f32,
     _quit: Subscription,
     _command: Subscription,
+    transfers: transfer::Transfers,
 }
 
 struct Side {
@@ -276,13 +278,18 @@ impl Commander {
         // Closing the window drops this view before the app quits, so both save.
         let quit = cx.on_app_quit(|this, _| {
             this.save_session();
+            this.transfers.queue.stop_all();
             async {}
         });
         let this = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
-            let _ = this.read_with(cx, |this, _| this.save_session());
+            let _ = this.read_with(cx, |this, _| {
+                this.save_session();
+                this.transfers.queue.stop_all();
+            });
             true
         });
+        Self::watch_queue(window, cx);
         let command = cx.new(|cx| InputState::new(window, cx));
         let command_entered = cx.subscribe_in(&command, window, |this, _, event, window, cx| {
             if let InputEvent::PressEnter { .. } = event {
@@ -310,6 +317,7 @@ impl Commander {
             command,
             _quit: quit,
             _command: command_entered,
+            transfers: transfer::Transfers::default(),
         }
     }
 
@@ -1116,6 +1124,11 @@ impl Render for Commander {
                     Command::Delete => this.confirm_delete(true, window, cx),
                     Command::DeletePermanently => this.confirm_delete(false, window, cx),
                     Command::ToggleMark => this.mark(Panel::toggle_mark, cx),
+                    Command::Copy => this.transfer(ops::Kind::Copy, window, cx),
+                    Command::Move => this.transfer(ops::Kind::Move, window, cx),
+                    Command::OperationQueue => {
+                        transfer::open_queue(this.transfers.queue.clone(), window, cx)
+                    }
                     Command::SelectAll => this.mark(|panel| panel.mark_all(true), cx),
                     Command::UnselectAll => this.mark(|panel| panel.mark_all(false), cx),
                     Command::InvertSelection => this.mark(Panel::invert_marks, cx),
@@ -1208,6 +1221,7 @@ impl Render for Commander {
                     .child(self.menu_bar.clone()),
             )
             .child(panels)
+            .children(self.render_transfers(cx))
             .child(self.render_command_line(cx))
             .child(self.render_button_bar(cx))
     }
