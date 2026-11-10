@@ -170,6 +170,12 @@ pub fn open(
     let text = shown.start()?;
     let options = WindowOptions {
         window_bounds: Some(bounds),
+        // Wayland lets no app place its windows; as the main window's child,
+        // the compositor centres it over the main window.
+        kind: match cx.compositor_name() {
+            "Wayland" => WindowKind::Floating,
+            _ => WindowKind::Normal,
+        },
         titlebar: Some(TitlebarOptions {
             title: Some(title(shown.path()).into()),
             ..Default::default()
