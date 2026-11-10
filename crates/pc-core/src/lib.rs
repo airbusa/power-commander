@@ -10,6 +10,7 @@ pub mod icons;
 pub mod menu;
 pub mod ops;
 pub mod origin;
+pub mod packing;
 pub mod pdf;
 pub mod properties;
 pub mod remote;

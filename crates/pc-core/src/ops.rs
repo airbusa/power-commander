@@ -152,8 +152,11 @@ pub struct JobView {
 /// and says what it found.
 pub struct Task {
     pub title: String,
-    pub run: Box<dyn FnOnce(&mut Report) -> io::Result<String> + Send>,
+    pub run: TaskFn,
 }
+
+/// A task's work; what it gives back is its note.
+pub type TaskFn = Box<dyn FnOnce(&mut Report) -> io::Result<String> + Send>;
 
 enum Work {
     Copy(Operation),

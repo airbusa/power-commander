@@ -224,7 +224,7 @@ fn extension(name: &OsStr) -> Option<String> {
 }
 
 // 7-Zip sees only the tar inside a compressed tar.
-fn is_compressed_tar(path: &Path) -> bool {
+pub(crate) fn is_compressed_tar(path: &Path) -> bool {
     let name = path.file_name().unwrap_or_default();
     let stem = Path::new(Path::new(name).file_stem().unwrap_or_default());
     extension(name).is_some_and(|ext| TARS.contains(&ext.as_str()))
@@ -308,7 +308,7 @@ fn executable() -> PathBuf {
     }
 }
 
-fn missing(err: io::Error) -> io::Error {
+pub(crate) fn missing(err: io::Error) -> io::Error {
     match err.kind() {
         io::ErrorKind::NotFound => io::Error::new(
             err.kind(),

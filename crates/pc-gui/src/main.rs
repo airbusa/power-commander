@@ -10,6 +10,7 @@ mod menus;
 mod minimap;
 mod name_dialog;
 mod occupied;
+mod pack_dialog;
 mod pdf_view;
 mod properties_dialog;
 mod remote;
@@ -1203,6 +1204,9 @@ impl Render for Commander {
                     Command::CalculateOccupiedSpace => this.calculate_space(window, cx),
                     Command::ChangeAttributes => this.change_attributes(window, cx),
                     Command::Properties => this.show_properties(window, cx),
+                    Command::Pack => this.pack(window, cx),
+                    Command::UnpackSpecificFiles => this.unpack(window, cx),
+                    Command::TestArchives => this.test_archives(window, cx),
                     Command::View => this.open_file(remote::Open::View, window, cx),
                     Command::Edit => this.open_file(remote::Open::Edit, window, cx),
                     Command::EditExternally => this.open_file(remote::Open::External, window, cx),
