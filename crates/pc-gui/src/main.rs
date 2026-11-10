@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod appearance;
+mod attributes_dialog;
 mod connections_dialog;
 mod editor;
 mod find_dialog;
@@ -10,6 +11,7 @@ mod minimap;
 mod name_dialog;
 mod occupied;
 mod pdf_view;
+mod properties_dialog;
 mod remote;
 mod settings_dialog;
 mod transfer;
@@ -1199,6 +1201,8 @@ impl Render for Commander {
                     Command::ListTabs => this.show_tab_list(window, cx),
                     Command::NewFolder => this.new_folder(window, cx),
                     Command::CalculateOccupiedSpace => this.calculate_space(window, cx),
+                    Command::ChangeAttributes => this.change_attributes(window, cx),
+                    Command::Properties => this.show_properties(window, cx),
                     Command::View => this.open_file(remote::Open::View, window, cx),
                     Command::Edit => this.open_file(remote::Open::Edit, window, cx),
                     Command::EditExternally => this.open_file(remote::Open::External, window, cx),

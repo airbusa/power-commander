@@ -172,10 +172,12 @@ impl Fs for Local {
 
     fn set_meta(&self, path: &Path, meta: &Meta) -> io::Result<()> {
         if let Some(modified) = meta.modified {
-            File::options()
-                .write(true)
-                .open(path)?
-                .set_modified(modified)?;
+            // Unix sets times through any handle, so folders and read-only files get them too.
+            let file = match cfg!(unix) {
+                true => File::open(path)?,
+                false => File::options().write(true).open(path)?,
+            };
+            file.set_modified(modified)?;
         }
         #[cfg(unix)]
         if let Some(mode) = meta.mode {

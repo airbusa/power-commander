@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod attributes;
 pub mod codepage;
 pub mod command;
 pub mod connections;
@@ -10,6 +11,7 @@ pub mod menu;
 pub mod ops;
 pub mod origin;
 pub mod pdf;
+pub mod properties;
 pub mod remote;
 pub mod secrets;
 pub mod session;
