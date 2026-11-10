@@ -141,7 +141,7 @@ fn panel(buf: &mut Buffer, area: Rect, app: &mut App, ix: usize) -> Rect {
             None => PANEL,
         };
         buf.set_style(Rect::new(rows.x, y, rows.width, 1), style);
-        columns.row(buf, rows.x, y, entry, style);
+        columns.row(buf, rows.x, y, entry.map(|entry| (panel, entry)), style);
     }
     let status = take_width(panel.status_text().chars(), inner.width as usize);
     buf.set_string(inner.x, status_y, status, PANEL);
@@ -237,14 +237,18 @@ impl Columns {
         }
     }
 
-    fn row(&self, buf: &mut Buffer, x: u16, y: u16, entry: Option<&Entry>, style: Style) {
-        let (name, size, date) = match entry {
-            Some(entry) => {
+    fn row(&self, buf: &mut Buffer, x: u16, y: u16, row: Option<(&Panel, &Entry)>, style: Style) {
+        let (name, size, date) = match row {
+            Some((panel, entry)) => {
                 let name = match entry.is_dir {
                     true => format!("/{}", entry.display_name()),
                     false => entry.display_name(),
                 };
-                (name, size_text(entry, self.size), entry.modified_text())
+                (
+                    name,
+                    size_text(panel, entry, self.size),
+                    entry.modified_text(),
+                )
             }
             None => Default::default(),
         };
@@ -263,14 +267,14 @@ impl Columns {
 }
 
 /// Digits grouped, or shorter units when they do not fit.
-fn size_text(entry: &Entry, width: usize) -> String {
+fn size_text(panel: &Panel, entry: &Entry, width: usize) -> String {
     if entry.is_parent() {
         return "UP--DIR".into();
     }
-    let text = entry.size_text();
+    let text = panel.size_text(entry);
     match text.width() <= width {
         true => text,
-        false => pc_core::human_size(entry.size),
+        false => pc_core::human_size(panel.measured_size(entry).unwrap_or(entry.size)),
     }
 }
 

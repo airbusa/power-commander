@@ -8,6 +8,7 @@ mod find_dialog;
 mod menus;
 mod minimap;
 mod name_dialog;
+mod occupied;
 mod pdf_view;
 mod remote;
 mod settings_dialog;
@@ -1136,7 +1137,7 @@ impl Commander {
                     .px_1()
                     .text_right()
                     .truncate()
-                    .child(entry.size_text()),
+                    .child(panel.size_text(entry)),
             )
             .child(
                 div()
@@ -1197,6 +1198,7 @@ impl Render for Commander {
                     Command::CopyTabToOtherPanel => this.copy_tab_to_other_panel(cx),
                     Command::ListTabs => this.show_tab_list(window, cx),
                     Command::NewFolder => this.new_folder(window, cx),
+                    Command::CalculateOccupiedSpace => this.calculate_space(window, cx),
                     Command::View => this.open_file(remote::Open::View, window, cx),
                     Command::Edit => this.open_file(remote::Open::Edit, window, cx),
                     Command::EditExternally => this.open_file(remote::Open::External, window, cx),

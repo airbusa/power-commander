@@ -176,8 +176,24 @@ impl Commander {
             .filter(|job| job.status.finished())
             .map(|job| job.id)
             .collect();
-        let newly = finished.iter().any(|id| !transfers.seen.contains(id));
+        let newly: Vec<&JobView> = jobs
+            .iter()
+            .filter(|job| job.status.finished() && !transfers.seen.contains(&job.id))
+            .collect();
         transfers.seen = finished.into_iter().collect();
+        // What a task found, or why it failed.
+        for job in &newly {
+            let note = match (&job.status, &job.note) {
+                (Status::Failed, Some(note)) => {
+                    let text = format!("{}: {note}", job.title);
+                    Notification::error(text).autohide(false)
+                }
+                (_, Some(note)) => Notification::success(format!("{}: {note}", job.title)),
+                _ => continue,
+            };
+            window.push_notification(note, cx);
+        }
+        let newly = !newly.is_empty();
         if newly {
             for ix in 0..self.panels.len() {
                 // shortcut: a panel whose folder is gone keeps its list until it moves.
@@ -522,6 +538,7 @@ impl Render for QueueDialog {
                 Status::Done if p.skipped > 0 => format!("Done, {} skipped", p.skipped),
                 Status::Done => "Done".into(),
                 Status::Cancelled => "Cancelled".into(),
+                Status::Failed => "Failed".into(),
             };
             let button = |icon: IconName, name: &'static str| {
                 Button::new((name, id)).ghost().xsmall().icon(icon)

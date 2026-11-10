@@ -15,12 +15,13 @@ pub mod secrets;
 pub mod session;
 pub mod settings;
 pub mod sftp;
+pub mod space;
 pub mod theme;
 pub mod vfs;
 pub mod viewer;
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
@@ -181,6 +182,8 @@ pub struct Panel {
     cursor: usize,
     /// Names of the marked entries: what F5, F6 and F8 work on.
     marked: HashSet<OsString>,
+    /// Folders' sizes Calculate Occupied Space found, until the panel moves.
+    measured: HashMap<OsString, u64>,
     /// Moves from a locked tab open a new tab.
     locked: bool,
     /// The tab's own name.
@@ -206,6 +209,7 @@ impl Panel {
             entries: Vec::new(),
             cursor: 0,
             marked: HashSet::new(),
+            measured: HashMap::new(),
             locked: false,
             name: None,
             filter,
@@ -282,6 +286,7 @@ impl Panel {
         self.remote = Some(remote);
         self.archive = None;
         self.marked.clear();
+        self.measured.clear();
         self.path = path;
         self.show(entries, None);
         Ok(())
@@ -293,6 +298,7 @@ impl Panel {
         self.remote = None;
         self.archive = None;
         self.marked.clear();
+        self.measured.clear();
         self.path = path;
         self.show(entries, None);
         Ok(())
@@ -421,6 +427,7 @@ impl Panel {
         // shortcut: lists on the UI thread; move to the background if big archives freeze it.
         let items = archive::list(&path)?;
         self.marked.clear();
+        self.measured.clear();
         self.path = path;
         self.archive = Some(Archive {
             items,
@@ -512,6 +519,27 @@ impl Panel {
         let dir = archive::fresh_scratch()?;
         archive::extract(&self.path, &listed, &dir, true)?;
         Ok(paths.iter().map(|path| dir.join(path)).collect())
+    }
+
+    /// A file's size, or a folder's once measured.
+    pub fn measured_size(&self, entry: &Entry) -> Option<u64> {
+        match entry.is_dir {
+            true => self.measured.get(&entry.name).copied(),
+            false => Some(entry.size),
+        }
+    }
+
+    /// The Size column: a measured folder's size in place of `<DIR>`.
+    pub fn size_text(&self, entry: &Entry) -> String {
+        match (entry.is_dir, self.measured.get(&entry.name)) {
+            (true, Some(&bytes)) => grouped(bytes),
+            _ => entry.size_text(),
+        }
+    }
+
+    /// Calculate Occupied Space found `bytes` in the folder `name`.
+    pub fn set_measured(&mut self, name: OsString, bytes: u64) {
+        self.measured.insert(name, bytes);
     }
 
     pub fn current_entry(&self) -> Option<&Entry> {
@@ -637,16 +665,19 @@ impl Panel {
     }
 
     /// As Total Commander's status bar: marked / all.
+    /// Measured folders count with their contents.
     pub fn status_text(&self) -> String {
         let listed = self.entries.iter().filter(|e| !e.is_parent());
         let (dirs, files): (Vec<&Entry>, Vec<&Entry>) = listed.partition(|e| e.is_dir);
         let marked = |list: &[&Entry]| list.iter().filter(|e| self.is_marked(e)).count();
-        let bytes =
-            |list: &mut dyn Iterator<Item = &&Entry>| list.map(|e| e.size).sum::<u64>() / 1024;
+        let all = || files.iter().chain(&dirs);
+        let bytes = |list: &mut dyn Iterator<Item = &&Entry>| {
+            list.filter_map(|e| self.measured_size(e)).sum::<u64>() / 1024
+        };
         format!(
             "{} k / {} k in {} / {} file(s), {} / {} dir(s)",
-            grouped(bytes(&mut files.iter().filter(|e| self.is_marked(e)))),
-            grouped(bytes(&mut files.iter())),
+            grouped(bytes(&mut all().filter(|e| self.is_marked(e)))),
+            grouped(bytes(&mut all())),
             marked(&files),
             files.len(),
             marked(&dirs),
@@ -661,6 +692,7 @@ impl Panel {
         };
         if path != self.path || self.archive.is_some() {
             self.marked.clear();
+            self.measured.clear();
         }
         self.archive = None;
         self.path = path;
@@ -673,6 +705,7 @@ impl Panel {
         let entries = archive::entries(&archive.items, &dir);
         if archive.dir != dir {
             self.marked.clear();
+            self.measured.clear();
         }
         let archive = self.archive.as_mut().expect("in an archive");
         archive.dir = dir;

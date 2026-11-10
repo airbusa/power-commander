@@ -1,4 +1,5 @@
-//! Copy and move, one at a time, from a queue that can be reordered and cancelled.
+//! Copy, move and other long work (packing, checksums), one at a time, from
+//! a queue that can be reordered and cancelled.
 
 use std::io;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
@@ -124,6 +125,8 @@ pub enum Status {
     /// Finished; files skipped are counted in its progress.
     Done,
     Cancelled,
+    /// A task's error ended it; its note says which.
+    Failed,
 }
 
 impl Status {
@@ -141,11 +144,54 @@ pub struct JobView {
     pub progress: Progress,
     /// Waiting for the user's answer.
     pub question: Option<Question>,
+    /// What a finished task found, or why it failed.
+    pub note: Option<String>,
+}
+
+/// Work other than copying: it fills in its progress, stops once cancelled,
+/// and says what it found.
+pub struct Task {
+    pub title: String,
+    pub run: Box<dyn FnOnce(&mut Report) -> io::Result<String> + Send>,
+}
+
+enum Work {
+    Copy(Operation),
+    Task(Task),
+}
+
+/// A running task's link to the queue.
+pub struct Report<'a> {
+    queue: &'a Queue,
+    id: u64,
+    cancel: Arc<AtomicBool>,
+    pub progress: Progress,
+}
+
+impl Report<'_> {
+    /// Shows `progress` in the queue.
+    pub fn show(&self) {
+        let progress = self.progress.clone();
+        self.queue
+            .update(self.id, |job| job.view.progress = progress);
+    }
+
+    pub fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+
+    /// An error once cancelled, to leave loops with `?`.
+    pub fn check(&self) -> io::Result<()> {
+        match self.cancelled() {
+            true => Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled")),
+            false => Ok(()),
+        }
+    }
 }
 
 struct Job {
     view: JobView,
-    operation: Option<Operation>,
+    work: Option<Work>,
     answer: Option<Answer>,
     cancel: Arc<AtomicBool>,
 }
@@ -166,18 +212,27 @@ pub struct Queue(Arc<(Mutex<State>, Condvar)>);
 
 impl Queue {
     pub fn push(&self, operation: Operation) -> u64 {
+        self.add(operation.title(), Work::Copy(operation))
+    }
+
+    pub fn push_task(&self, task: Task) -> u64 {
+        self.add(task.title.clone(), Work::Task(task))
+    }
+
+    fn add(&self, title: String, work: Work) -> u64 {
         let mut state = self.lock();
         state.next += 1;
         let id = state.next;
         state.jobs.push(Job {
             view: JobView {
                 id,
-                title: operation.title(),
+                title,
                 status: Status::Waiting,
                 progress: Progress::default(),
                 question: None,
+                note: None,
             },
-            operation: Some(operation),
+            work: Some(work),
             answer: None,
             cancel: Arc::default(),
         });
@@ -208,7 +263,7 @@ impl Queue {
         self.update(id, |job| match job.view.status {
             Status::Waiting => {
                 job.view.status = Status::Cancelled;
-                job.operation = None;
+                job.work = None;
             }
             Status::Running => job.cancel.store(true, Ordering::Relaxed),
             _ => {}
@@ -273,7 +328,7 @@ impl Queue {
 
     fn work(self) {
         loop {
-            let (id, operation, cancel) = {
+            let (id, work, cancel) = {
                 let mut state = self.lock();
                 let waiting = state
                     .jobs
@@ -284,28 +339,42 @@ impl Queue {
                     return;
                 };
                 job.view.status = Status::Running;
-                let operation = job
-                    .operation
-                    .take()
-                    .expect("a waiting job has its operation");
-                let found = (job.view.id, operation, job.cancel.clone());
+                let work = job.work.take().expect("a waiting job has its work");
+                let found = (job.view.id, work, job.cancel.clone());
                 state.version += 1;
                 found
             };
-            let mut run = Run {
-                queue: &self,
-                id,
-                cancel,
-                overwrite: operation.overwrite,
-                skip_errors: false,
-                progress: Progress::default(),
-                op: &operation,
+            let (status, note) = match work {
+                Work::Copy(operation) => {
+                    let mut run = Run {
+                        queue: &self,
+                        id,
+                        cancel,
+                        overwrite: operation.overwrite,
+                        skip_errors: false,
+                        progress: Progress::default(),
+                        op: &operation,
+                    };
+                    match run.all() {
+                        Ok(()) => (Status::Done, None),
+                        Err(Cancelled) => (Status::Cancelled, None),
+                    }
+                }
+                Work::Task(task) => {
+                    let mut report = Report {
+                        queue: &self,
+                        id,
+                        cancel,
+                        progress: Progress::default(),
+                    };
+                    match (task.run)(&mut report) {
+                        _ if report.cancelled() => (Status::Cancelled, None),
+                        Ok(note) => (Status::Done, Some(note).filter(|note| !note.is_empty())),
+                        Err(err) => (Status::Failed, Some(err.to_string())),
+                    }
+                }
             };
-            let status = match run.all() {
-                Ok(()) => Status::Done,
-                Err(Cancelled) => Status::Cancelled,
-            };
-            self.update(id, |job| job.view.status = status);
+            self.update(id, |job| (job.view.status, job.view.note) = (status, note));
         }
     }
 
