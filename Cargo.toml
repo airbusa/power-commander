@@ -17,5 +17,9 @@ pc-core = { path = "crates/pc-core" }
 gpui-component = { path = "vendor/gpui-component" }
 gpui-base = { path = "vendor/gpui-base" }
 
+# Dependencies optimized in debug builds too: unoptimized, a large JPEG took seconds.
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.release]
 strip = true

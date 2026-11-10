@@ -335,6 +335,7 @@ impl Render for Viewer {
                 let picture = img(self.path.clone())
                     .size_full()
                     .object_fit(ObjectFit::Contain)
+                    .with_loading(|| div().p_4().child("Loading…").into_any_element())
                     .with_fallback(|| {
                         div()
                             .p_4()
