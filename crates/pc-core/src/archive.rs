@@ -1,10 +1,11 @@
 //! Archives through the bundled 7-Zip.
 
 use std::collections::HashSet;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::SystemTime;
 
 use chrono::{Local, NaiveDateTime, TimeZone};
@@ -21,7 +22,78 @@ const TARS: &[&str] = &["tgz", "tbz", "tbz2", "txz", "tzst", "tlz", "taz"];
 #[derive(Clone)]
 pub(crate) struct Item {
     pub path: PathBuf,
+    /// As 7-Zip lists it, for taking it out: `./a.txt` where `path` is `a.txt`.
+    pub listed: String,
     pub entry: Entry,
+}
+
+/// A file inside an archive, to take out for F3.
+pub struct Member {
+    pub archive: PathBuf,
+    pub listed: String,
+    pub name: OsString,
+}
+
+impl Member {
+    /// Extracts the file into a folder of its own under `scratch()`.
+    pub fn extract(&self) -> io::Result<PathBuf> {
+        static TAKEN: AtomicUsize = AtomicUsize::new(0);
+        let dir = scratch().join(TAKEN.fetch_add(1, Ordering::Relaxed).to_string());
+        std::fs::create_dir_all(&dir)?;
+        extract(&self.archive, &self.listed, &dir)?;
+        let path = dir.join(&self.name);
+        match path.exists() {
+            true => Ok(path),
+            false => Err(io::Error::other(format!(
+                "{} is not in the archive",
+                self.listed
+            ))),
+        }
+    }
+}
+
+/// Where files taken out of archives go while the app runs.
+pub fn scratch() -> PathBuf {
+    std::env::temp_dir().join(format!("powercommander-{}", std::process::id()))
+}
+
+/// `listed` out of `archive` into `dir`, without its folders.
+fn extract(archive: &Path, listed: &str, dir: &Path) -> io::Result<()> {
+    let name = archive.file_name().unwrap_or_default().to_string_lossy();
+    let fail = |err: String| io::Error::other(format!("{name}: {err}"));
+    let out = dir
+        .to_str()
+        .ok_or_else(|| fail("the temporary folder's name is not UTF-8".into()))?;
+    let out = format!("-o{out}");
+    // -spd: a name with `*` or `[` is no wildcard.
+    let take = ["e", "-y", "-spd", "-bso0", "-bsp0", out.as_str()];
+    let output = if is_compressed_tar(archive) {
+        let mut unpack = seven_zip(&["x", "-so"], Some(archive))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(missing)?;
+        let stdout = unpack.stdout.take().expect("piped");
+        let extracted = seven_zip(&[&take[..], &["-si", "-ttar"]].concat(), None)
+            .arg(listed)
+            .stdin(stdout)
+            .output()
+            .map_err(missing)?;
+        let unpacked = unpack.wait()?;
+        if extracted.status.success() && !unpacked.success() {
+            return Err(fail(failure(unpacked, b"")));
+        }
+        extracted
+    } else {
+        seven_zip(&take, Some(archive))
+            .arg(listed)
+            .output()
+            .map_err(missing)?
+    };
+    match output.status.success() {
+        true => Ok(()),
+        false => Err(fail(failure(output.status, &output.stderr))),
+    }
 }
 
 pub fn is_archive(name: &OsStr) -> bool {
@@ -148,7 +220,10 @@ fn parse(listing: &str) -> Vec<Item> {
                 .lines()
                 .find_map(|line| line.strip_prefix(key)?.strip_prefix(" = "))
         };
-        let Some(path) = field("Path").and_then(clean) else {
+        let Some(listed) = field("Path") else {
+            continue;
+        };
+        let Some(path) = clean(listed) else {
             continue;
         };
         let is_dir = field("Folder") == Some("+");
@@ -165,7 +240,12 @@ fn parse(listing: &str) -> Vec<Item> {
             size: field("Size").and_then(|s| s.parse().ok()).unwrap_or(0),
             modified: field("Modified").and_then(parse_time),
         };
-        items.push(Item { path, entry });
+        let listed = listed.to_owned();
+        items.push(Item {
+            path,
+            listed,
+            entry,
+        });
     }
     let implied: Vec<PathBuf> = items
         .iter()
@@ -185,7 +265,12 @@ fn parse(listing: &str) -> Vec<Item> {
                 size: 0,
                 modified: None,
             };
-            items.push(Item { path: dir, entry });
+            let listed = dir.to_string_lossy().into_owned();
+            items.push(Item {
+                path: dir,
+                listed,
+                entry,
+            });
         }
     }
     items
@@ -246,6 +331,10 @@ pub(crate) mod tests {
                        Path = docs\nFolder = +\n";
         let items = parse(listing);
         assert_eq!(
+            items[0].listed, "./docs/guide/a.txt",
+            "as 7-Zip takes it out"
+        );
+        assert_eq!(
             names(&entries(&items, Path::new(""))),
             ["..", "docs", "b.txt"]
         );
@@ -267,6 +356,8 @@ pub(crate) mod tests {
         fs::create_dir_all(root.join("src/sub")).unwrap();
         fs::write(root.join("src/a.txt"), "a").unwrap();
         fs::write(root.join("src/sub/b.txt"), "b").unwrap();
+        fs::write(root.join("src/sub/b[1].txt"), "b[1]").unwrap();
+        fs::write(root.join("src/sub/b1.txt"), "b1").unwrap();
         let pack = |kind: &str, archive: &str, what: &str| {
             let status = seven_zip(&["a", "-bso0", kind], Some(&root.join(archive)))
                 .arg(what)
@@ -297,6 +388,17 @@ pub(crate) mod tests {
             panel.open().unwrap();
             assert_eq!(names(panel.entries()), ["..", "sub", "a.txt"]);
             assert_eq!(panel.path(), root.join(archive).join("src"));
+            panel.set_cursor(2);
+            let a = panel.archive_member().unwrap().extract().unwrap();
+            assert_eq!(fs::read_to_string(&a).unwrap(), "a");
+            panel.set_cursor(1);
+            assert!(panel.archive_member().is_none(), "a folder");
+            panel.open().unwrap();
+            panel.set_cursor(at(&panel, "b[1].txt"));
+            let b = panel.archive_member().unwrap().extract().unwrap();
+            assert_eq!(fs::read_to_string(&b).unwrap(), "b[1]", "no wildcard");
+            assert_eq!(fs::read_dir(b.parent().unwrap()).unwrap().count(), 1);
+            panel.up().unwrap();
             panel.up().unwrap();
             assert_eq!(panel.cursor(), 1, "on the folder it left");
             panel.up().unwrap();
@@ -309,5 +411,6 @@ pub(crate) mod tests {
         assert!(err.starts_with("bad.zip: "), "{err}");
         assert_eq!(panel.path(), root, "stays where it was");
         fs::remove_dir_all(&root).unwrap();
+        fs::remove_dir_all(scratch()).unwrap();
     }
 }

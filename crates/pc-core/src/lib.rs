@@ -347,6 +347,19 @@ impl Panel {
         self.archive.is_some()
     }
 
+    /// Inside an archive, the file at the cursor.
+    pub fn archive_member(&self) -> Option<archive::Member> {
+        let archive = self.archive.as_ref()?;
+        let entry = self.current_entry().filter(|entry| !entry.is_dir)?;
+        let path = archive.dir.join(&entry.name);
+        let item = archive.items.iter().find(|item| item.path == path)?;
+        Some(archive::Member {
+            archive: self.path.clone(),
+            listed: item.listed.clone(),
+            name: entry.name.clone(),
+        })
+    }
+
     pub fn current_entry(&self) -> Option<&Entry> {
         self.entries.get(self.cursor)
     }

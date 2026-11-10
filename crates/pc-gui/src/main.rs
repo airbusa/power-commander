@@ -28,7 +28,7 @@ use pc_core::menu::{BUTTON_BAR, Command, Item, TAB_MENU};
 use pc_core::session::Session;
 use pc_core::settings::{self, Settings};
 use pc_core::theme::{self, Theme};
-use pc_core::{Panel, Sort, SortKey, Tabs, icons};
+use pc_core::{Panel, Sort, SortKey, Tabs, archive, icons};
 
 use crate::appearance::PanelColors;
 use crate::menus::{ReopenTab, Run, SelectTab, SetTheme};
@@ -110,6 +110,12 @@ fn main() {
             KeyBinding::new("escape", CancelPathEdit, Some("PathEdit > Input")),
         ]);
         menus::init(cx);
+        // Files taken out of archives for the viewer.
+        cx.on_app_quit(|_| {
+            let _ = std::fs::remove_dir_all(archive::scratch());
+            async {}
+        })
+        .detach();
         viewer::bind_keys(cx);
         editor::bind_keys(cx);
         let options = WindowOptions {
@@ -357,9 +363,11 @@ impl Commander {
             return;
         };
         if panel.in_archive() {
-            let text = "Files inside archives cannot be opened yet.";
-            window.push_notification(Notification::warning(text), cx);
-            return;
+            if edit {
+                let text = "Files inside archives cannot be edited yet.";
+                return window.push_notification(Notification::warning(text), cx);
+            }
+            return self.view_in_archive(window, cx);
         }
         let path = panel.folder().join(&entry.name);
         let opened = match edit {
@@ -376,6 +384,28 @@ impl Commander {
             let text = format!("{}: {err}", path.display());
             window.push_notification(Notification::error(text), cx);
         }
+    }
+
+    /// Takes the file out into a temporary folder, in the background, and views it.
+    fn view_in_archive(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(member) = self.panels[self.active].tabs.current().archive_member() else {
+            return;
+        };
+        let (settings, bounds) = (self.settings.viewer.clone(), window.window_bounds());
+        cx.spawn_in(window, async move |_, cx| {
+            let name = member.listed.clone();
+            let extract = async move { member.extract() };
+            let extracted = cx.background_executor().spawn(extract).await;
+            let _ = cx.update(|window, cx| {
+                let viewed =
+                    extracted.and_then(|path| viewer::open(vec![path], 0, settings, bounds, cx));
+                if let Err(err) = viewed {
+                    let text = format!("{name}: {err}");
+                    window.push_notification(Notification::error(text), cx);
+                }
+            });
+        })
+        .detach();
     }
 
     fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
