@@ -2,11 +2,13 @@
 
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
+use std::fs::{self, File};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use chrono::{Local, NaiveDateTime, TimeZone};
 
@@ -38,8 +40,8 @@ impl Member {
     /// Extracts the file into a folder of its own under `scratch()`.
     pub fn extract(&self) -> io::Result<PathBuf> {
         static TAKEN: AtomicUsize = AtomicUsize::new(0);
-        let dir = scratch().join(TAKEN.fetch_add(1, Ordering::Relaxed).to_string());
-        std::fs::create_dir_all(&dir)?;
+        let dir = claim()?.join(TAKEN.fetch_add(1, Ordering::Relaxed).to_string());
+        fs::create_dir_all(&dir)?;
         extract(&self.archive, &self.listed, &dir)?;
         let path = dir.join(&self.name);
         match path.exists() {
@@ -54,7 +56,62 @@ impl Member {
 
 /// Where files taken out of archives go while the app runs.
 pub fn scratch() -> PathBuf {
-    std::env::temp_dir().join(format!("powercommander-{}", std::process::id()))
+    std::env::temp_dir().join(format!("{SCRATCH}{}", std::process::id()))
+}
+
+const SCRATCH: &str = "powercommander-";
+/// Locked while its run lasts; the system unlocks it when the run ends.
+const LOCK: &str = ".lock";
+
+/// This run's lock, once `scratch()` exists.
+static HELD: Mutex<Option<File>> = Mutex::new(None);
+
+/// Creates `scratch()` and locks it, at the first use.
+fn claim() -> io::Result<PathBuf> {
+    let dir = scratch();
+    let mut held = HELD.lock().unwrap();
+    if held.is_none() {
+        fs::create_dir_all(&dir)?;
+        let lock = File::create(dir.join(LOCK))?;
+        lock.lock()?;
+        *held = Some(lock);
+    }
+    Ok(dir)
+}
+
+/// Removes `scratch()` as the app quits; Windows deletes no open file, so unlocked first.
+pub fn remove_scratch() {
+    HELD.lock().unwrap().take();
+    let _ = fs::remove_dir_all(scratch());
+}
+
+/// Removes the folders runs left behind when killed or crashed.
+pub fn remove_stale_scratch() {
+    remove_stale(&std::env::temp_dir(), &scratch());
+}
+
+fn remove_stale(temp: &Path, ours: &Path) {
+    let Ok(dirs) = fs::read_dir(temp) else {
+        return;
+    };
+    for dir in dirs.flatten() {
+        let path = dir.path();
+        let name = dir.file_name();
+        if path == ours || !name.to_string_lossy().starts_with(SCRATCH) {
+            continue;
+        }
+        let stale = match File::open(path.join(LOCK)) {
+            Ok(lock) => lock.try_lock().is_ok(),
+            // Unlocked yet: a run between creating it and locking it, unless old.
+            Err(_) => dir
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .is_ok_and(|time| time.elapsed().unwrap_or_default() > Duration::from_secs(3600)),
+        };
+        if stale {
+            let _ = fs::remove_dir_all(&path);
+        }
+    }
 }
 
 /// `listed` out of `archive` into `dir`, without its folders.
@@ -411,6 +468,34 @@ pub(crate) mod tests {
         assert!(err.starts_with("bad.zip: "), "{err}");
         assert_eq!(panel.path(), root, "stays where it was");
         fs::remove_dir_all(&root).unwrap();
-        fs::remove_dir_all(scratch()).unwrap();
+        remove_scratch();
+        assert!(!scratch().exists());
+    }
+
+    #[test]
+    fn removes_what_ended_runs_left() {
+        let temp = std::env::temp_dir().join(format!("pc-stale-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        let run = |name: &str| {
+            let dir = temp.join(format!("{SCRATCH}{name}"));
+            fs::create_dir_all(dir.join("0")).unwrap();
+            File::create(dir.join(LOCK)).unwrap()
+        };
+        drop(run("ended"));
+        let running = run("running");
+        running.lock().unwrap();
+        let _ours = run("ours");
+        fs::create_dir(temp.join("other")).unwrap();
+        remove_stale(&temp, &temp.join(format!("{SCRATCH}ours")));
+        let mut left: Vec<_> = fs::read_dir(&temp)
+            .unwrap()
+            .map(|dir| dir.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            ["other", "powercommander-ours", "powercommander-running"]
+        );
+        fs::remove_dir_all(&temp).unwrap();
     }
 }

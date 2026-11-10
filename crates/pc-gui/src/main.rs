@@ -111,8 +111,9 @@ fn main() {
         ]);
         menus::init(cx);
         // Files taken out of archives for the viewer.
+        std::thread::spawn(archive::remove_stale_scratch);
         cx.on_app_quit(|_| {
-            let _ = std::fs::remove_dir_all(archive::scratch());
+            archive::remove_scratch();
             async {}
         })
         .detach();
