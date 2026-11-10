@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod associations;
 pub mod attributes;
 pub mod checksum;
 pub mod codepage;

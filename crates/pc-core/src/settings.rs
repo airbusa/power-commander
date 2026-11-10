@@ -18,6 +18,8 @@ pub struct Settings {
     pub show_system: bool,
     pub viewer: ViewerSettings,
     pub editor: EditorSettings,
+    /// Files' own programs for Enter, F3 and F4.
+    pub associations: Vec<crate::associations::Association>,
 }
 
 /// F4 edits in the built-in editor, Ctrl+Shift+F4 in another program.

@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod appearance;
+mod associations_dialog;
 mod attributes_dialog;
 mod compare_view;
 mod connections_dialog;
@@ -387,6 +388,19 @@ impl Commander {
         let around = (how == remote::Open::View && origin.is_local()).then(|| panel.files_around());
         let (settings, bounds, name) =
             (self.settings.clone(), window.window_bounds(), origin.name());
+        // The file's own viewer or editor, by its association.
+        let entry = panel
+            .current_entry()
+            .map(|e| e.display_name())
+            .unwrap_or_default();
+        let own = pc_core::associations::find(&settings.associations, &entry).map(|a| match how {
+            remote::Open::View => a.view.clone(),
+            _ => a.edit.clone(),
+        });
+        let program = match (how, own.filter(|line| !line.trim().is_empty())) {
+            (remote::Open::External, _) => Some(settings.editor.external.clone()),
+            (_, own) => own,
+        };
         cx.spawn_in(window, async move |_, cx| {
             let prepare = async move {
                 match how {
@@ -397,18 +411,21 @@ impl Commander {
             let prepared = cx.background_executor().spawn(prepare).await;
             let _ = cx.update(|window, cx| {
                 let opened = prepared.and_then(|(file, upload)| match (how, upload) {
+                    (remote::Open::View, _) if let Some(program) = &program => {
+                        edit::edit_externally(program, &file)
+                    }
+                    (_, Some(upload)) if let Some(program) = &program => {
+                        remote::edit_externally(file, upload, program, window, cx)
+                    }
+                    (_, None) if let Some(program) = &program => {
+                        edit::edit_externally(program, &file)
+                    }
                     (remote::Open::View, _) => {
                         let (files, at) = around.unwrap_or_else(|| (vec![file], 0));
                         viewer::open(files, at, settings.viewer, bounds, cx)
                     }
-                    (remote::Open::Edit, upload) => {
+                    (remote::Open::Edit | remote::Open::External, upload) => {
                         editor::open(file, settings.editor.limit_mb, upload, cx)
-                    }
-                    (remote::Open::External, Some(upload)) => {
-                        remote::edit_externally(file, upload, &settings.editor.external, window, cx)
-                    }
-                    (remote::Open::External, None) => {
-                        edit::edit_externally(&settings.editor.external, &file)
                     }
                 });
                 if let Err(err) = opened {
@@ -835,6 +852,44 @@ impl Commander {
     }
 
     /// On a server, in the background.
+    /// Enter: into folders and archives; files open with their program.
+    fn enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.panels[self.active].tabs.current();
+        let file = panel
+            .current_entry()
+            .is_some_and(|e| !e.is_dir && (panel.in_archive() || !archive::is_archive(&e.name)));
+        match file {
+            true => self.launch(window, cx),
+            false => self.navigate(|panel| panel.open().map(drop), window, cx),
+        }
+    }
+
+    /// A server's or an archive's file opens from a copy, and is never run.
+    fn launch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.panels[self.active].tabs.current();
+        let (Some(origin), Some(entry)) = (panel.origin(), panel.current_entry()) else {
+            return;
+        };
+        let executable = origin.is_local() && entry.attributes.contains('x');
+        let associations = self.settings.associations.clone();
+        let name = origin.name();
+        cx.spawn_in(window, async move |_, cx| {
+            let opened = cx
+                .background_executor()
+                .spawn(async move {
+                    let file = origin.view()?;
+                    pc_core::associations::open(&associations, &file, executable)
+                })
+                .await;
+            if let Err(err) = opened {
+                let _ = cx.update(|window, cx| {
+                    window.push_notification(Notification::error(format!("{name}: {err}")), cx)
+                });
+            }
+        })
+        .detach();
+    }
+
     fn navigate(
         &mut self,
         go: impl FnOnce(&mut Panel) -> io::Result<()> + Send + 'static,
@@ -1123,7 +1178,7 @@ impl Commander {
                 this.panels[ix].tabs.current_mut().set_cursor(row);
                 cx.notify();
                 if event.click_count() == 2 {
-                    this.navigate(|panel| panel.open().map(drop), window, cx);
+                    this.enter(window, cx);
                 }
             }))
             .child(
@@ -1185,9 +1240,7 @@ impl Render for Commander {
             .on_action(cx.listener(|this, _: &PageDown, _, cx| this.move_cursor(this.page(), cx)))
             .on_action(cx.listener(|this, _: &Home, _, cx| this.move_cursor(isize::MIN, cx)))
             .on_action(cx.listener(|this, _: &End, _, cx| this.move_cursor(isize::MAX, cx)))
-            .on_action(cx.listener(|this, _: &Open, window, cx| {
-                this.navigate(|panel| panel.open().map(drop), window, cx)
-            }))
+            .on_action(cx.listener(|this, _: &Open, window, cx| this.enter(window, cx)))
             .on_action(
                 cx.listener(|this, _: &Parent, window, cx| this.navigate(Panel::up, window, cx)),
             )
@@ -1215,6 +1268,8 @@ impl Render for Commander {
                     Command::SplitFile => this.split_file(window, cx),
                     Command::MultiRenameTool => this.multi_rename(window, cx),
                     Command::CompareByContent => this.compare_files(window, cx),
+                    Command::AssociateWith => this.associate_with(window, cx),
+                    Command::InternalAssociations => this.internal_associations(window, cx),
                     Command::CombineFiles => this.combine_files(window, cx),
                     Command::View => this.open_file(remote::Open::View, window, cx),
                     Command::Edit => this.open_file(remote::Open::Edit, window, cx),
