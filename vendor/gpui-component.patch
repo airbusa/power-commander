@@ -1,0 +1,1424 @@
+diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
+--- a/src/dialog/dialog.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/dialog/dialog.rs	2026-11-10 08:48:57.488507824 +0100
+@@ -1,13 +1,18 @@
++// Modified for Water Data Studio (Apache-2.0, section 4b): a dialog moves by
++// its title, can open centred over a part of the window, and fades in
++// without sliding. Changes are marked "WDS patch".
++
+ use super::entrance::{DialogEntrance, EntranceSurface};
+ use crate::root::WindowState;
+ use gpui_base::TestSupportExt as _;
+-use std::{rc::Rc, sync::LazyLock, time::Duration};
++use std::{cell::Cell, rc::Rc, sync::LazyLock, time::Duration};
+ 
+ use gpui::{
+-    Action, Anchor, Animation, AnimationExt as _, AnyElement, App, BoxShadow, ClickEvent, Edges,
+-    FocusHandle, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
+-    SharedString, StyleRefinement, Styled, Window, WindowControlArea, anchored, div, hsla, point,
+-    prelude::FluentBuilder, px,
++    Action, Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, BoxShadow, ClickEvent,
++    DispatchPhase, Edges, FocusHandle, Hsla, InteractiveElement, IntoElement, MouseButton,
++    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, RenderOnce,
++    SharedString, StyleRefinement, Styled, Window, WindowControlArea, anchored, canvas, div, hsla,
++    point, prelude::FluentBuilder, px,
+ };
+ use gpui_base::{ElementExt as _, TextSelectionScopeId};
+ use rust_i18n::t;
+@@ -28,6 +33,20 @@
+ type CancelHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static>;
+ type CloseHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+ 
++/// WDS patch: how tall the band with the title is.
++const TITLE_BAND_HEIGHT: f32 = 40.;
++
++/// WDS patch: where a dialog moved by its title is, kept across frames.
++#[derive(Default)]
++struct DialogMove {
++    /// The top left corner it was moved to.
++    origin: Cell<Option<Point<Pixels>>>,
++    /// The top left corner it was last laid out at.
++    laid_out: Cell<Point<Pixels>>,
++    /// Where the mouse holds it, from its top left corner, while it moves.
++    grab: Cell<Option<Point<Pixels>>>,
++}
++
+ /// Overwrite `slot` only when `value` was explicitly set.
+ fn merge_field<T>(slot: &mut Option<T>, value: Option<T>) {
+     if value.is_some() {
+@@ -205,6 +224,8 @@
+     width: Pixels,
+     max_width: Option<Pixels>,
+     margin_top: Option<Pixels>,
++    // WDS patch: where the dialog opens centred.
++    center_over: Option<Bounds<Pixels>>,
+     close_button: bool,
+ 
+     overlay: bool,
+@@ -218,6 +239,7 @@
+     fn default() -> Self {
+         Self {
+             margin_top: None,
++            center_over: None,
+             width: px(448.),
+             max_width: None,
+             overlay: true,
+@@ -225,7 +247,8 @@
+             overlay_visible: false,
+             close_button: true,
+             overlay_closable: true,
+-            entrance: DialogEntrance::default(),
++            // WDS patch: a dialog fades in where it opens, without sliding.
++            entrance: DialogEntrance::Fade,
+         }
+     }
+ }
+@@ -475,6 +498,13 @@
+         self
+     }
+ 
++    /// WDS patch: opens the dialog centred over `bounds`, in window
++    /// coordinates, instead of at `margin_top`.
++    pub fn center_over(mut self, bounds: Bounds<Pixels>) -> Self {
++        self.props.center_over = Some(bounds);
++        self
++    }
++
+     /// Sets the width of the dialog, defaults to 448px.
+     ///
+     /// The dialog is never wider than the viewport minus a margin on each side.
+@@ -598,6 +628,13 @@
+ 
+         let layer_ix = self.layer_ix;
+         let selection_scope = self.selection_scope;
++        // WDS patch: where the dialog was moved to.
++        let moving = window
++            .use_keyed_state(("dialog-move", layer_ix), cx, |_, _| {
++                Rc::new(DialogMove::default())
++            })
++            .read(cx)
++            .clone();
+         let on_close = self.button_props.close_handler();
+         let on_ok = self.button_props.ok_handler();
+         let on_cancel = self.button_props.cancel_handler();
+@@ -632,6 +669,23 @@
+         let base_size = window.text_style().font_size;
+         let rem_size = window.rem_size();
+ 
++        // WDS patch: moved, the dialog stays where it was put; else centred
++        // over `center_over`, else at `margin_top`.
++        let placed = moving.origin.get().is_some() || self.props.center_over.is_some();
++        let (anchor, position) = match (moving.origin.get(), self.props.center_over) {
++            (Some(origin), _) => (Anchor::TopLeft, origin),
++            (None, Some(over)) => (
++                Anchor::LeftCenter,
++                point(over.center().x - width / 2., over.center().y),
++            ),
++            (None, None) => (
++                Anchor::TopLeft,
++                point(window_paddings.left + x, window_paddings.top + y),
++            ),
++        };
++        let laid_out = moving.clone();
++        let has_title = self.title.is_some();
++
+         let mut paddings = Edges::all(px(16.));
+         if let Some(pl) = self.style.padding.left {
+             paddings.left = pl.to_pixels(base_size, rem_size);
+@@ -708,9 +762,12 @@
+                             })
+                             .popup(
+                                 gpui_base::Positioner::corner(
+-                                    Anchor::TopLeft,
+-                                    point(window_paddings.left + x, window_paddings.top + y),
++                                    // WDS patch: see `moving`.
++                                    anchor, position,
+                                 )
++                                .on_position(move |resolved| {
++                                    laid_out.laid_out.set(resolved.bounds.origin)
++                                })
+                                 .margin(margin)
+                                 .child(
+                                     v_flex()
+@@ -726,11 +783,47 @@
+                                         .pb(paddings.bottom)
+                                         .gap(paddings.top.max(px(8.)))
+                                         .refine_style(&self.style)
++                                        // WDS patch: the title's band is at the top.
++                                        .when(has_title, |this| this.pt_0())
+                                         .px_0()
+                                         .occlude()
+                                         .w(width)
+                                         .when_some(self.props.max_width, |this, w| this.max_w(w))
+                                         .max_h(max_height)
++                                        // WDS patch: the title is in a band, which
++                                        // shows where the dialog is moved by.
++                                        .when_some(self.title, |this, title| {
++                                            let moving = moving.clone();
++                                            let theme = cx.theme();
++                                            this.child(
++                                                div()
++                                                    .id("dialog-move")
++                                                    .flex_none()
++                                                    .h(px(TITLE_BAND_HEIGHT))
++                                                    .flex()
++                                                    .items_center()
++                                                    .pl(paddings.left)
++                                                    .pr(paddings.right + px(28.))
++                                                    .bg(theme.muted)
++                                                    .border_b_1()
++                                                    .border_color(theme.border)
++                                                    .rounded_t(theme.radius_lg - px(1.))
++                                                    .child(DialogTitle::new().child(title))
++                                                    .on_mouse_down(
++                                                        MouseButton::Left,
++                                                        move |event: &MouseDownEvent, window, _| {
++                                                            moving.grab.set(Some(
++                                                                event.position
++                                                                    - moving.laid_out.get(),
++                                                            ));
++                                                            window.refresh();
++                                                        },
++                                                    ),
++                                            )
++                                        })
++                                        .when(moving.grab.get().is_some(), |this| {
++                                            this.child(move_listener(moving.clone()))
++                                        })
+                                         .child(
+                                             v_flex()
+                                                 .flex_1()
+@@ -744,14 +837,6 @@
+                                                             .child(header),
+                                                     )
+                                                 })
+-                                                .when_some(self.title, |this, title| {
+-                                                    this.child(
+-                                                        DialogTitle::new()
+-                                                            .pl(paddings.left)
+-                                                            .pr(paddings.right)
+-                                                            .child(title),
+-                                                    )
+-                                                })
+                                                 .when_some(self.content_builder, |this, builder| {
+                                                     this.child(builder(
+                                                         DialogContent::new()
+@@ -785,7 +870,12 @@
+                                             )
+                                         })
+                                         .children(self.props.close_button.then(|| {
+-                                            let top = (paddings.top - px(10.)).max(px(8.));
++                                            // WDS patch: in the middle of the title's band.
++                                            let top = if has_title {
++                                                px((TITLE_BAND_HEIGHT - 24.) / 2.)
++                                            } else {
++                                                (paddings.top - px(10.)).max(px(8.))
++                                            };
+                                             let right = (paddings.right - px(10.)).max(px(8.));
+ 
+                                             gpui_base::DialogClose::new()
+@@ -841,7 +931,8 @@
+                                         }),
+                                 )
+                                 .map(|positioner| {
+-                                    if animated && entrance == DialogEntrance::SlideDown {
++                                    if animated && entrance == DialogEntrance::SlideDown && !placed
++                                    {
+                                         positioner
+                                             .with_animation(
+                                                 "slide-down",
+@@ -876,6 +967,38 @@
+     }
+ }
+ 
++/// WDS patch: follows the mouse anywhere in the window while the dialog is
++/// held by its title.
++fn move_listener(moving: Rc<DialogMove>) -> impl IntoElement {
++    canvas(
++        |_, _, _| {},
++        move |_, _, window, _| {
++            let follow = moving.clone();
++            window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, _| {
++                if phase != DispatchPhase::Capture {
++                    return;
++                }
++                match (follow.grab.get(), event.pressed_button) {
++                    (Some(grab), Some(MouseButton::Left)) => {
++                        follow.origin.set(Some(event.position - grab));
++                        window.refresh();
++                    }
++                    _ => follow.grab.set(None),
++                }
++            });
++            let release = moving.clone();
++            window.on_mouse_event(move |_: &MouseUpEvent, phase, window, _| {
++                if phase == DispatchPhase::Capture {
++                    release.grab.set(None);
++                    window.refresh();
++                }
++            });
++        },
++    )
++    .absolute()
++    .size_0()
++}
++
+ #[cfg(test)]
+ pub(crate) mod tests {
+     use super::*;
+diff -ruN a/src/highlighter/input_adapter.rs b/src/highlighter/input_adapter.rs
+--- a/src/highlighter/input_adapter.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/highlighter/input_adapter.rs	2026-11-10 08:48:57.490700524 +0100
+@@ -1,3 +1,7 @@
++// Modified for Water Data Studio (Apache-2.0, section 4b): the highlighter
++// factory is public, and a background parse leaves the fold candidates alone
++// when folding is not asked of it. Changes are marked "WDS patch".
++
+ use std::{
+     cell::RefCell,
+     ops::Range,
+@@ -19,7 +23,8 @@
+ 
+ use super::{LanguageRegistry, SyntaxHighlighter, highlighter::parse_input_bytes};
+ 
+-pub(crate) fn input_highlighter_factory() -> InputHighlighterFactory {
++/// WDS patch: public, was pub(crate).
++pub fn input_highlighter_factory() -> InputHighlighterFactory {
+     Rc::new(|language| {
+         LanguageRegistry::singleton().has_parser(language).then(|| {
+             Box::new(TreeSitterInputHighlighter::new(language)) as Box<dyn InputHighlighter>
+@@ -117,9 +122,12 @@
+                 highlighter
+                     .borrow_mut()
+                     .apply_background_tree(tree, &text_for_apply, injections);
+-                let _ = entity.update(cx, |state, cx| {
+-                    state.apply_highlighter_fold_candidates(folds, cx);
+-                });
++                // WDS patch: without folding, the folds are someone else's.
++                if folding {
++                    let _ = entity.update(cx, |state, cx| {
++                        state.apply_highlighter_fold_candidates(folds, cx);
++                    });
++                }
+             }
+         });
+         parse_task.borrow_mut().replace(task);
+diff -ruN a/src/highlighter/mod.rs b/src/highlighter/mod.rs
+--- a/src/highlighter/mod.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/highlighter/mod.rs	2026-11-10 08:48:57.490700524 +0100
+@@ -1,3 +1,7 @@
++// Modified for Water Data Studio (Apache-2.0, section 4b): the editor's
++// highlighter factory is public, so an app can wrap it. Changes are marked
++// "WDS patch".
++
+ mod language_name;
+ pub use gpui_base::input::{
+     Diagnostic, DiagnosticEntry, DiagnosticRelatedInformation, DiagnosticSet, DiagnosticSeverity,
+@@ -10,11 +14,12 @@
+ 
+ #[cfg(feature = "tree-sitter")]
+ mod input_adapter;
++// WDS patch: public, was pub(crate).
+ #[cfg(feature = "tree-sitter")]
+-pub(crate) use input_adapter::input_highlighter_factory;
++pub use input_adapter::input_highlighter_factory;
+ 
+ #[cfg(not(feature = "tree-sitter"))]
+-pub(crate) fn input_highlighter_factory() -> gpui_base::input::InputHighlighterFactory {
++pub fn input_highlighter_factory() -> gpui_base::input::InputHighlighterFactory {
+     std::rc::Rc::new(|_| None)
+ }
+ 
+diff -ruN a/src/input/popovers/completion_menu.rs b/src/input/popovers/completion_menu.rs
+--- a/src/input/popovers/completion_menu.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/input/popovers/completion_menu.rs	2026-11-10 08:48:57.491408567 +0100
+@@ -1,3 +1,7 @@
++// Modified for Water Data Studio (Apache-2.0, section 4b): the completion
++// menu is as wide as the editor's configured width. Changes are marked
++// "WDS patch".
++
+ use std::rc::Rc;
+ 
+ use gpui::{
+@@ -389,8 +393,9 @@
+                     .child(
+                         editor_popover("completion-menu", cx)
+                             .test_support()
+-                            .max_w(max_width)
+-                            .min_w(px(120.))
++                            // WDS patch: a fixed width; the list keeps the
++                            // width it measured for the first items.
++                            .w(max_width)
+                             .child(List::new(&list).max_h(MAX_MENU_HEIGHT)),
+                     )
+                     .when_some(selected_documentation, |this, documentation| {
+diff -ruN a/src/kbd.rs b/src/kbd.rs
+--- a/src/kbd.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/kbd.rs	2026-11-10 09:11:23.004519613 +0100
+@@ -1,3 +1,8 @@
++// Modified for Water Data Studio (Apache-2.0, section 4b): a binding of
++// several keystrokes shows them all. Changes are marked "WDS patch".
++// Modified for PowerCommander: numpad keys show as "Num +", "Num -", "Num *"
++// and "Num /". Changes are marked "PowerCommander patch".
++
+ use gpui::{
+     Action, AsKeystroke, FocusHandle, Half, InteractiveElement as _, IntoElement, KeyBinding,
+     KeyContext, Keystroke, ParentElement as _, RenderOnce, StyleRefinement, Styled, Window, div,
+@@ -11,6 +16,8 @@
+ pub struct Kbd {
+     style: StyleRefinement,
+     stroke: Keystroke,
++    /// WDS patch: the keystrokes after the first, of a chord as Ctrl+K, Ctrl+0.
++    then: Vec<Keystroke>,
+     appearance: bool,
+     outline: bool,
+ }
+@@ -20,6 +27,7 @@
+         Self {
+             style: StyleRefinement::default(),
+             stroke,
++            then: Vec::new(),
+             appearance: true,
+             outline: false,
+         }
+@@ -32,6 +40,7 @@
+         Self {
+             style: StyleRefinement::default(),
+             stroke,
++            then: Vec::new(),
+             appearance: true,
+             outline: false,
+         }
+@@ -94,8 +103,27 @@
+     }
+ 
+     fn from_binding(binding: &KeyBinding) -> Option<Self> {
+-        let key = binding.keystrokes().first()?;
+-        Some(Self::new(key.as_keystroke().clone()))
++        let mut strokes = binding
++            .keystrokes()
++            .iter()
++            .map(|stroke| stroke.as_keystroke().clone());
++        let mut kbd = Self::new(strokes.next()?);
++        // WDS patch: the rest of a chord too.
++        kbd.then = strokes.collect();
++        Some(kbd)
++    }
++
++    /// WDS patch: every keystroke, a chord's separated as the platform writes it.
++    fn text(&self) -> String {
++        #[cfg(target_os = "macos")]
++        const BETWEEN: &str = " ";
++        #[cfg(not(target_os = "macos"))]
++        const BETWEEN: &str = ", ";
++        std::iter::once(&self.stroke)
++            .chain(&self.then)
++            .map(Self::format)
++            .collect::<Vec<_>>()
++            .join(BETWEEN)
+     }
+ 
+     /// Return the Platform specific keybinding string by KeyStroke
+@@ -200,6 +228,11 @@
+             "down" => keys.push('↓'),
+             #[cfg(not(target_os = "macos"))]
+             "down" => keys.push_str("Down"),
++            // PowerCommander patch: GPUI names the numpad's keys by their operation.
++            "add" => keys.push_str("Num +"),
++            "subtract" => keys.push_str("Num -"),
++            "multiply" => keys.push_str("Num *"),
++            "divide" => keys.push_str("Num /"),
+             _ => {
+                 if key_str.len() == 1 {
+                     keys.push_str(&key_str.to_uppercase());
+@@ -232,7 +265,7 @@
+ impl RenderOnce for Kbd {
+     fn render(self, _: &mut gpui::Window, cx: &mut gpui::App) -> impl gpui::IntoElement {
+         if !self.appearance {
+-            return Self::format(&self.stroke).into_any_element();
++            return self.text().into_any_element();
+         }
+ 
+         div()
+@@ -256,7 +289,7 @@
+             .whitespace_normal()
+             .flex_shrink_0()
+             .refine_style(&self.style)
+-            .child(Self::format(&self.stroke))
++            .child(self.text())
+             .into_any_element()
+     }
+ }
+diff -ruN a/src/list/list.rs b/src/list/list.rs
+--- a/src/list/list.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/list/list.rs	2026-11-10 08:48:57.491860684 +0100
+@@ -1,3 +1,6 @@
++// Modified for Water Data Studio (Apache-2.0, section 4b): a list can take
++// a single click as selecting only. Changes are marked "WDS patch".
++
+ use instant::Duration;
+ use std::ops::Range;
+ 
+@@ -82,6 +85,8 @@
+     reset_on_cancel: bool,
+     searchable: bool,
+     selectable: bool,
++    // WDS patch: a click selects, a double click confirms.
++    confirm_on_double_click: bool,
+     _search_task: Task<()>,
+     _load_more_task: Task<()>,
+     _query_input_subscription: Subscription,
+@@ -108,6 +113,7 @@
+             selected_index: None,
+             selectable: true,
+             searchable: false,
++            confirm_on_double_click: false,
+             item_to_measure_index: IndexPath::default(),
+             deferred_scroll_to_index: None,
+             mouse_right_clicked_index: None,
+@@ -127,6 +133,12 @@
+         self
+     }
+ 
++    /// WDS patch: a click only selects; a double click or Enter confirms.
++    pub fn confirm_on_double_click(mut self, on: bool) -> Self {
++        self.confirm_on_double_click = on;
++        self
++    }
++
+     pub fn set_searchable(&mut self, searchable: bool, cx: &mut Context<Self>) {
+         self.searchable = searchable;
+         cx.notify();
+@@ -504,6 +516,12 @@
+                 this.on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                     this.set_right_clicked_index(None, window, cx);
+                     this.selected_index = Some(ix);
++                    // WDS patch: see `confirm_on_double_click`.
++                    if this.confirm_on_double_click && e.click_count() < 2 {
++                        this.delegate.set_selected_index(Some(ix), window, cx);
++                        cx.notify();
++                        return;
++                    }
+                     this.on_action_confirm(
+                         &Confirm {
+                             secondary: e.modifiers().secondary(),
+diff -ruN a/src/menu/app_menu_bar.rs b/src/menu/app_menu_bar.rs
+--- a/src/menu/app_menu_bar.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/menu/app_menu_bar.rs	2026-11-10 08:48:57.492085381 +0100
+@@ -1,3 +1,6 @@
++// Modified for Water Data Studio (Apache-2.0, section 4b): menu-bar menus may
++// use the window's height. Changes are marked "WDS patch".
++
+ use crate::{
+     InteractiveElementExt as _, Selectable, Sizable,
+     actions::{Cancel, SelectLeft, SelectRight},
+@@ -176,8 +179,11 @@
+         let popup_menu = match self.popup_menu.as_ref() {
+             None => {
+                 let items = self.menu.items.clone();
++                // WDS patch: room for long menus (the default limit is half the
++                // window, at most 450px).
++                let max_height = window.viewport_size().height - px(48.);
+                 let popup_menu = PopupMenu::build(window, cx, |menu, window, cx| {
+-                    menu.with_menu_items(items, window, cx)
++                    menu.with_menu_items(items, window, cx).max_h(max_height)
+                 });
+                 popup_menu.update(cx, |menu, cx| {
+                     menu.set_action_context(action_context.clone(), cx);
+diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
+--- a/src/menu/popup_menu.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/menu/popup_menu.rs	2026-11-10 10:07:56.951018750 +0100
+@@ -1,8 +1,12 @@
++// Modified for Water Data Studio (Apache-2.0, section 4b): a long menu's
++// scrollbar shows while it scrolls. Changes are marked "WDS patch".
++// Modified for PowerCommander: menus take the window's height, scroll only
++// past it and show no scrollbar. Changes are marked "PowerCommander patch".
++
+ use crate::ThemeStyled as _;
+ use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
+ use crate::actions::{SelectLeft, SelectRight};
+ use crate::menu::menu_item::MenuItemElement;
+-use crate::scroll::ScrollableElement;
+ use crate::{ActiveTheme, ElementExt, Icon, IconName, Sizable as _, h_flex, v_flex};
+ use crate::{Side, Size, kbd::Kbd};
+ use gpui::{
+@@ -303,7 +307,6 @@
+ 
+     /// The parent menu of this menu, if this is a submenu
+     parent_menu: Option<WeakEntity<Self>>,
+-    scrollable: bool,
+     external_link_icon: bool,
+     scroll_handle: ScrollHandle,
+     // This will update on render
+@@ -345,7 +348,6 @@
+             max_height: None,
+             check_side: Side::Left,
+             bounds: Bounds::default(),
+-            scrollable: false,
+             scroll_handle: ScrollHandle::default(),
+             external_link_icon: true,
+             size: Size::default(),
+@@ -445,9 +447,8 @@
+         self
+     }
+ 
+-    /// Set the menu to be scrollable to show vertical scrollbar.
+-    pub fn scrollable(mut self, scrollable: bool) -> Self {
+-        self.scrollable = scrollable;
++    /// PowerCommander patch: no effect; every menu scrolls only past the window's height.
++    pub fn scrollable(self, _scrollable: bool) -> Self {
+         self
+     }
+ 
+@@ -820,10 +821,6 @@
+             }
+         }
+ 
+-        if self.menu_items.len() > 20 {
+-            self.scrollable = true;
+-        }
+-
+         self
+     }
+ 
+@@ -1466,10 +1463,10 @@
+         let view = cx.entity().clone();
+         let items_count = self.menu_items.len();
+ 
+-        let max_height = self.max_height.unwrap_or_else(|| {
+-            let window_half_height = window.window_bounds().get_bounds().size.height * 0.5;
+-            window_half_height.min(px(450.))
+-        });
++        // PowerCommander patch: the window's height (upstream: half of it, at most 450px).
++        let max_height = self
++            .max_height
++            .unwrap_or_else(|| window.viewport_size().height - px(16.));
+ 
+         let has_left_icon = self
+             .menu_items
+@@ -1508,11 +1505,9 @@
+                     .min_w(rems(8.))
+                     .when_some(self.min_width, |this, min_width| this.min_w(min_width))
+                     .max_w(max_width)
+-                    .when(self.scrollable, |this| {
+-                        this.max_h(max_height)
+-                            .overflow_y_scroll()
+-                            .track_scroll(&self.scroll_handle)
+-                    })
++                    .max_h(max_height)
++                    .overflow_y_scroll()
++                    .track_scroll(&self.scroll_handle)
+                     .children(
+                         self.menu_items
+                             .iter()
+@@ -1523,9 +1518,6 @@
+                     )
+                     .on_prepaint(move |bounds, _, cx| view.update(cx, |r, _| r.bounds = bounds)),
+             )
+-            .when(self.scrollable, |this| {
+-                this.vertical_scrollbar(&self.scroll_handle)
+-            })
+     }
+ }
+ 
+diff -ruN a/src/root.rs b/src/root.rs
+--- a/src/root.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/root.rs	2026-11-10 08:48:57.492722139 +0100
+@@ -1,3 +1,6 @@
++// Modified for Water Data Studio (Apache-2.0, section 4b): notifications paint
++// above dialogs. Changes are marked "WDS patch".
++
+ use crate::{
+     ActiveTheme, ElementExt, Placement,
+     dialog::{ANIMATION_DURATION, Dialog},
+@@ -11,8 +14,8 @@
+ };
+ use gpui::{
+     App, AppContext, Context, DefiniteLength, ElementId, Entity, FocusHandle, InteractiveElement,
+-    IntoElement, ParentElement as _, Render, RenderOnce, Styled, WeakFocusHandle, Window, div,
+-    prelude::FluentBuilder as _,
++    IntoElement, ParentElement as _, Render, RenderOnce, Styled, WeakFocusHandle, Window, deferred,
++    div, prelude::FluentBuilder as _,
+ };
+ use gpui_base::{TextSelection, TextSelectionScopeId};
+ use std::{any::TypeId, rc::Rc};
+@@ -493,6 +496,12 @@
+             .debug_selector(|| "root-layers".to_string())
+             .children(WindowState::sheet_layer(root.clone(), window, cx))
+             .children(WindowState::dialog_layer(&root, window, cx))
+-            .children(WindowState::notification_layer(&root, cx))
++            // WDS patch: dialogs paint deferred (priority 10 + layer), so
++            // notifications must too, or every open dialog hides them. 90 keeps
++            // them under popups (100) and tooltips (200).
++            .children(
++                WindowState::notification_layer(&root, cx)
++                    .map(|layer| deferred(layer).with_priority(90)),
++            )
+     }
+ }
+diff -ruN a/src/tab/tab_bar.rs b/src/tab/tab_bar.rs
+--- a/src/tab/tab_bar.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/tab/tab_bar.rs	2026-11-10 08:48:57.494531671 +0100
+@@ -1,3 +1,6 @@
++// Modified for Water Data Studio (Apache-2.0, section 4b): the segmented
++// indicator uses the active tab colour. Changes are marked "WDS patch".
++
+ use std::{cell::RefCell, rc::Rc};
+ 
+ use gpui::{
+@@ -257,7 +260,8 @@
+                     div()
+                         .w_full()
+                         .h(inner_height)
+-                        .bg(cx.theme().tokens.background)
++                        // WDS patch: the theme's active tab colour, not the background.
++                        .bg(cx.theme().tokens.tab_active)
+                         .rounded(inner_radius)
+                         .shadow(raised_shadow()),
+                 ),
+diff -ruN a/src/table/data_table.rs b/src/table/data_table.rs
+--- a/src/table/data_table.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/table/data_table.rs	2026-11-10 08:48:57.494640337 +0100
+@@ -1,5 +1,10 @@
++// Modified for Water Data Studio (Apache-2.0, section 4b): optional lines
++// between columns; shift and an arrow extends a range of cells; no focus
++// ring. Changes are marked "WDS patch".
++
++// WDS patch: no focus ring, so no `ThemeStyled`.
+ use crate::{
+-    ActiveTheme, Sizable, Size, ThemeStyled as _,
++    ActiveTheme, Sizable, Size,
+     actions::{
+         Cancel, SelectDown, SelectFirst, SelectLast, SelectNextColumn, SelectPageDown,
+         SelectPageUp, SelectPrevColumn, SelectUp,
+@@ -8,10 +13,13 @@
+ };
+ use gpui::{
+     App, Edges, Entity, Focusable, InteractiveElement, IntoElement, KeyBinding, ParentElement,
+-    Pixels, RenderOnce, Styled, Window, div, prelude::FluentBuilder,
++    Pixels, RenderOnce, Styled, Window, actions, div, prelude::FluentBuilder,
+ };
+ use gpui_base::TestSupportExt as _;
+ 
++// WDS patch.
++actions!(table, [ExtendUp, ExtendDown, ExtendLeft, ExtendRight]);
++
+ const CONTEXT: &'static str = "DataTable";
+ pub(super) fn init(cx: &mut App) {
+     cx.bind_keys([
+@@ -26,6 +34,10 @@
+         KeyBinding::new("pagedown", SelectPageDown, Some(CONTEXT)),
+         KeyBinding::new("tab", SelectNextColumn, Some(CONTEXT)),
+         KeyBinding::new("shift-tab", SelectPrevColumn, Some(CONTEXT)),
++        KeyBinding::new("shift-up", ExtendUp, Some(CONTEXT)),
++        KeyBinding::new("shift-down", ExtendDown, Some(CONTEXT)),
++        KeyBinding::new("shift-left", ExtendLeft, Some(CONTEXT)),
++        KeyBinding::new("shift-right", ExtendRight, Some(CONTEXT)),
+     ]);
+ }
+ 
+@@ -39,6 +51,8 @@
+     pub(super) size: Size,
+     /// Height of each header row. `None` uses [`Size::table_row_height`].
+     pub(super) header_row_height: Option<Pixels>,
++    /// WDS patch: lines between columns.
++    pub(super) column_lines: bool,
+ }
+ 
+ impl Default for TableOptions {
+@@ -49,6 +63,7 @@
+             bordered: true,
+             size: Size::default(),
+             header_row_height: None,
++            column_lines: false,
+         }
+     }
+ }
+@@ -120,6 +135,12 @@
+         self
+     }
+ 
++    /// WDS patch: draw a line between columns, default to false.
++    pub fn column_lines(mut self, column_lines: bool) -> Self {
++        self.options.column_lines = column_lines;
++        self
++    }
++
+     /// Set the height of each header row.
+     ///
+     /// Column-group rows use the same height, so the whole header is this
+@@ -178,18 +199,18 @@
+             .on_action(window.listener_for(&self.state, TableState::action_select_last_column))
+             .on_action(window.listener_for(&self.state, TableState::action_select_page_up))
+             .on_action(window.listener_for(&self.state, TableState::action_select_page_down))
++            .on_action(window.listener_for(&self.state, TableState::action_extend_up))
++            .on_action(window.listener_for(&self.state, TableState::action_extend_down))
++            .on_action(window.listener_for(&self.state, TableState::action_extend_left))
++            .on_action(window.listener_for(&self.state, TableState::action_extend_right))
+             .bg(cx.theme().tokens.table)
+             .when(bordered, |this| {
+                 this.rounded(cx.theme().radius)
+                     .border_1()
+                     .border_color(cx.theme().border)
+             })
++            // WDS patch: no focus ring; the selected cell or row shows where
++            // the keys go.
+             .child(self.state)
+-            // Clicking a row focuses the table too, so only keyboard focus
+-            // shows it, as CSS `:focus-visible` does.
+-            .when(
+-                focus_handle.is_focused(window) && window.last_input_was_keyboard(),
+-                |this| this.focus_ring_style(window, cx),
+-            )
+     }
+ }
+diff -ruN a/src/table/delegate.rs b/src/table/delegate.rs
+--- a/src/table/delegate.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/table/delegate.rs	2026-11-10 08:48:57.494640337 +0100
+@@ -1,7 +1,10 @@
++// Modified for Water Data Studio (Apache-2.0, section 4b): a cell can have a
++// context menu and a background of its own. Changes are marked "WDS patch".
++
+ use std::ops::Range;
+ 
+ use gpui::{
+-    App, Context, Div, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
++    App, Context, Div, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
+     SharedString, Stateful, Styled as _, Window, div,
+ };
+ 
+@@ -108,6 +111,25 @@
+         menu
+     }
+ 
++    /// WDS patch: the context menu of the cell at the given row and column;
++    /// its row's, unless given.
++    fn cell_context_menu(
++        &mut self,
++        row_ix: usize,
++        col_ix: usize,
++        menu: PopupMenu,
++        window: &mut Window,
++        cx: &mut Context<TableState<Self>>,
++    ) -> PopupMenu {
++        self.context_menu(row_ix, menu, window, cx)
++    }
++
++    /// WDS patch: the background of the cell at the given row and column,
++    /// under the selection's.
++    fn cell_background(&self, row_ix: usize, col_ix: usize, cx: &App) -> Option<Hsla> {
++        None
++    }
++
+     /// Render cell at the given row and column.
+     fn render_td(
+         &mut self,
+diff -ruN a/src/table/state.rs b/src/table/state.rs
+--- a/src/table/state.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/table/state.rs	2026-11-10 08:48:57.494640337 +0100
+@@ -1,3 +1,11 @@
++// Modified for Water Data Studio (Apache-2.0, section 4b): in cell selection,
++// the row header shows row numbers, and the selected cell's row number and
++// column header are highlighted; a range of cells can be selected; cells have
++// the row's context menu, or their own; lines between columns; a column sorts
++// ascending first; clearing the selection clears the right-click; a cell can
++// have a background of its own; the horizontal scrollbar starts after the row
++// numbers. Changes are marked "WDS patch".
++
+ use gpui_base::TestSupportExt as _;
+ use std::{ops::Range, rc::Rc, time::Duration};
+ 
+@@ -15,7 +23,7 @@
+ use gpui::{
+     AppContext, Axis, Bounds, ClickEvent, Context, Div, DragMoveEvent, ElementId, EventEmitter,
+     FocusHandle, Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton,
+-    MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollStrategy, SharedString, Stateful,
++    MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Point, Render, ScrollStrategy, SharedString, Stateful,
+     StatefulInteractiveElement as _, Styled, Task, UniformListScrollHandle, Window, div,
+     prelude::FluentBuilder, px, uniform_list,
+ };
+@@ -263,6 +271,13 @@
+     right_clicked_cell: Option<(usize, usize)>,
+     selected_col: Option<usize>,
+     selected_cell: Option<(usize, usize)>,
++    /// WDS patch: the other corner of the selected range; `None` is the
++    /// selected cell itself.
++    cell_anchor: Option<(usize, usize)>,
++    /// WDS patch: the cell a left button press began on, while it is down.
++    drag_start: Option<(usize, usize)>,
++    /// WDS patch: the column header clicked last, which Shift extends from.
++    col_anchor: Option<usize>,
+ 
+     /// The column index that is being resized.
+     resizing_col: Option<usize>,
+@@ -299,6 +314,9 @@
+             right_clicked_cell: None,
+             selected_col: None,
+             selected_cell: None,
++            cell_anchor: None,
++            drag_start: None,
++            col_anchor: None,
+             resizing_col: None,
+             col_drag_gap: None,
+             bounds: Bounds::default(),
+@@ -596,6 +614,7 @@
+     pub fn set_selected_cell(&mut self, row_ix: usize, col_ix: usize, cx: &mut Context<Self>) {
+         self.selection_mode = SelectionMode::Cell;
+         self.selected_cell = Some((row_ix, col_ix));
++        self.cell_anchor = None;
+         self.right_clicked_cell = None;
+ 
+         // Scroll to the cell
+@@ -607,6 +626,37 @@
+         cx.notify();
+     }
+ 
++    /// WDS patch: selects the cells from `anchor` to `cell`; `cell` is the
++    /// selected cell, which moves with the keyboard. Does not scroll.
++    pub fn set_selected_range(
++        &mut self,
++        anchor: (usize, usize),
++        cell: (usize, usize),
++        cx: &mut Context<Self>,
++    ) {
++        self.selection_mode = SelectionMode::Cell;
++        self.selected_cell = Some(cell);
++        self.cell_anchor = Some(anchor);
++        self.right_clicked_cell = None;
++        cx.emit(TableEvent::SelectCell(cell.0, cell.1));
++        cx.notify();
++    }
++
++    /// WDS patch: the rows and columns of the selected cells.
++    pub fn selected_range(&self) -> Option<(Range<usize>, Range<usize>)> {
++        let (row, col) = self.selected_cell()?;
++        let (anchor_row, anchor_col) = self.cell_anchor.unwrap_or((row, col));
++        Some((
++            row.min(anchor_row)..row.max(anchor_row) + 1,
++            col.min(anchor_col)..col.max(anchor_col) + 1,
++        ))
++    }
++
++    fn is_cell_in_range(&self, row_ix: usize, col_ix: usize) -> bool {
++        self.selected_range()
++            .is_some_and(|(rows, cols)| rows.contains(&row_ix) && cols.contains(&col_ix))
++    }
++
+     /// Sets the selection as one value; [`TableSelection::None`] clears it.
+     ///
+     /// Scrolls and emits exactly as the matching `set_selected_*` or
+@@ -626,6 +676,9 @@
+         self.selected_row = None;
+         self.selected_col = None;
+         self.selected_cell = None;
++        // WDS patch: and the right-clicked cell's outline.
++        self.right_clicked_row = None;
++        self.right_clicked_cell = None;
+         cx.emit(TableEvent::ClearSelection);
+         cx.notify();
+     }
+@@ -816,11 +869,58 @@
+         }
+ 
+         cx.stop_propagation();
++        // WDS patch: a cell outside the selection is selected, for its menu.
++        if !self.is_cell_in_range(row_ix, col_ix) {
++            self.set_selected_range((row_ix, col_ix), (row_ix, col_ix), cx);
++        }
+         self.right_clicked_cell = Some((row_ix, col_ix));
+         self.right_clicked_row = None;
+         cx.emit(TableEvent::RightClickedCell(row_ix, col_ix));
+     }
+ 
++    /// WDS patch: shift extends the selection to the cell; otherwise a drag
++    /// from it may begin.
++    fn on_cell_mouse_down(
++        &mut self,
++        e: &MouseDownEvent,
++        row_ix: usize,
++        col_ix: usize,
++        cx: &mut Context<Self>,
++    ) {
++        if !self.cell_selectable {
++            return;
++        }
++        match self.selected_cell() {
++            Some(cell) if e.modifiers.shift => {
++                let anchor = self.cell_anchor.unwrap_or(cell);
++                self.set_selected_range(anchor, (row_ix, col_ix), cx);
++            }
++            _ => self.drag_start = Some((row_ix, col_ix)),
++        }
++    }
++
++    /// WDS patch: dragging selects the cells from where it began.
++    fn on_cell_mouse_move(
++        &mut self,
++        e: &MouseMoveEvent,
++        row_ix: usize,
++        col_ix: usize,
++        cx: &mut Context<Self>,
++    ) {
++        let Some(start) = self.drag_start else {
++            return;
++        };
++        if e.pressed_button != Some(MouseButton::Left) {
++            self.drag_start = None;
++            return;
++        }
++        let cell = (row_ix, col_ix);
++        let dragging = self.cell_anchor == Some(start) && self.selected_cell().is_some();
++        if (cell != start || dragging) && self.selected_cell() != Some(cell) {
++            self.set_selected_range(start, cell, cx);
++        }
++    }
++
+     fn on_row_left_click(
+         &mut self,
+         e: &ClickEvent,
+@@ -839,7 +939,7 @@
+         }
+     }
+ 
+-    fn on_col_head_click(&mut self, col_ix: usize, _: &mut Window, cx: &mut Context<Self>) {
++    fn on_col_head_click(&mut self, col_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+         if !self.col_selectable {
+             return;
+         }
+@@ -852,6 +952,14 @@
+             return;
+         }
+ 
++        // WDS patch: Shift selects the columns from the one clicked before,
++        // every row of them.
++        let rows = self.delegate.rows_count(cx);
++        if let Some(anchor) = self.col_anchor.filter(|_| window.modifiers().shift && rows > 0) {
++            self.set_selected_range((0, anchor), (rows - 1, col_ix), cx);
++            return;
++        }
++        self.col_anchor = Some(col_ix);
+         self.set_selected_col(col_ix, cx)
+     }
+ 
+@@ -868,6 +976,11 @@
+         }
+ 
+         cx.stop_propagation();
++        self.drag_start = None;
++        // WDS patch: the press extended the selection.
++        if e.modifiers().shift && self.cell_anchor.is_some() {
++            return;
++        }
+ 
+         let is_double_click = e.click_count() == 2;
+ 
+@@ -903,6 +1016,53 @@
+         cx.propagate();
+     }
+ 
++    /// WDS patch: moves the selected cell, keeping the range's other corner.
++    fn extend_selection(&mut self, rows: isize, cols: isize, cx: &mut Context<Self>) {
++        let Some(cell) = self.selected_cell() else {
++            return;
++        };
++        let last_row = self.delegate.rows_count(cx).saturating_sub(1);
++        let last_col = self.delegate.columns_count(cx).saturating_sub(1);
++        let row = cell.0.saturating_add_signed(rows).min(last_row);
++        let col = cell.1.saturating_add_signed(cols).min(last_col);
++        let anchor = self.cell_anchor.unwrap_or(cell);
++        self.set_selected_range(anchor, (row, col), cx);
++        self.vertical_scroll_handle
++            .scroll_to_item(row, ScrollStrategy::Nearest);
++        self.scroll_to_col(col, cx);
++    }
++
++    pub(super) fn action_extend_up(&mut self, _: &ExtendUp, _: &mut Window, cx: &mut Context<Self>) {
++        self.extend_selection(-1, 0, cx);
++    }
++
++    pub(super) fn action_extend_down(
++        &mut self,
++        _: &ExtendDown,
++        _: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        self.extend_selection(1, 0, cx);
++    }
++
++    pub(super) fn action_extend_left(
++        &mut self,
++        _: &ExtendLeft,
++        _: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        self.extend_selection(0, -1, cx);
++    }
++
++    pub(super) fn action_extend_right(
++        &mut self,
++        _: &ExtendRight,
++        _: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        self.extend_selection(0, 1, cx);
++    }
++
+     pub(super) fn action_select_prev(
+         &mut self,
+         _: &SelectUp,
+@@ -1244,10 +1404,11 @@
+         }
+ 
+         let sort = sort.unwrap();
++        // WDS patch: ascending, descending, then as it was.
+         let sort = match sort {
+-            ColumnSort::Ascending => ColumnSort::Default,
+-            ColumnSort::Descending => ColumnSort::Ascending,
+-            ColumnSort::Default => ColumnSort::Descending,
++            ColumnSort::Default => ColumnSort::Ascending,
++            ColumnSort::Ascending => ColumnSort::Descending,
++            ColumnSort::Descending => ColumnSort::Default,
+         };
+ 
+         for (ix, col_group) in self.col_groups.iter_mut().enumerate() {
+@@ -1394,7 +1555,7 @@
+         _row_ix: Option<usize>,
+         col_ix: usize,
+         _window: &mut Window,
+-        _cx: &mut Context<Self>,
++        cx: &mut Context<Self>,
+     ) -> Div {
+         let Some(col_group) = self.col_groups.get(col_ix) else {
+             return div();
+@@ -1410,6 +1571,10 @@
+             .overflow_hidden()
+             .whitespace_nowrap()
+             .table_cell_size(self.options.size)
++            // WDS patch: lines between columns.
++            .when(self.options.column_lines, |this| {
++                this.border_r_1().border_color(cx.theme().table_row_border)
++            })
+             .map(|this| match col_padding {
+                 Some(padding) => this
+                     .pl(padding.left)
+@@ -1599,9 +1764,14 @@
+         is_head: bool,
+         cx: &mut Context<Self>,
+     ) -> impl IntoElement {
++        // WDS patch: numbered, and highlighted for the selected cell's row.
++        let is_cell_row = !is_head
++            && self
++                .selected_range()
++                .is_some_and(|(rows, _)| rows.contains(&row_ix));
+         div()
+             .id(("row-header", row_ix))
+-            .w_3()
++            .w(self.row_header_width(cx))
+             .h_full()
+             .border_r_1()
+             .border_color(cx.theme().table_row_border)
+@@ -1609,12 +1779,37 @@
+             .flex_shrink_0()
+             .table_cell_size(self.options.size)
+             .when(!is_head, |this| {
++                this.flex()
++                    .items_center()
++                    .justify_end()
++                    .text_color(cx.theme().muted_foreground)
++                    .child((row_ix + 1).to_string())
++            })
++            .when(is_cell_row, |this| this.bg(cx.theme().secondary_active))
++            .when(!is_head, |this| {
+                 this.when(self.row_selectable, |this| {
+                     this.on_click(cx.listener(move |table, _, _window, cx| {
+                         table.set_selected_row(row_ix, cx);
+                     }))
+                 })
+             })
++            // WDS patch: the corner above the numbers selects every cell.
++            .when(is_head, |this| {
++                this.cursor_pointer()
++                    .on_click(cx.listener(|table, _, _window, cx| {
++                        let rows = table.delegate.rows_count(cx);
++                        let cols = table.delegate.columns_count(cx);
++                        if rows > 0 && cols > 0 {
++                            table.set_selected_range((0, 0), (rows - 1, cols - 1), cx);
++                        }
++                    }))
++            })
++    }
++
++    /// WDS patch: wide enough for the last row's number.
++    fn row_header_width(&self, cx: &App) -> Pixels {
++        let digits = self.delegate.rows_count(cx).max(1).to_string().len();
++        px(digits as f32 * 8. + 20.)
+     }
+ 
+     fn render_sort_icon(
+@@ -1674,11 +1869,16 @@
+         let movable = self.col_movable && col_group.column.movable;
+         let paddings = col_group.column.paddings;
+         let name = col_group.column.name.clone();
++        // WDS patch: the selected cell's column header is highlighted.
++        let is_cell_col = self
++            .selected_range()
++            .is_some_and(|(_, cols)| cols.contains(&col_ix));
+ 
+         h_flex()
+             .h_full()
+             .child(
+                 self.render_cell(None, col_ix, window, cx)
++                    .when(is_cell_col, |this| this.bg(cx.theme().secondary_active))
+                     .id(("col-header", col_ix))
+                     .test_support()
+                     .on_click(cx.listener(move |this, _, window, cx| {
+@@ -2084,8 +2284,7 @@
+                                 let mut items = Vec::with_capacity(left_columns_count);
+ 
+                                 (0..left_columns_count).for_each(|col_ix| {
+-                                    let is_cell_selected =
+-                                        self.selected_cell() == Some((row_ix, col_ix));
++                                    let is_cell_selected = self.is_cell_in_range(row_ix, col_ix);
+                                     let is_cell_right_clicked =
+                                         self.right_clicked_cell == Some((row_ix, col_ix));
+ 
+@@ -2095,16 +2294,19 @@
+                                                 self.render_cell(Some(row_ix), col_ix, window, cx)
+                                                     .id(format!("table-cell:{}:{}", row_ix, col_ix))
+                                                     .relative()
++                                                    // WDS patch: the delegate's background.
++                                                    .when_some(
++                                                        self.delegate
++                                                            .cell_background(row_ix, col_ix, cx),
++                                                        |this, bg| this.bg(bg),
++                                                    )
+                                                     .child(self.measure_render_td(
+                                                         row_ix, col_ix, window, cx,
+                                                     ))
++                                                    // WDS patch: a background, not an overlay
++                                                    // that would hide the text.
+                                                     .when(is_cell_selected, |this| {
+-                                                        this.child(
+-                                                            div()
+-                                                                .absolute()
+-                                                                .inset_0()
+-                                                                .bg(cx.theme().tokens.table_active),
+-                                                        )
++                                                        this.bg(cx.theme().tokens.table_active)
+                                                     })
+                                                     .when(
+                                                         is_cell_right_clicked && !is_cell_selected,
+@@ -2131,6 +2333,21 @@
+                                                             },
+                                                         ))
+                                                         .on_mouse_down(
++                                                            MouseButton::Left,
++                                                            cx.listener(move |table, e, _, cx| {
++                                                                table.on_cell_mouse_down(
++                                                                    e, row_ix, col_ix, cx,
++                                                                );
++                                                            }),
++                                                        )
++                                                        .on_mouse_move(cx.listener(
++                                                            move |table, e, _, cx| {
++                                                                table.on_cell_mouse_move(
++                                                                    e, row_ix, col_ix, cx,
++                                                                );
++                                                            },
++                                                        ))
++                                                        .on_mouse_down(
+                                                             MouseButton::Right,
+                                                             cx.listener(
+                                                                 move |table, e, window, cx| {
+@@ -2191,7 +2408,7 @@
+                                         visible_range.for_each(|col_ix| {
+                                             let col_ix = col_ix + left_columns_count;
+                                             let is_cell_selected =
+-                                                table.selected_cell() == Some((row_ix, col_ix));
++                                                table.is_cell_in_range(row_ix, col_ix);
+                                             let is_cell_right_clicked =
+                                                 table.right_clicked_cell == Some((row_ix, col_ix));
+ 
+@@ -2210,16 +2427,20 @@
+                                                             row_ix, col_ix
+                                                         ))
+                                                         .relative()
++                                                        // WDS patch: the delegate's background.
++                                                        .when_some(
++                                                            table.delegate.cell_background(
++                                                                row_ix, col_ix, cx,
++                                                            ),
++                                                            |this, bg| this.bg(bg),
++                                                        )
+                                                         .child(table.measure_render_td(
+                                                             row_ix, col_ix, window, cx,
+                                                         ))
++                                                        // WDS patch: a background, not an
++                                                        // overlay that would hide the text.
+                                                         .when(is_cell_selected, |this| {
+-                                                            this.child(
+-                                                                div().absolute().inset_0().bg(cx
+-                                                                    .theme()
+-                                                                    .tokens
+-                                                                    .table_active),
+-                                                            )
++                                                            this.bg(cx.theme().tokens.table_active)
+                                                         })
+                                                         .when(
+                                                             is_cell_right_clicked
+@@ -2249,6 +2470,23 @@
+                                                                 },
+                                                             ))
+                                                             .on_mouse_down(
++                                                                MouseButton::Left,
++                                                                cx.listener(
++                                                                    move |table, e, _, cx| {
++                                                                        table.on_cell_mouse_down(
++                                                                            e, row_ix, col_ix, cx,
++                                                                        );
++                                                                    },
++                                                                ),
++                                                            )
++                                                            .on_mouse_move(cx.listener(
++                                                                move |table, e, _, cx| {
++                                                                    table.on_cell_mouse_move(
++                                                                        e, row_ix, col_ix, cx,
++                                                                    );
++                                                                },
++                                                            ))
++                                                            .on_mouse_down(
+                                                                 MouseButton::Right,
+                                                                 cx.listener(
+                                                                     move |table, e, window, cx| {
+@@ -2326,7 +2564,8 @@
+                     // Render empty row header cell for fake rows
+                     this.child(
+                         div()
+-                            .w(px(40.))
++                            // WDS patch: as wide as the numbered row headers.
++                            .w(self.row_header_width(cx))
+                             .h_full()
+                             .flex_shrink_0()
+                             .table_cell_size(self.options.size),
+@@ -2424,11 +2663,17 @@
+     fn render_horizontal_scrollbar(
+         &mut self,
+         _: &mut Window,
+-        _: &mut Context<Self>,
++        cx: &mut Context<Self>,
+     ) -> impl IntoElement {
++        // WDS patch: after the row numbers too, as the viewport the
++        // scrollbar measures its range by; else it stops short of the end.
++        let row_header = match self.cell_selectable && self.row_header {
++            true => self.row_header_width(cx),
++            false => px(0.),
++        };
+         div()
+             .absolute()
+-            .left(self.fixed_head_cols_bounds.size.width)
++            .left(row_header + self.fixed_head_cols_bounds.size.width)
+             .right_0()
+             .bottom_0()
+             .h(Scrollbar::width())
+@@ -2513,12 +2758,20 @@
+             .context_menu({
+                 let view = cx.entity().clone();
+                 move |this, window: &mut Window, cx: &mut Context<PopupMenu>| {
+-                    if let Some(row_ix) = view.read(cx).right_clicked_row {
+-                        view.update(cx, |menu, cx| {
++                    // WDS patch: a right-clicked cell has its own menu (its
++                    // row's by default), and the menu's actions go to the
++                    // table.
++                    let table = view.read(cx);
++                    let this = this.action_context(table.focus_handle.clone());
++                    match (table.right_clicked_row, table.right_clicked_cell) {
++                        (Some(row_ix), _) => view.update(cx, |menu, cx| {
+                             menu.delegate_mut().context_menu(row_ix, this, window, cx)
+-                        })
+-                    } else {
+-                        this
++                        }),
++                        (None, Some((row_ix, col_ix))) => view.update(cx, |menu, cx| {
++                            menu.delegate_mut()
++                                .cell_context_menu(row_ix, col_ix, this, window, cx)
++                        }),
++                        (None, None) => this,
+                     }
+                 }
+             })
+diff -ruN a/src/tree.rs b/src/tree.rs
+--- a/src/tree.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/tree.rs	2026-11-10 08:48:57.495643280 +0100
+@@ -1,3 +1,8 @@
++// Modified for Water Data Studio (Apache-2.0, section 4b): a context menu
++// builder gets the menu's context, so it can add submenus; the row renderer
++// decides whether a row looks selected, so an app can select several rows.
++// Changes are marked "WDS patch".
++
+ use std::rc::Rc;
+ 
+ use gpui::{
+@@ -23,8 +28,10 @@
+ }
+ 
+ type RenderItem = dyn Fn(usize, &TreeEntry, bool, &mut Window, &mut App) -> ListItem;
++// WDS patch: `Context<PopupMenu>` instead of `Context<TreeState>`; adding a
++// submenu needs the menu's context.
+ type ContextMenuBuilder =
+-    dyn Fn(usize, &TreeEntry, PopupMenu, &mut Window, &mut Context<TreeState>) -> PopupMenu;
++    dyn Fn(usize, &TreeEntry, PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu;
+ 
+ /// A styled tree view that preserves the legacy `gpui-component` API while
+ /// delegating tree behavior and interaction state to `gpui-base`.
+@@ -54,7 +61,8 @@
+     /// Add a context menu to the tree.
+     pub fn context_menu<F>(mut self, f: F) -> Self
+     where
+-        F: Fn(usize, &TreeEntry, PopupMenu, &mut Window, &mut Context<TreeState>) -> PopupMenu
++        // WDS patch: the menu's context, see `ContextMenuBuilder`.
++        F: Fn(usize, &TreeEntry, PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu
+             + 'static,
+     {
+         self.context_menu_builder = Some(Rc::new(f));
+@@ -86,9 +94,10 @@
+                         let id = entry.item().id.clone();
+                         let context_menu_builder = context_menu_builder.clone();
+                         let context_menu_state = state.clone();
++                        // WDS patch: `render_item` gets the selection and
++                        // sets it; it is not overridden here.
+                         let item = render_item(ix, entry, entry_state.is_selected(), window, cx)
+                             .disabled(entry.is_disabled())
+-                            .selected(entry_state.is_selected())
+                             .secondary_selected(entry_state.is_right_clicked());
+ 
+                         div()
+@@ -97,17 +106,18 @@
+                                 let Some(build) = context_menu_builder.as_ref() else {
+                                     return menu;
+                                 };
+-                                context_menu_state.update(cx, |state, cx| {
+-                                    let Some(entry) = state
+-                                        .entry(ix)
+-                                        .filter(|entry| entry.item().id == id)
+-                                        .filter(|entry| !entry.is_disabled())
+-                                        .cloned()
+-                                    else {
+-                                        return menu;
+-                                    };
+-                                    build(ix, &entry, menu, window, cx)
+-                                })
++                                // WDS patch: read the entry, then build in the
++                                // menu's context instead of inside a tree update.
++                                let Some(entry) = context_menu_state
++                                    .read(cx)
++                                    .entry(ix)
++                                    .filter(|entry| entry.item().id == id)
++                                    .filter(|entry| !entry.is_disabled())
++                                    .cloned()
++                                else {
++                                    return menu;
++                                };
++                                build(ix, &entry, menu, window, cx)
+                             })
+                             .into_any_element()
+                     })

@@ -1,0 +1,899 @@
+pub mod archive;
+pub mod command;
+pub mod edit;
+pub mod icons;
+pub mod menu;
+pub mod session;
+pub mod settings;
+pub mod theme;
+pub mod viewer;
+
+use std::cmp::Ordering;
+use std::collections::HashSet;
+use std::ffi::{OsStr, OsString};
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+use crate::session::{SideState, TabState};
+
+pub const PARENT: &str = "..";
+
+#[derive(Clone, Debug)]
+pub struct Entry {
+    /// Not always UTF-8.
+    pub name: OsString,
+    /// Symbolic links to folders are folders.
+    pub is_dir: bool,
+    pub size: u64,
+    pub modified: Option<SystemTime>,
+    /// Dot files on Linux and macOS, the hidden attribute on Windows.
+    pub hidden: bool,
+    /// The system attribute; Windows only.
+    pub system: bool,
+}
+
+/// Which entries a panel lists besides the usual ones.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Filter {
+    pub hidden: bool,
+    pub system: bool,
+}
+
+impl Filter {
+    fn shows(self, entry: &Entry) -> bool {
+        (self.hidden || !entry.hidden) && (self.system || !entry.system)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SortKey {
+    #[default]
+    Name,
+    Extension,
+    Modified,
+    Size,
+    /// As the folder lists them.
+    Unsorted,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Sort {
+    pub key: SortKey,
+    pub descending: bool,
+}
+
+impl Sort {
+    /// Newest and largest first, names A to Z.
+    pub fn by(key: SortKey) -> Self {
+        Self {
+            key,
+            descending: matches!(key, SortKey::Modified | SortKey::Size),
+        }
+    }
+
+    /// `..` first, then folders by name (as Total Commander by default), then files.
+    fn compare(self, a: &Entry, b: &Entry) -> Ordering {
+        let parent = b.is_parent().cmp(&a.is_parent());
+        let dirs = parent.then(b.is_dir.cmp(&a.is_dir));
+        if a.is_dir || b.is_dir {
+            return dirs.then_with(|| by_name(a, b));
+        }
+        let files = match self.key {
+            SortKey::Name => by_name(a, b),
+            SortKey::Extension => extension(a).cmp(&extension(b)).then_with(|| by_name(a, b)),
+            SortKey::Modified => a.modified.cmp(&b.modified).then_with(|| by_name(a, b)),
+            SortKey::Size => a.size.cmp(&b.size).then_with(|| by_name(a, b)),
+            SortKey::Unsorted => Ordering::Equal,
+        };
+        dirs.then(if self.descending {
+            files.reverse()
+        } else {
+            files
+        })
+    }
+}
+
+fn extension(entry: &Entry) -> String {
+    Path::new(&entry.name)
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase())
+        .unwrap_or_default()
+}
+
+impl Entry {
+    pub fn is_parent(&self) -> bool {
+        self.name == PARENT
+    }
+
+    pub fn display_name(&self) -> String {
+        self.name.to_string_lossy().into_owned()
+    }
+
+    pub fn size_text(&self) -> String {
+        if self.is_dir {
+            return "<DIR>".into();
+        }
+        grouped(self.size)
+    }
+
+    pub fn modified_text(&self) -> String {
+        self.modified
+            .map(|time| {
+                chrono::DateTime::<chrono::Local>::from(time)
+                    .format("%Y-%m-%d %H:%M")
+                    .to_string()
+            })
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Clone)]
+pub struct Panel {
+    /// The folder, or the archive `archive` browses.
+    path: PathBuf,
+    archive: Option<Archive>,
+    entries: Vec<Entry>,
+    cursor: usize,
+    /// Moves from a locked tab open a new tab.
+    locked: bool,
+    /// The tab's own name.
+    name: Option<String>,
+    filter: Filter,
+    sort: Sort,
+}
+
+#[derive(Clone)]
+struct Archive {
+    items: Vec<archive::Item>,
+    dir: PathBuf,
+}
+
+impl Panel {
+    pub fn new(path: impl Into<PathBuf>, filter: Filter) -> io::Result<Self> {
+        let mut panel = Self {
+            path: path.into(),
+            archive: None,
+            entries: Vec::new(),
+            cursor: 0,
+            locked: false,
+            name: None,
+            filter,
+            sort: Sort::default(),
+        };
+        panel.reload()?;
+        Ok(panel)
+    }
+
+    /// Where `state` was, or the nearest folder above it that still exists.
+    pub fn restore(state: &TabState, filter: Filter) -> io::Result<Self> {
+        let exact = match &state.archive_dir {
+            Some(dir) => Self::new(state.path.parent().unwrap_or(&state.path), filter).and_then(
+                |mut panel| {
+                    panel.enter_archive(state.path.clone())?;
+                    panel.show_archive_dir(dir.clone(), None);
+                    Ok(panel)
+                },
+            ),
+            None => Self::new(&state.path, filter),
+        };
+        let mut panel = exact.or_else(|err| {
+            let above = state.path.ancestors().skip(1);
+            above
+                .into_iter()
+                .find_map(|dir| Self::new(dir, filter).ok())
+                .ok_or(err)
+        })?;
+        panel.locked = state.locked;
+        panel.name = state.name.clone();
+        Ok(panel)
+    }
+
+    pub fn state(&self) -> TabState {
+        TabState {
+            path: self.path.clone(),
+            archive_dir: self.archive.as_ref().map(|archive| archive.dir.clone()),
+            locked: self.locked,
+            name: self.name.clone(),
+        }
+    }
+
+    pub fn path(&self) -> PathBuf {
+        match &self.archive {
+            Some(archive) => self.path.join(&archive.dir),
+            None => self.path.clone(),
+        }
+    }
+
+    /// The tab's own name, or its folder's.
+    pub fn name(&self) -> String {
+        if let Some(name) = &self.name {
+            return name.clone();
+        }
+        let path = self.path();
+        match path.file_name() {
+            Some(name) => name.to_string_lossy().into_owned(),
+            None => path.display().to_string(),
+        }
+    }
+
+    /// As its tab shows it; locked tabs start with `*`.
+    pub fn title(&self) -> String {
+        match self.locked {
+            true => format!("*{}", self.name()),
+            false => self.name(),
+        }
+    }
+
+    pub fn is_locked(&self) -> bool {
+        self.locked
+    }
+
+    pub fn entries(&self) -> &[Entry] {
+        &self.entries
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    pub fn move_cursor(&mut self, rows: isize) {
+        self.set_cursor(self.cursor.saturating_add_signed(rows));
+    }
+
+    pub fn set_cursor(&mut self, ix: usize) {
+        self.cursor = ix.min(self.entries.len().saturating_sub(1));
+    }
+
+    /// False on a file that is no archive.
+    pub fn open(&mut self) -> io::Result<bool> {
+        let Some(entry) = self.entries.get(self.cursor) else {
+            return Ok(false);
+        };
+        let (name, is_dir) = (entry.name.clone(), entry.is_dir);
+        if entry.is_parent() {
+            self.up()?;
+        } else if let Some(archive) = &self.archive {
+            if !is_dir {
+                return Ok(false);
+            }
+            self.show_archive_dir(archive.dir.join(name), None);
+        } else if is_dir {
+            self.go_to(self.path.join(name), None)?;
+        } else if archive::is_archive(&name) {
+            self.enter_archive(self.path.join(name))?;
+        } else {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    /// Cursor lands on the folder or archive it leaves.
+    pub fn up(&mut self) -> io::Result<()> {
+        if let Some(archive) = &self.archive
+            && let Some(parent) = archive.dir.parent()
+        {
+            let left = archive.dir.file_name().map(OsString::from);
+            self.show_archive_dir(parent.to_owned(), left);
+            return Ok(());
+        }
+        let Some(parent) = self.path.parent() else {
+            return Ok(());
+        };
+        let left = self.path.file_name().map(OsString::from);
+        self.go_to(parent.to_owned(), left)
+    }
+
+    /// Reads the folder or archive again; the cursor stays on its entry.
+    pub fn reload(&mut self) -> io::Result<()> {
+        let select = self.entries.get(self.cursor).map(|e| e.name.clone());
+        let Some(archive) = &self.archive else {
+            return self.go_to(self.path.clone(), select);
+        };
+        let dir = archive.dir.clone();
+        let items = archive::list(&self.path)?;
+        self.archive = Some(Archive {
+            items,
+            dir: PathBuf::new(),
+        });
+        self.show_archive_dir(dir, select);
+        Ok(())
+    }
+
+    fn enter_archive(&mut self, path: PathBuf) -> io::Result<()> {
+        // shortcut: lists on the UI thread; move to the background if big archives freeze it.
+        let items = archive::list(&path)?;
+        self.path = path;
+        self.archive = Some(Archive {
+            items,
+            dir: PathBuf::new(),
+        });
+        self.show_archive_dir(PathBuf::new(), None);
+        Ok(())
+    }
+
+    // Read first: a failed move leaves the panel as it was.
+    pub fn sort(&self) -> Sort {
+        self.sort
+    }
+
+    /// The cursor stays on its entry.
+    pub fn set_sort(&mut self, sort: Sort) {
+        self.sort = sort;
+        let select = self.current_entry().map(|e| e.name.clone());
+        let entries = std::mem::take(&mut self.entries);
+        self.show(entries, select);
+    }
+
+    pub fn in_archive(&self) -> bool {
+        self.archive.is_some()
+    }
+
+    pub fn current_entry(&self) -> Option<&Entry> {
+        self.entries.get(self.cursor)
+    }
+
+    /// `name` may be a path; the cursor goes to its first folder here.
+    pub fn new_folder(&mut self, name: &str) -> io::Result<()> {
+        self.on_disk()?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "no name given"));
+        }
+        let target = self.path.join(name);
+        if target.exists() {
+            let err = format!("{name} exists already");
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, err));
+        }
+        fs::create_dir_all(&target)?;
+        let first = Path::new(name)
+            .components()
+            .next()
+            .map(|c| c.as_os_str().to_owned());
+        self.go_to(self.path.clone(), first)
+    }
+
+    /// The entry under the cursor, to the trash or for good.
+    pub fn delete(&mut self, to_trash: bool) -> io::Result<()> {
+        self.on_disk()?;
+        let Some(entry) = self.current_entry().filter(|e| !e.is_parent()) else {
+            return Ok(());
+        };
+        let path = self.path.join(&entry.name);
+        if to_trash {
+            trash::delete(&path).map_err(io::Error::other)?;
+        } else if fs::symlink_metadata(&path)?.is_dir() {
+            fs::remove_dir_all(&path)?;
+        } else {
+            // A link goes, never what it points to.
+            fs::remove_file(&path)?;
+        }
+        let cursor = self.cursor;
+        self.go_to(self.path.clone(), None)?;
+        self.set_cursor(cursor);
+        Ok(())
+    }
+
+    // shortcut: files change only on disk; add archive updates (7-Zip `a`, `d`) when needed.
+    fn on_disk(&self) -> io::Result<()> {
+        match self.archive {
+            Some(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "not inside archives yet",
+            )),
+            None => Ok(()),
+        }
+    }
+
+    pub fn go_to_folder(&mut self, path: PathBuf) -> io::Result<()> {
+        self.go_to(path, None)
+    }
+
+    /// The folder on disk: inside an archive, the archive's.
+    pub fn folder(&self) -> &Path {
+        match self.archive {
+            Some(_) => self.path.parent().unwrap_or(&self.path),
+            None => &self.path,
+        }
+    }
+
+    /// As Total Commander's status bar: selected / all.
+    pub fn status_text(&self) -> String {
+        let listed = self.entries.iter().filter(|e| !e.is_parent());
+        let (dirs, files): (Vec<&Entry>, Vec<&Entry>) = listed.partition(|e| e.is_dir);
+        let bytes: u64 = files.iter().map(|e| e.size).sum();
+        // shortcut: nothing is selected until marking exists.
+        format!(
+            "0 k / {} k in 0 / {} file(s), 0 / {} dir(s)",
+            grouped(bytes / 1024),
+            files.len(),
+            dirs.len()
+        )
+    }
+
+    fn go_to(&mut self, path: PathBuf, select: Option<OsString>) -> io::Result<()> {
+        let entries = read_dir(&path)?;
+        self.archive = None;
+        self.path = path;
+        self.show(entries, select);
+        Ok(())
+    }
+
+    fn show_archive_dir(&mut self, dir: PathBuf, select: Option<OsString>) {
+        let archive = self.archive.as_mut().expect("in an archive");
+        let entries = archive::entries(&archive.items, &dir);
+        archive.dir = dir;
+        self.show(entries, select);
+    }
+
+    fn show(&mut self, mut entries: Vec<Entry>, select: Option<OsString>) {
+        entries.retain(|entry| self.filter.shows(entry));
+        entries.sort_by(|a, b| self.sort.compare(a, b));
+        self.cursor = select
+            .and_then(|name| entries.iter().position(|e| e.name == name))
+            .unwrap_or(0);
+        self.entries = entries;
+    }
+
+    /// Neither locked nor named.
+    fn plain_copy(&self) -> Self {
+        Self {
+            locked: false,
+            name: None,
+            ..self.clone()
+        }
+    }
+}
+
+const CLOSED_TABS: usize = 10;
+
+/// A side's folder tabs; there is always one.
+pub struct Tabs {
+    panels: Vec<Panel>,
+    active: usize,
+    /// Most recent first.
+    closed: Vec<Panel>,
+}
+
+impl Tabs {
+    pub fn new(panel: Panel) -> Self {
+        Self {
+            panels: vec![panel],
+            active: 0,
+            closed: Vec::new(),
+        }
+    }
+
+    /// Tabs that cannot be opened any more are left out; with none, `fallback`.
+    pub fn restore(state: &SideState, filter: Filter, fallback: impl FnOnce() -> Panel) -> Self {
+        let mut panels: Vec<Panel> = state
+            .tabs
+            .iter()
+            .filter_map(|tab| Panel::restore(tab, filter).ok())
+            .collect();
+        if panels.is_empty() {
+            panels.push(fallback());
+        }
+        Self {
+            active: state.active.min(panels.len() - 1),
+            panels,
+            closed: Vec::new(),
+        }
+    }
+
+    pub fn state(&self) -> SideState {
+        SideState {
+            tabs: self.panels.iter().map(Panel::state).collect(),
+            active: self.active,
+        }
+    }
+
+    pub fn panels(&self) -> &[Panel] {
+        &self.panels
+    }
+
+    pub fn active(&self) -> usize {
+        self.active
+    }
+
+    pub fn current(&self) -> &Panel {
+        &self.panels[self.active]
+    }
+
+    pub fn current_mut(&mut self) -> &mut Panel {
+        &mut self.panels[self.active]
+    }
+
+    pub fn closed(&self) -> &[Panel] {
+        &self.closed
+    }
+
+    pub fn duplicate(&mut self) {
+        let copy = self.current().plain_copy();
+        self.add(copy);
+    }
+
+    /// A new last tab, which becomes current.
+    pub fn add(&mut self, panel: Panel) {
+        self.panels.push(panel);
+        self.active = self.panels.len() - 1;
+    }
+
+    pub fn select(&mut self, ix: usize) {
+        if ix < self.panels.len() {
+            self.active = ix;
+        }
+    }
+
+    /// Moves in the current tab; from a locked tab the move opens a new tab.
+    pub fn navigate(&mut self, go: impl FnOnce(&mut Panel) -> io::Result<()>) -> io::Result<()> {
+        if !self.current().locked {
+            return go(self.current_mut());
+        }
+        let mut moved = self.current().plain_copy();
+        go(&mut moved)?;
+        if moved.path() != self.current().path() {
+            self.add(moved);
+        }
+        Ok(())
+    }
+
+    /// Tabs showing `folder` read it again.
+    pub fn reload_folder(&mut self, folder: &Path) {
+        for panel in &mut self.panels {
+            if panel.archive.is_none() && panel.path == folder {
+                // shortcut: a tab that cannot read its folder keeps its old list.
+                let _ = panel.reload();
+            }
+        }
+    }
+
+    /// Every tab, closed ones too, lists again by `filter`.
+    pub fn set_filter(&mut self, filter: Filter) {
+        for panel in self.panels.iter_mut().chain(&mut self.closed) {
+            panel.filter = filter;
+            // shortcut: a tab whose folder is gone keeps its old list until it moves.
+            let _ = panel.reload();
+        }
+    }
+
+    pub fn toggle_lock(&mut self) {
+        let panel = self.current_mut();
+        panel.locked = !panel.locked;
+    }
+
+    /// An empty name gives the tab its folder's name again.
+    pub fn rename(&mut self, ix: usize, name: &str) {
+        if let Some(panel) = self.panels.get_mut(ix) {
+            let name = name.trim();
+            panel.name = (!name.is_empty()).then(|| name.to_owned());
+        }
+    }
+
+    /// The last tab stays.
+    pub fn close(&mut self) {
+        if self.panels.len() > 1 {
+            let panel = self.panels.remove(self.active);
+            self.remember(panel);
+            self.active = self.active.min(self.panels.len() - 1);
+        }
+    }
+
+    /// All but the current and the locked tabs.
+    pub fn close_all(&mut self) {
+        self.close_where(|panel| !panel.locked);
+    }
+
+    /// Tabs on a folder that a kept tab shows too; current and locked tabs stay.
+    pub fn close_duplicates(&mut self) {
+        let mut shown: HashSet<PathBuf> = self
+            .panels
+            .iter()
+            .enumerate()
+            .filter(|(ix, panel)| *ix == self.active || panel.locked)
+            .map(|(_, panel)| panel.path())
+            .collect();
+        self.close_where(|panel| !panel.locked && !shown.insert(panel.path()));
+    }
+
+    /// In tab order; never the current tab.
+    fn close_where(&mut self, mut close: impl FnMut(&Panel) -> bool) {
+        let mut closed = Vec::new();
+        let active = self.active;
+        for (ix, panel) in std::mem::take(&mut self.panels).into_iter().enumerate() {
+            if ix != active && close(&panel) {
+                closed.push(panel);
+            } else {
+                if ix == active {
+                    self.active = self.panels.len();
+                }
+                self.panels.push(panel);
+            }
+        }
+        for panel in closed {
+            self.remember(panel);
+        }
+    }
+
+    fn remember(&mut self, panel: Panel) {
+        self.closed.insert(0, panel);
+        self.closed.truncate(CLOSED_TABS);
+    }
+
+    /// A recently closed tab again, its folder read anew.
+    pub fn reopen(&mut self, ix: usize) -> io::Result<()> {
+        if ix < self.closed.len() {
+            let mut panel = self.closed.remove(ix);
+            panel.reload()?;
+            self.add(panel);
+        }
+        Ok(())
+    }
+}
+
+/// Unsorted, `..` first but in the root.
+fn read_dir(path: &Path) -> io::Result<Vec<Entry>> {
+    let mut entries: Vec<Entry> = fs::read_dir(path)?
+        // Skip unreadable entries, not the whole folder.
+        .filter_map(Result::ok)
+        .map(|item| {
+            // Follow links; a broken link stays itself.
+            let meta = fs::metadata(item.path()).or_else(|_| item.metadata()).ok();
+            let name = item.file_name();
+            let (hidden, system) = attributes(&name, meta.as_ref());
+            Entry {
+                name,
+                is_dir: meta.as_ref().is_some_and(fs::Metadata::is_dir),
+                size: meta.as_ref().map_or(0, fs::Metadata::len),
+                modified: meta.and_then(|m| m.modified().ok()),
+                hidden,
+                system,
+            }
+        })
+        .collect();
+    if path.parent().is_some() {
+        let modified = fs::metadata(path.join(PARENT))
+            .and_then(|m| m.modified())
+            .ok();
+        entries.insert(0, parent_entry(modified));
+    }
+    Ok(entries)
+}
+
+/// Thousands apart: `1 234 567`.
+pub fn grouped(number: u64) -> String {
+    let digits = number.to_string();
+    let mut text = String::new();
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            text.push(' ');
+        }
+        text.push(digit);
+    }
+    text
+}
+
+fn parent_entry(modified: Option<SystemTime>) -> Entry {
+    Entry {
+        name: PARENT.into(),
+        is_dir: true,
+        size: 0,
+        modified,
+        hidden: false,
+        system: false,
+    }
+}
+
+/// Hidden and system.
+#[cfg(windows)]
+fn attributes(_: &OsStr, meta: Option<&fs::Metadata>) -> (bool, bool) {
+    use std::os::windows::fs::MetadataExt;
+    const HIDDEN: u32 = 0x2;
+    const SYSTEM: u32 = 0x4;
+    let attributes = meta.map_or(0, MetadataExt::file_attributes);
+    (attributes & HIDDEN != 0, attributes & SYSTEM != 0)
+}
+
+/// Hidden and system.
+#[cfg(not(windows))]
+fn attributes(name: &OsStr, _: Option<&fs::Metadata>) -> (bool, bool) {
+    (dot_file(name), false)
+}
+
+pub(crate) fn dot_file(name: &OsStr) -> bool {
+    cfg!(not(windows)) && name.as_encoded_bytes().first() == Some(&b'.')
+}
+
+fn by_name(a: &Entry, b: &Entry) -> Ordering {
+    let key = |e: &Entry| e.name.to_string_lossy().to_lowercase();
+    key(a).cmp(&key(b)).then_with(|| a.name.cmp(&b.name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn navigates() {
+        let root = std::env::temp_dir().join(format!("pc-core-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("b-dir/inner")).unwrap();
+        fs::create_dir(root.join("A-dir")).unwrap();
+        fs::write(root.join("a-file"), "12345").unwrap();
+
+        let mut panel = Panel::new(&root, Filter::default()).unwrap();
+        let names: Vec<_> = panel.entries().iter().map(Entry::display_name).collect();
+        assert_eq!(names, ["..", "A-dir", "b-dir", "a-file"]);
+        assert_eq!(panel.entries()[3].size_text(), "5");
+        assert_eq!(
+            panel.status_text(),
+            "0 k / 0 k in 0 / 1 file(s), 0 / 2 dir(s)"
+        );
+
+        panel.set_cursor(99);
+        assert_eq!(panel.cursor(), 3);
+        assert!(!panel.open().unwrap(), "a file is not entered");
+
+        panel.move_cursor(-1);
+        assert!(panel.open().unwrap());
+        assert_eq!(panel.path(), root.join("b-dir"));
+
+        panel.set_cursor(0);
+        assert!(panel.open().unwrap(), "`..` goes up");
+        assert_eq!(panel.path(), root);
+        assert_eq!(panel.cursor(), 2, "on the folder it left");
+
+        fs::remove_dir_all(&root).unwrap();
+        panel.move_cursor(-1);
+        assert!(panel.open().is_err());
+        assert_eq!(panel.path(), root, "stays where it was");
+    }
+
+    #[test]
+    fn opens_tabs() {
+        let mut tabs = Tabs::new(Panel::new("/", Filter::default()).unwrap());
+        assert_eq!(tabs.current().title(), "/");
+        tabs.current_mut().set_cursor(1);
+        tabs.duplicate();
+        assert_eq!((tabs.panels().len(), tabs.active()), (2, 1));
+        assert_eq!(tabs.current().cursor(), 1, "a copy of the current tab");
+        tabs.current_mut().open().unwrap();
+        assert_ne!(tabs.current().path(), tabs.panels()[0].path());
+        tabs.select(5);
+        assert_eq!(tabs.active(), 1);
+        tabs.select(0);
+        assert_eq!(tabs.current().path(), Path::new("/"));
+    }
+
+    #[test]
+    fn locks_and_closes_tabs() {
+        let root = std::env::temp_dir().join(format!("pc-tabs-test-{}", std::process::id()));
+        fs::create_dir_all(root.join("sub")).unwrap();
+        let mut tabs = Tabs::new(Panel::new(&root, Filter::default()).unwrap());
+        tabs.toggle_lock();
+        assert!(tabs.current().title().starts_with("*pc-tabs-test-"));
+        tabs.current_mut().set_cursor(1);
+        tabs.navigate(|panel| panel.open().map(drop)).unwrap();
+        assert_eq!(
+            (tabs.panels().len(), tabs.active()),
+            (2, 1),
+            "moved in a new tab"
+        );
+        assert_eq!(tabs.panels()[0].path(), root, "the locked tab stayed");
+        assert_eq!(tabs.current().path(), root.join("sub"));
+        assert!(!tabs.current().is_locked());
+
+        tabs.duplicate();
+        tabs.duplicate();
+        tabs.select(2);
+        tabs.close_all();
+        assert_eq!(
+            (tabs.panels().len(), tabs.active()),
+            (2, 1),
+            "the locked and the current"
+        );
+        tabs.close();
+        tabs.close();
+        assert_eq!(tabs.panels().len(), 1, "the last stays");
+        assert!(tabs.current().is_locked());
+
+        assert_eq!(tabs.closed().len(), 3, "the closed tabs, most recent first");
+        tabs.reopen(0).unwrap();
+        assert_eq!((tabs.panels().len(), tabs.active()), (2, 1));
+        tabs.duplicate();
+        tabs.select(0);
+        tabs.close_duplicates();
+        assert_eq!(tabs.panels().len(), 2, "one of the two on the same folder");
+
+        tabs.rename(0, " Work ");
+        assert_eq!(tabs.panels()[0].title(), "*Work");
+        let restored = Tabs::restore(&tabs.state(), Filter::default(), || unreachable!());
+        assert_eq!(restored.panels()[0].title(), "*Work");
+        assert_eq!(restored.panels()[1].path(), tabs.panels()[1].path());
+        tabs.rename(0, "");
+        assert!(tabs.panels()[0].title().starts_with("*pc-tabs-test-"));
+
+        fs::remove_dir_all(root.join("sub")).unwrap();
+        let gone = Tabs::restore(&tabs.state(), Filter::default(), || unreachable!());
+        assert_eq!(gone.panels()[1].path(), root, "the nearest folder left");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn hides_dot_files() {
+        let root = std::env::temp_dir().join(format!("pc-filter-test-{}", std::process::id()));
+        fs::create_dir_all(root.join(".hidden-dir")).unwrap();
+        fs::write(root.join("shown"), "").unwrap();
+        let mut tabs = Tabs::new(Panel::new(&root, Filter::default()).unwrap());
+        let names = |tabs: &Tabs| -> Vec<String> {
+            tabs.current()
+                .entries()
+                .iter()
+                .map(Entry::display_name)
+                .collect()
+        };
+        assert_eq!(names(&tabs), ["..", "shown"]);
+        tabs.set_filter(Filter {
+            hidden: true,
+            system: false,
+        });
+        assert_eq!(names(&tabs), ["..", ".hidden-dir", "shown"]);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn sorts_creates_and_deletes() {
+        let root = std::env::temp_dir().join(format!("pc-files-test-{}", std::process::id()));
+        fs::create_dir_all(root.join("z-dir")).unwrap();
+        fs::write(root.join("b.txt"), "12345").unwrap();
+        fs::write(root.join("a.rs"), "1").unwrap();
+        let mut panel = Panel::new(&root, Filter::default()).unwrap();
+        let names = |panel: &Panel| -> Vec<String> {
+            panel.entries().iter().map(Entry::display_name).collect()
+        };
+        assert_eq!(names(&panel), ["..", "z-dir", "a.rs", "b.txt"]);
+        panel.set_cursor(2);
+        panel.set_sort(Sort::by(SortKey::Size));
+        assert_eq!(
+            names(&panel),
+            ["..", "z-dir", "b.txt", "a.rs"],
+            "largest first"
+        );
+        assert_eq!(
+            panel.current_entry().unwrap().display_name(),
+            "a.rs",
+            "cursor kept"
+        );
+        panel.set_sort(Sort {
+            key: SortKey::Extension,
+            descending: true,
+        });
+        assert_eq!(names(&panel), ["..", "z-dir", "b.txt", "a.rs"]);
+
+        panel.new_folder("new/inner").unwrap();
+        assert_eq!(panel.current_entry().unwrap().display_name(), "new");
+        assert!(root.join("new/inner").is_dir());
+        assert!(panel.new_folder("new").is_err(), "exists already");
+        panel.delete(false).unwrap();
+        assert!(!root.join("new").exists());
+        assert_eq!(names(&panel), ["..", "z-dir", "b.txt", "a.rs"]);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn separates_thousands() {
+        let entry = |size| Entry {
+            name: "f".into(),
+            is_dir: false,
+            size,
+            modified: None,
+            hidden: false,
+            system: false,
+        };
+        assert_eq!(entry(1234567).size_text(), "1 234 567");
+        assert_eq!(entry(123456).size_text(), "123 456");
+        assert_eq!(entry(0).size_text(), "0");
+    }
+}
