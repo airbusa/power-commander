@@ -802,6 +802,42 @@ mod tests {
         );
         assert!(ftp.metadata(&dir.join("up")).is_err(), "moved away");
 
+        // An archive on the server: browsed from a copy, `..` back on the server.
+        std::fs::create_dir_all(local.join("pack/inner")).unwrap();
+        std::fs::write(local.join("pack/inner/x.txt"), "x").unwrap();
+        let status =
+            crate::archive::seven_zip(&["a", "-bso0", "-tzip"], Some(&local.join("p.zip")))
+                .arg("inner")
+                .current_dir(local.join("pack"))
+                .status()
+                .unwrap();
+        assert!(status.success());
+        crate::vfs::upload(&local.join("p.zip"), &*ftp, &dir.join("p.zip")).unwrap();
+        let mut panel = crate::Panel::new(&local, crate::Filter::default()).unwrap();
+        panel.go_remote(ftp.clone(), dir.clone()).unwrap();
+        let at = |panel: &crate::Panel, name: &str| {
+            panel
+                .entries()
+                .iter()
+                .position(|e| e.display_name() == name)
+                .unwrap()
+        };
+        panel.set_cursor(at(&panel, "p.zip"));
+        assert!(panel.open().unwrap());
+        assert!(
+            panel.location().starts_with(&ftp.url()) && panel.location().ends_with("p.zip"),
+            "{}",
+            panel.location()
+        );
+        assert_eq!(panel.folder(), dir, "the server's folder");
+        assert!(panel.archive_origin().is_some());
+        panel.up().unwrap();
+        assert_eq!(
+            (panel.path(), panel.current_entry().unwrap().display_name()),
+            (dir.clone(), "p.zip".into())
+        );
+        ftp.remove(&dir.join("p.zip"), false).unwrap();
+
         crate::vfs::create_all(&*ftp, &dir.join("a/b")).unwrap();
         ftp.rename(&dir.join("a"), &dir.join("c")).unwrap();
         crate::vfs::remove_all(&*ftp, &dir.join("c")).unwrap();

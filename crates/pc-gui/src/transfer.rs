@@ -4,10 +4,12 @@
 use std::collections::HashSet;
 use std::path::{MAIN_SEPARATOR, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::progress::Progress as Bar;
 use gpui_kit::component::radio::RadioGroup;
 use gpui_kit::component::{ActiveTheme, IconName, Sizable, WindowExt, h_flex, v_flex};
@@ -15,7 +17,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::Panel;
 use pc_core::ops::{Answer, JobView, Kind, Operation, Overwrite, Question, Queue, Status, Target};
-use pc_core::vfs::Meta;
+use pc_core::vfs::{Fs, Local, Meta};
 
 use crate::Commander;
 
@@ -46,12 +48,10 @@ impl Commander {
         let side = self.active;
         let source = self.panels[side].tabs.current();
         let other = self.panels[1 - side].tabs.current();
-        if source.in_archive() || other.in_archive() {
-            let text = "Copying from or into archives is not possible yet.";
-            return window.push_notification(
-                gpui_kit::component::notification::Notification::warning(text),
-                cx,
-            );
+        if other.in_archive() || source.in_archive() && kind == Kind::Move {
+            let text =
+                "Copying into archives and moving out of them are not possible yet; F5 copies out.";
+            return window.push_notification(Notification::warning(text), cx);
         }
         let chosen = source.chosen();
         let folder = source.folder().to_owned();
@@ -72,7 +72,12 @@ impl Commander {
             Kind::Copy => "Copy",
             Kind::Move => "Move",
         };
-        let (from, to) = (source.fs(), other.fs());
+        // Out of an archive: taken out first, then copied from there.
+        let archived = source.in_archive().then(|| source.clone());
+        let (from, to): (Arc<dyn Fs>, _) = match archived {
+            Some(_) => (Arc::new(Local), other.fs()),
+            None => (source.fs(), other.fs()),
+        };
         let server = other.remote().map(|remote| remote.url());
         let label = match &server {
             Some(url) => format!("{verb} {what} to {url}:"),
@@ -85,7 +90,7 @@ impl Commander {
             target,
             window,
             cx,
-            move |text, overwrite, _, cx| {
+            move |text, overwrite, window, cx| {
                 let _ = commander.update(cx, |this, cx| {
                     // The server's own address typed: its path.
                     let text = server
@@ -93,14 +98,40 @@ impl Commander {
                         .and_then(|url| text.strip_prefix(url))
                         .unwrap_or(&text);
                     let target = Target::parse(text, &folder, sources.len(), &*to);
-                    this.transfers.queue.push(Operation {
-                        kind,
-                        from: from.clone(),
-                        sources: sources.clone(),
-                        to: to.clone(),
-                        target,
-                        overwrite,
-                    });
+                    let (from, to) = (from.clone(), to.clone());
+                    let queue = this.transfers.queue.clone();
+                    let push = move |sources| {
+                        queue.push(Operation {
+                            kind,
+                            from,
+                            sources,
+                            to,
+                            target,
+                            overwrite,
+                        })
+                    };
+                    match archived.clone() {
+                        None => drop(push(sources.clone())),
+                        Some(panel) => {
+                            cx.spawn_in(window, async move |_, cx| {
+                                let taken = cx
+                                    .background_executor()
+                                    .spawn(async move { panel.extract_chosen() })
+                                    .await;
+                                match taken {
+                                    Ok(sources) => drop(push(sources)),
+                                    Err(err) => {
+                                        let text = format!("Could not take them out: {err}");
+                                        let note = Notification::error(text).autohide(false);
+                                        let _ = cx.update(|window, cx| {
+                                            window.push_notification(note, cx)
+                                        });
+                                    }
+                                }
+                            })
+                            .detach();
+                        }
+                    }
                     // Queued: the marks have done their work.
                     this.panels[side].tabs.current_mut().mark_all(false);
                     cx.notify();

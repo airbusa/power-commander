@@ -29,19 +29,33 @@ pub(crate) struct Item {
     pub entry: Entry,
 }
 
-/// A file inside an archive, to take out for F3.
+/// A file inside an archive, to take out for F3 and F4.
 pub struct Member {
     pub archive: PathBuf,
     pub listed: String,
     pub name: OsString,
+    /// Its path inside the archive.
+    pub inside: PathBuf,
 }
 
 impl Member {
     /// Extracts the file into a folder of its own under `scratch()`.
     pub fn extract(&self) -> io::Result<PathBuf> {
         let dir = fresh_scratch()?;
-        extract(&self.archive, &self.listed, &dir)?;
-        let path = dir.join(&self.name);
+        extract(&self.archive, &[&self.listed], &dir, false)?;
+        self.found(dir.join(&self.name))
+    }
+
+    /// Extracts it with its folders, as `update` takes it back: the
+    /// folder it went to, and the file.
+    pub fn extract_with_folders(&self) -> io::Result<(PathBuf, PathBuf)> {
+        let dir = fresh_scratch()?;
+        extract(&self.archive, &[&self.listed], &dir, true)?;
+        let file = self.found(dir.join(&self.inside))?;
+        Ok((dir, file))
+    }
+
+    fn found(&self, path: PathBuf) -> io::Result<PathBuf> {
         match path.exists() {
             true => Ok(path),
             false => Err(io::Error::other(format!(
@@ -50,7 +64,42 @@ impl Member {
             ))),
         }
     }
+
+    /// Whether 7-Zip can write the archive back.
+    pub fn updatable(&self) -> bool {
+        let name = self.archive.file_name().unwrap_or_default();
+        extension(name).is_some_and(|ext| UPDATABLE.contains(&ext.as_str()))
+    }
+
+    /// Puts the file back from `dir`, where `extract_with_folders` took it.
+    // shortcut: a tar listing `./a.txt` gets `a.txt` beside it; strip such prefixes if it matters.
+    pub fn update(&self, dir: &Path) -> io::Result<()> {
+        let name = self
+            .archive
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
+        // Files named are always taken; all else stays as it is.
+        let output = seven_zip(
+            &["u", "-spd", "-bso0", "-bsp0", "-up1q1r2x2y2z2w2"],
+            Some(&self.archive),
+        )
+        .arg(&self.inside)
+        .current_dir(dir)
+        .output()
+        .map_err(missing)?;
+        match output.status.success() {
+            true => Ok(()),
+            false => Err(io::Error::other(format!(
+                "{name}: {}",
+                failure(output.status, &output.stderr)
+            ))),
+        }
+    }
 }
+
+/// What 7-Zip can update in place; compressed tars it cannot.
+const UPDATABLE: &[&str] = &["7z", "zip", "tar", "jar"];
 
 /// Where files taken out of archives go while the app runs.
 pub fn scratch() -> PathBuf {
@@ -120,8 +169,14 @@ fn remove_stale(temp: &Path, ours: &Path) {
     }
 }
 
-/// `listed` out of `archive` into `dir`, without its folders.
-fn extract(archive: &Path, listed: &str, dir: &Path) -> io::Result<()> {
+/// `listed` out of `archive` into `dir`, with their folders or without.
+/// A folder named comes with all in it.
+pub(crate) fn extract(
+    archive: &Path,
+    listed: &[&str],
+    dir: &Path,
+    folders: bool,
+) -> io::Result<()> {
     let name = archive.file_name().unwrap_or_default().to_string_lossy();
     let fail = |err: String| io::Error::other(format!("{name}: {err}"));
     let out = dir
@@ -129,7 +184,8 @@ fn extract(archive: &Path, listed: &str, dir: &Path) -> io::Result<()> {
         .ok_or_else(|| fail("the temporary folder's name is not UTF-8".into()))?;
     let out = format!("-o{out}");
     // -spd: a name with `*` or `[` is no wildcard.
-    let take = ["e", "-y", "-spd", "-bso0", "-bsp0", out.as_str()];
+    let command = if folders { "x" } else { "e" };
+    let take = [command, "-y", "-spd", "-bso0", "-bsp0", out.as_str()];
     let output = if is_compressed_tar(archive) {
         let mut unpack = seven_zip(&["x", "-so"], Some(archive))
             .stdout(Stdio::piped())
@@ -138,7 +194,7 @@ fn extract(archive: &Path, listed: &str, dir: &Path) -> io::Result<()> {
             .map_err(missing)?;
         let stdout = unpack.stdout.take().expect("piped");
         let extracted = seven_zip(&[&take[..], &["-si", "-ttar"]].concat(), None)
-            .arg(listed)
+            .args(listed)
             .stdin(stdout)
             .output()
             .map_err(missing)?;
@@ -149,7 +205,7 @@ fn extract(archive: &Path, listed: &str, dir: &Path) -> io::Result<()> {
         extracted
     } else {
         seven_zip(&take, Some(archive))
-            .arg(listed)
+            .args(listed)
             .output()
             .map_err(missing)?
     };
@@ -467,6 +523,37 @@ pub(crate) mod tests {
             panel.up().unwrap();
             assert_eq!(panel.path(), root, "out of the archive");
             assert_eq!(panel.entries()[panel.cursor()].display_name(), archive);
+        }
+
+        // F5 out of it: a folder with all in it; F4 in it: back into the archive.
+        for archive in ["-t.zip", "t.tar.gz"] {
+            panel.set_cursor(at(&panel, archive));
+            panel.open().unwrap();
+            panel.set_cursor(1);
+            panel.open().unwrap();
+            panel.set_cursor(at(&panel, "sub"));
+            let taken = panel.extract_chosen().unwrap();
+            assert!(taken[0].ends_with("src/sub"), "{taken:?}");
+            assert_eq!(fs::read_dir(&taken[0]).unwrap().count(), 3);
+            panel.set_cursor(at(&panel, "a.txt"));
+            let member = panel.archive_member().unwrap();
+            assert_eq!(member.updatable(), archive == "-t.zip");
+            if member.updatable() {
+                let (dir, file) = member.extract_with_folders().unwrap();
+                assert_eq!(file, dir.join("src/a.txt"));
+                fs::write(&file, "edited").unwrap();
+                member.update(&dir).unwrap();
+                panel.reload().unwrap();
+                let again = panel.archive_member().unwrap().extract().unwrap();
+                assert_eq!(fs::read_to_string(again).unwrap(), "edited");
+                assert_eq!(
+                    names(panel.entries()),
+                    ["..", "sub", "a.txt"],
+                    "nothing added"
+                );
+            }
+            panel.up().unwrap();
+            panel.up().unwrap();
         }
 
         panel.set_cursor(at(&panel, "bad.zip"));

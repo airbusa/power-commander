@@ -17,6 +17,7 @@ mod viewer;
 use std::borrow::Cow;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -33,7 +34,7 @@ use pc_core::remote::Address;
 use pc_core::session::Session;
 use pc_core::settings::{self, Settings};
 use pc_core::theme::{self, Theme};
-use pc_core::{Panel, Sort, SortKey, Tabs, archive, edit, icons, ops};
+use pc_core::{Panel, Sort, SortKey, Tabs, archive, edit, icons, ops, vfs};
 
 use crate::appearance::PanelColors;
 use crate::menus::{ReopenTab, Run, SelectTab, SetTheme};
@@ -376,11 +377,10 @@ impl Commander {
             return;
         };
         if panel.in_archive() {
-            if edit {
-                let text = "Files inside archives cannot be edited yet.";
-                return window.push_notification(Notification::warning(text), cx);
-            }
-            return self.view_in_archive(window, cx);
+            return match edit {
+                true => self.edit_in_archive(remote::Open::Edit, window, cx),
+                false => self.view_in_archive(window, cx),
+            };
         }
         if panel.remote().is_some() {
             let how = if edit {
@@ -414,8 +414,7 @@ impl Commander {
             return;
         };
         if panel.in_archive() {
-            let text = "Files inside archives cannot be edited yet.";
-            return window.push_notification(Notification::warning(text), cx);
+            return self.edit_in_archive(remote::Open::External, window, cx);
         }
         if panel.remote().is_some() {
             return self.open_remote(remote::Open::External, window, cx);
@@ -443,6 +442,58 @@ impl Commander {
                 if let Err(err) = viewed {
                     let text = format!("{name}: {err}");
                     window.push_notification(Notification::error(text), cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// F4 and Ctrl+Shift+F4 inside an archive: each save goes back into it,
+    /// and then to the server the archive came from.
+    fn edit_in_archive(&mut self, how: remote::Open, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.panels[self.active].tabs.current();
+        let Some(member) = panel.archive_member() else {
+            return;
+        };
+        if !member.updatable() {
+            let text = "Only files in 7z, zip, jar and tar archives can be edited.";
+            return window.push_notification(Notification::warning(text), cx);
+        }
+        let origin = panel.archive_origin();
+        let settings = self.settings.editor.clone();
+        cx.spawn_in(window, async move |_, cx| {
+            let member = Arc::new(member);
+            let taking = member.clone();
+            let taken = cx
+                .background_executor()
+                .spawn(async move { taking.extract_with_folders() })
+                .await;
+            let name = member.listed.clone();
+            let _ = cx.update(|window, cx| {
+                let opened = taken.and_then(|(dir, file)| {
+                    let upload: editor::Upload = Arc::new(move |_| {
+                        member.update(&dir)?;
+                        let archive = member
+                            .archive
+                            .file_name()
+                            .unwrap_or_default()
+                            .display()
+                            .to_string();
+                        if let Some((remote, path)) = &origin {
+                            vfs::upload(&member.archive, &**remote, path)?;
+                            return Ok(format!("Updated {archive} on {}", remote.url()));
+                        }
+                        Ok(format!("Updated {archive}"))
+                    });
+                    match how {
+                        remote::Open::External => {
+                            remote::edit_externally(file, upload, &settings.external, window, cx)
+                        }
+                        _ => editor::open(file, settings.limit_mb, Some(upload), cx),
+                    }
+                });
+                if let Err(err) = opened {
+                    window.push_notification(Notification::error(format!("{name}: {err}")), cx);
                 }
             });
         })

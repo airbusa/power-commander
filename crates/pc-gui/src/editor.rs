@@ -1,5 +1,5 @@
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -13,10 +13,18 @@ use crate::minimap::{self, Minimap};
 use pc_core::edit;
 use pc_core::vfs::{self, Fs};
 
-/// Where a server's file goes back after each save.
-pub struct Upload {
-    pub fs: Arc<dyn Fs>,
-    pub path: PathBuf,
+/// After each save, in the background: the copy goes back where it came
+/// from, a server or an archive, and says so.
+pub type Upload = Arc<dyn Fn(&Path) -> io::Result<String> + Send + Sync>;
+
+/// A server's file.
+pub fn upload_to(fs: Arc<dyn Fs>, path: PathBuf) -> Upload {
+    Arc::new(move |local| {
+        let named =
+            |err: io::Error| io::Error::new(err.kind(), format!("{}: {err}", path.display()));
+        vfs::upload(local, &*fs, &path).map_err(named)?;
+        Ok(format!("Uploaded {}", path.display()))
+    })
 }
 
 actions!(editor, [Save]);
@@ -163,18 +171,16 @@ impl TextEditor {
             Ok(()) => {
                 self.edited = false;
                 window.set_window_title(&title(&self.path, false));
-                if let Some(upload) = &self.upload {
-                    let (local, fs, path) =
-                        (self.path.clone(), upload.fs.clone(), upload.path.clone());
+                if let Some(upload) = self.upload.clone() {
+                    let local = self.path.clone();
                     cx.spawn_in(window, async move |_, cx| {
-                        let shown = path.display().to_string();
                         let sent = cx
                             .background_executor()
-                            .spawn(async move { vfs::upload(&local, &*fs, &path) });
+                            .spawn(async move { upload(&local) });
                         let note = match sent.await {
-                            Ok(()) => Notification::success(format!("Uploaded {shown}")),
+                            Ok(text) => Notification::success(text),
                             Err(err) => {
-                                Notification::error(format!("Could not upload {shown}: {err}"))
+                                Notification::error(format!("Could not save it back: {err}"))
                                     .autohide(false)
                             }
                         };

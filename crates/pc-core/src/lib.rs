@@ -192,6 +192,8 @@ pub struct Panel {
 struct Archive {
     items: Vec<archive::Item>,
     dir: PathBuf,
+    /// Where the archive is on the server; `path` is a copy taken from there.
+    origin: Option<PathBuf>,
 }
 
 impl Panel {
@@ -223,7 +225,7 @@ impl Panel {
         let exact = match &state.archive_dir {
             Some(dir) => Self::new(state.path.parent().unwrap_or(&state.path), filter).and_then(
                 |mut panel| {
-                    panel.enter_archive(state.path.clone())?;
+                    panel.enter_archive(state.path.clone(), None)?;
                     panel.show_archive_dir(dir.clone(), None);
                     Ok(panel)
                 },
@@ -297,9 +299,19 @@ impl Panel {
 
     pub fn path(&self) -> PathBuf {
         match &self.archive {
-            Some(archive) => self.path.join(&archive.dir),
+            Some(archive) if archive.dir.as_os_str().is_empty() => self.archive_path().to_owned(),
+            Some(archive) => self.archive_path().join(&archive.dir),
             None => self.path.clone(),
         }
+    }
+
+    /// The archive browsed, where it is: on the server for one taken from there.
+    fn archive_path(&self) -> &Path {
+        let origin = self
+            .archive
+            .as_ref()
+            .and_then(|archive| archive.origin.as_deref());
+        origin.unwrap_or(&self.path)
     }
 
     /// The tab's own name, or its folder's.
@@ -357,8 +369,13 @@ impl Panel {
             self.show_archive_dir(archive.dir.join(name), None);
         } else if is_dir {
             self.go_to(self.path.join(name), None)?;
-        } else if archive::is_archive(&name) && self.remote.is_none() {
-            self.enter_archive(self.path.join(name))?;
+        } else if archive::is_archive(&name) {
+            let path = self.path.join(name);
+            match &self.remote {
+                // shortcut: no progress while it downloads; show one if big archives make it feel stuck.
+                Some(remote) => self.enter_archive(vfs::fetch(&**remote, &path)?, Some(path))?,
+                None => self.enter_archive(path, None)?,
+            }
         } else {
             return Ok(false);
         }
@@ -374,10 +391,11 @@ impl Panel {
             self.show_archive_dir(parent.to_owned(), left);
             return Ok(());
         }
-        let Some(parent) = self.path.parent() else {
+        let here = self.archive_path();
+        let Some(parent) = here.parent() else {
             return Ok(());
         };
-        let left = self.path.file_name().map(OsString::from);
+        let left = here.file_name().map(OsString::from);
         self.go_to(parent.to_owned(), left)
     }
 
@@ -387,17 +405,18 @@ impl Panel {
         let Some(archive) = &self.archive else {
             return self.go_to(self.path.clone(), select);
         };
-        let dir = archive.dir.clone();
+        let (dir, origin) = (archive.dir.clone(), archive.origin.clone());
         let items = archive::list(&self.path)?;
         self.archive = Some(Archive {
             items,
             dir: PathBuf::new(),
+            origin,
         });
         self.show_archive_dir(dir, select);
         Ok(())
     }
 
-    fn enter_archive(&mut self, path: PathBuf) -> io::Result<()> {
+    fn enter_archive(&mut self, path: PathBuf, origin: Option<PathBuf>) -> io::Result<()> {
         // shortcut: lists on the UI thread; move to the background if big archives freeze it.
         let items = archive::list(&path)?;
         self.marked.clear();
@@ -405,6 +424,7 @@ impl Panel {
         self.archive = Some(Archive {
             items,
             dir: PathBuf::new(),
+            origin,
         });
         self.show_archive_dir(PathBuf::new(), None);
         Ok(())
@@ -437,7 +457,35 @@ impl Panel {
             archive: self.path.clone(),
             listed: item.listed.clone(),
             name: entry.name.clone(),
+            inside: item.path.clone(),
         })
+    }
+
+    /// An archive taken from a server: the server, and where it is there.
+    pub fn archive_origin(&self) -> Option<(Arc<dyn Remote>, PathBuf)> {
+        let origin = self.archive.as_ref()?.origin.clone()?;
+        Some((self.remote.clone()?, origin))
+    }
+
+    /// Inside an archive: the chosen entries taken out with their folders
+    /// into a temporary folder, for F5 to copy from there. Blocks.
+    pub fn extract_chosen(&self) -> io::Result<Vec<PathBuf>> {
+        let Some(archive) = &self.archive else {
+            return Err(io::Error::other("not in an archive"));
+        };
+        let paths: Vec<PathBuf> = self
+            .chosen()
+            .iter()
+            .map(|e| archive.dir.join(&e.name))
+            .collect();
+        let listed = paths.iter().filter_map(|path| {
+            let item = archive.items.iter().find(|item| item.path == *path)?;
+            Some(item.listed.as_str())
+        });
+        let listed: Vec<&str> = listed.collect();
+        let dir = archive::fresh_scratch()?;
+        archive::extract(&self.path, &listed, &dir, true)?;
+        Ok(paths.iter().map(|path| dir.join(path)).collect())
     }
 
     pub fn current_entry(&self) -> Option<&Entry> {
@@ -551,10 +599,13 @@ impl Panel {
         self.go_to(path, None)
     }
 
-    /// The folder on disk: inside an archive, the archive's.
+    /// The folder, local or on the server: inside an archive, the archive's.
     pub fn folder(&self) -> &Path {
         match self.archive {
-            Some(_) => self.path.parent().unwrap_or(&self.path),
+            Some(_) => {
+                let archive = self.archive_path();
+                archive.parent().unwrap_or(archive)
+            }
             None => &self.path,
         }
     }

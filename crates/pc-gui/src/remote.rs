@@ -121,11 +121,12 @@ impl Commander {
                 let opened = fetched.and_then(|local| match how {
                     Open::View => viewer::open(vec![local], 0, settings.viewer, bounds, cx),
                     Open::Edit => {
-                        let upload = editor::Upload { fs, path };
+                        let upload = editor::upload_to(fs, path);
                         editor::open(local, settings.editor.limit_mb, Some(upload), cx)
                     }
                     Open::External => {
-                        edit_externally(local, fs, path, &settings.editor.external, window, cx)
+                        let upload = editor::upload_to(fs, path);
+                        edit_externally(local, upload, &settings.editor.external, window, cx)
                     }
                 });
                 if let Err(err) = opened {
@@ -144,12 +145,11 @@ pub(crate) enum Open {
     External,
 }
 
-/// Uploads once the editor ends, if it changed the file. An editor that
-/// returns at once (`xdg-open`, `code` without `--wait`) is not waited for.
-fn edit_externally(
+/// Saves it back once the editor ends, if it changed the file. An editor
+/// that returns at once (`xdg-open`, `code` without `--wait`) is not waited for.
+pub(crate) fn edit_externally(
     local: PathBuf,
-    fs: Arc<dyn Fs>,
-    path: PathBuf,
+    upload: editor::Upload,
     line: &str,
     window: &mut Window,
     cx: &mut App,
@@ -162,7 +162,7 @@ fn edit_externally(
         let changed = Local
             .metadata(&local)
             .is_ok_and(|meta| meta.modified != before);
-        let uploaded = changed.then(|| vfs::upload(&local, &*fs, &path).map(|()| path));
+        let uploaded = changed.then(|| upload(&local));
         let _ = done.send(uploaded);
     });
     window
@@ -172,10 +172,9 @@ fn edit_externally(
             };
             let _ = cx.update(|window, cx| {
                 let note = match uploaded {
-                    Ok(path) => Notification::success(format!("Uploaded {}", path.display())),
-                    Err(err) => {
-                        Notification::error(format!("Could not upload: {err}")).autohide(false)
-                    }
+                    Ok(text) => Notification::success(text),
+                    Err(err) => Notification::error(format!("Could not save it back: {err}"))
+                        .autohide(false),
                 };
                 window.push_notification(note, cx);
             });
