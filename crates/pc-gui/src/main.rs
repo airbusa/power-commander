@@ -69,6 +69,8 @@ impl AssetSource for AppAssets {
 
 const CONTEXT: &str = "Commander";
 const ROW: Pixels = px(22.);
+/// The path title's height, typing a path or not.
+const PATH_HEIGHT: Pixels = px(30.);
 /// Ext, Size, Date and Attr; Name takes the rest.
 const COLUMN_WIDTHS: [f32; 4] = [56., 100., 132., 92.];
 const COLUMN_MIN: f32 = 24.;
@@ -844,12 +846,14 @@ impl Commander {
                     .on_action(cx.listener(|this, _: &CancelPathEdit, window, cx| {
                         this.cancel_path_edit(window, cx)
                     }))
-                    .child(Input::new(&input).small())
+                    .child(Input::new(&input).small().h(PATH_HEIGHT))
                     .into_any_element(),
                 None => div()
                     .id(("path", ix))
+                    .h(PATH_HEIGHT)
+                    .flex()
+                    .items_center()
                     .px_2()
-                    .py_1()
                     .bg(title_bg)
                     .text_color(title_fg)
                     .border_1()
