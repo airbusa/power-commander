@@ -127,6 +127,29 @@ fn main() {
     });
 }
 
+/// Where Settings opens from other windows.
+#[derive(Clone)]
+struct MainWindow(AnyWindowHandle, WeakEntity<Commander>);
+
+impl Global for MainWindow {}
+
+/// Settings on its Edit/View page, over the main window.
+fn configure_viewer(cx: &mut App) {
+    let Some(MainWindow(main, commander)) = cx.try_global::<MainWindow>().cloned() else {
+        return;
+    };
+    let page = settings::PAGES
+        .iter()
+        .position(|&(_, name)| name == "Edit/View");
+    let _ = main.update(cx, |_, window, cx| {
+        window.activate_window();
+        let Ok(settings) = commander.read_with(cx, |this, _| this.settings.clone()) else {
+            return;
+        };
+        settings_dialog::open(commander, settings, page.unwrap_or(0), window, cx);
+    });
+}
+
 struct Commander {
     panels: [Side; 2],
     active: usize,
@@ -163,6 +186,7 @@ impl Side {
 
 impl Commander {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.set_global(MainWindow(window.window_handle(), cx.entity().downgrade()));
         let mut problems = Vec::new();
         let settings = Settings::load().unwrap_or_else(|err| {
             problems.push(format!("Could not read the settings: {err}"));
@@ -309,7 +333,12 @@ impl Commander {
         let path = panel.folder().join(&entry.name);
         let opened = match edit {
             true => editor::open(path.clone(), cx),
-            false => viewer::open(path.clone(), cx),
+            false => {
+                let files = panel.entries().iter().filter(|e| !e.is_dir);
+                let files: Vec<_> = files.map(|e| panel.folder().join(&e.name)).collect();
+                let at = files.iter().position(|file| *file == path).unwrap_or(0);
+                viewer::open(files, at, self.settings.viewer.clone(), cx)
+            }
         };
         if let Err(err) = opened {
             let text = format!("{}: {err}", path.display());
@@ -1016,7 +1045,7 @@ impl Render for Commander {
                     }
                     Command::Settings => {
                         let commander = cx.entity().downgrade();
-                        settings_dialog::open(commander, this.settings.clone(), window, cx)
+                        settings_dialog::open(commander, this.settings.clone(), 0, window, cx)
                     }
                     _ => cx.propagate(),
                 }),

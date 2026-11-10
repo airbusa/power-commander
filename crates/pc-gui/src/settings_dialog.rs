@@ -1,27 +1,78 @@
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::radio::RadioGroup;
 use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use pc_core::settings::{PAGES, Settings};
+use pc_core::settings::{PAGES, Settings, StartFont, StartMode};
 
 use crate::Commander;
 
 const WIDTH: f32 = 720.;
 const BODY_HEIGHT: f32 = 460.;
 
+const START_MODES: [StartMode; 4] = [
+    StartMode::Text,
+    StartMode::Binary,
+    StartMode::Hex,
+    StartMode::Auto,
+];
+const START_FONTS: [StartFont; 4] = [
+    StartFont::Ansi,
+    StartFont::Ascii,
+    StartFont::Variable,
+    StartFont::Auto,
+];
+
+/// Opens on `PAGES[page]`.
 pub fn open(
     commander: WeakEntity<Commander>,
     settings: Settings,
+    page: usize,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let view = cx.new(|_| SettingsDialog {
-        commander,
-        saved: settings.clone(),
-        draft: settings,
-        page: 0,
+    let mut width = |value: usize, cx: &mut App| {
+        cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(value.to_string())
+                .validate(|text, _| text.len() <= 4 && text.chars().all(|c| c.is_ascii_digit()))
+        })
+    };
+    let text_width = width(settings.viewer.text_width, cx);
+    let binary_width = width(settings.viewer.binary_width, cx);
+    let view = cx.new(|cx| {
+        let changed =
+            |cx: &mut Context<SettingsDialog>, input: &Entity<InputState>, binary: bool| {
+                cx.subscribe(input, move |this, input, event: &InputEvent, cx| {
+                    let InputEvent::Change = event else {
+                        return;
+                    };
+                    if let Ok(width @ 1..) = input.read(cx).value().parse() {
+                        let viewer = &mut this.draft.viewer;
+                        *(if binary {
+                            &mut viewer.binary_width
+                        } else {
+                            &mut viewer.text_width
+                        }) = width;
+                        cx.notify();
+                    }
+                })
+            };
+        SettingsDialog {
+            _widths: [
+                changed(cx, &text_width, false),
+                changed(cx, &binary_width, true),
+            ],
+            text_width,
+            binary_width,
+            commander,
+            saved: settings.clone(),
+            draft: settings,
+            page,
+        }
     });
     window.open_dialog(cx, move |dialog, _, _| {
         dialog
@@ -38,6 +89,9 @@ struct SettingsDialog {
     saved: Settings,
     draft: Settings,
     page: usize,
+    text_width: Entity<InputState>,
+    binary_width: Entity<InputState>,
+    _widths: [Subscription; 2],
 }
 
 impl SettingsDialog {
@@ -79,8 +133,63 @@ impl SettingsDialog {
             }))
     }
 
+    fn render_viewer(&self, cx: &mut Context<Self>) -> GroupBox {
+        let viewer = &self.draft.viewer;
+        let start = START_MODES.iter().position(|&mode| mode == viewer.start);
+        let font = START_FONTS.iter().position(|&font| font == viewer.font);
+        let width = |label: &'static str, input: &Entity<InputState>| {
+            h_flex()
+                .gap_2()
+                .child(label)
+                .child(div().w(px(70.)).child(Input::new(input)))
+        };
+        let start = v_flex().gap_2().child("Display at startup:").child(
+            RadioGroup::vertical("viewer-start")
+                .children(["Text", "Binary", "Hex", "Autodetect"])
+                .selected_index(start)
+                .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                    this.draft.viewer.start = START_MODES[*ix];
+                    cx.notify();
+                })),
+        );
+        let font = v_flex().gap_2().child("Font at startup:").child(
+            RadioGroup::vertical("viewer-font")
+                .children([
+                    "ANSI (Windows)",
+                    "ASCII (DOS)",
+                    "Variable width",
+                    "Autodetect",
+                ])
+                .selected_index(font)
+                .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                    this.draft.viewer.font = START_FONTS[*ix];
+                    cx.notify();
+                })),
+        );
+        GroupBox::new().outline().title("Viewer (F3)").child(
+            v_flex()
+                .gap_4()
+                .child(h_flex().items_start().gap_12().child(start).child(font))
+                .child(
+                    Checkbox::new("viewer-wrap")
+                        .label("Wrap text")
+                        .checked(viewer.wrap)
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.draft.viewer.wrap = *checked;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    h_flex()
+                        .gap_6()
+                        .child("Display width (characters):")
+                        .child(width("Text", &self.text_width))
+                        .child(width("Binary", &self.binary_width)),
+                ),
+        )
+    }
+
     fn render_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let (_, title) = PAGES[self.page];
         let content = match title {
             "Display" => Some(
@@ -109,6 +218,7 @@ impl SettingsDialog {
                         ),
                 ),
             ),
+            "Edit/View" => Some(self.render_viewer(cx)),
             "Folder Tabs" => Some(
                 GroupBox::new().outline().title("Folder tab headers").child(
                     Checkbox::new("tab-header-always")
@@ -122,6 +232,7 @@ impl SettingsDialog {
             ),
             _ => None,
         };
+        let theme = cx.theme();
         v_flex()
             .flex_1()
             .h_full()

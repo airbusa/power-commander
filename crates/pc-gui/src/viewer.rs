@@ -4,10 +4,15 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenu};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarHandle};
-use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::*;
-use pc_core::viewer::TextFile;
+use pc_core::settings::{StartFont, StartMode, ViewerSettings};
+use pc_core::viewer::{Decoding, Detected, LONG_ROW, Layout, TextFile, detect};
+use pc_core::{codepage, html};
 
 actions!(
     viewer,
@@ -22,10 +27,36 @@ actions!(
         Left,
         Right,
         ShowText,
+        ShowBinary,
         ShowHex,
-        ShowPicture
+        ShowPicture,
+        ShowHtml,
+        ShowUnicode,
+        ShowUtf8,
+        FontAnsi,
+        FontAscii,
+        FontVariable,
+        ToggleWrap,
+        FitImage,
+        FitLarger,
+        NextFile,
+        PreviousFile,
+        Reload,
+        OpenFile,
+        SaveAs,
+        Configure,
+        // shortcut: disabled menu items until Find and selection are built.
+        CopyText,
+        SelectAll,
+        Find,
+        FindNext
     ]
 );
+
+/// A code page of the Encoding menu; none goes by the font.
+#[derive(Action, Clone, PartialEq)]
+#[action(namespace = viewer, no_json)]
+struct SetPage(Option<u16>);
 
 const CONTEXT: &str = "Viewer";
 const ROW: Pixels = px(20.);
@@ -33,6 +64,8 @@ const ROW: Pixels = px(20.);
 const FIRST_DRAWN: usize = 60;
 /// The scrollbar's height in rows: small enough for f32 pixels to stay exact.
 const VIRTUAL_HEIGHT: f32 = 1_000_000.;
+/// Larger HTML is shown as plain text.
+const HTML_LIMIT: u64 = 64 << 20;
 
 pub fn bind_keys(cx: &mut App) {
     let keys = Some(CONTEXT);
@@ -52,46 +85,198 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("right", Right, keys),
         // Total Commander's Lister keys.
         KeyBinding::new("1", ShowText, keys),
+        KeyBinding::new("2", ShowBinary, keys),
         KeyBinding::new("3", ShowHex, keys),
         KeyBinding::new("4", ShowPicture, keys),
+        KeyBinding::new("5", ShowHtml, keys),
+        KeyBinding::new("6", ShowUnicode, keys),
+        KeyBinding::new("7", ShowUtf8, keys),
+        KeyBinding::new("a", FontAnsi, keys),
+        KeyBinding::new("s", FontAscii, keys),
+        KeyBinding::new("v", FontVariable, keys),
+        KeyBinding::new("w", ToggleWrap, keys),
+        KeyBinding::new("f", FitImage, keys),
+        KeyBinding::new("l", FitLarger, keys),
+        KeyBinding::new("n", NextFile, keys),
+        KeyBinding::new("p", PreviousFile, keys),
+        KeyBinding::new("f2", Reload, keys),
     ]);
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
     Text,
+    Binary,
     Hex,
     Picture,
+    Html,
+    Unicode,
+    Utf8,
 }
 
-/// Pictures GPUI decodes open as pictures, other files as text.
-pub fn open(path: PathBuf, cx: &mut App) -> io::Result<()> {
-    let text = TextFile::open(&path)?;
-    let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
-    let picture = extension.is_some_and(|e| Img::extensions().contains(&e.as_str()));
-    let title = format!("{} — Power Commander", path.display());
+#[derive(Clone, Copy, PartialEq)]
+enum Font {
+    Ansi,
+    Ascii,
+    Variable,
+}
+
+/// Shows `files[at]`; Next and Previous go through `files`.
+pub fn open(
+    files: Vec<PathBuf>,
+    at: usize,
+    settings: ViewerSettings,
+    cx: &mut App,
+) -> io::Result<()> {
+    let font = match settings.font {
+        StartFont::Ascii => Font::Ascii,
+        StartFont::Variable => Font::Variable,
+        StartFont::Ansi | StartFont::Auto => Font::Ansi,
+    };
+    let mut shown = Shown {
+        files,
+        at,
+        wrap: settings.wrap,
+        settings,
+        mode: Mode::Text,
+        font,
+        page: None,
+        big_endian: false,
+        picture: false,
+    };
+    let text = shown.start()?;
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(size(px(1000.), px(700.)), cx)),
         titlebar: Some(TitlebarOptions {
-            title: Some(title.into()),
+            title: Some(title(shown.path()).into()),
             ..Default::default()
         }),
         app_id: Some("powercommander".into()),
         ..Default::default()
     };
     gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| Viewer::new(path, text, picture, window, cx))
+        cx.new(|cx| Viewer::new(shown, text, window, cx))
     })
     .map(drop)
     .map_err(|err| io::Error::other(err.to_string()))
 }
 
-struct Viewer {
-    path: PathBuf,
-    text: TextFile,
+fn title(path: &Path) -> String {
+    format!("{} — Power Commander", path.display())
+}
+
+/// Which file, and how it is shown.
+struct Shown {
+    files: Vec<PathBuf>,
+    at: usize,
+    settings: ViewerSettings,
     mode: Mode,
+    font: Font,
+    /// Chosen in the Encoding menu.
+    page: Option<u16>,
+    wrap: bool,
+    /// UTF-16's byte order, as its BOM says.
+    big_endian: bool,
     /// GPUI can show it as a picture.
     picture: bool,
+}
+
+impl Shown {
+    fn path(&self) -> &Path {
+        &self.files[self.at]
+    }
+
+    /// The mode the settings start with; Autodetect as Lister's.
+    fn start(&mut self) -> io::Result<TextFile> {
+        let path = self.path();
+        let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+        let extension = extension.as_deref().unwrap_or_default();
+        let picture = Img::extensions().contains(&extension);
+        let html = matches!(extension, "htm" | "html" | "xhtml");
+        let detected = detect(path)?;
+        self.picture = picture;
+        self.big_endian = detected == Detected::Utf16 { big_endian: true };
+        self.page = None;
+        self.mode = match self.settings.start {
+            StartMode::Text => Mode::Text,
+            StartMode::Binary => Mode::Binary,
+            StartMode::Hex => Mode::Hex,
+            StartMode::Auto if picture => Mode::Picture,
+            StartMode::Auto if html => Mode::Html,
+            StartMode::Auto => match detected {
+                Detected::Plain => Mode::Text,
+                Detected::Utf8 => Mode::Utf8,
+                Detected::Utf16 { .. } => Mode::Unicode,
+            },
+        };
+        self.text()
+    }
+
+    /// The chosen code page, else the font's.
+    fn page(&self) -> u16 {
+        let (ansi, dos) = codepage::system();
+        self.page.unwrap_or(match self.font {
+            Font::Ascii => dos,
+            Font::Ansi | Font::Variable => ansi,
+        })
+    }
+
+    fn text(&self) -> io::Result<TextFile> {
+        let path = self.path();
+        let page = self.page();
+        let width = match self.wrap {
+            true => self.settings.text_width.max(1),
+            false => LONG_ROW,
+        };
+        let lines = Layout::Lines { width };
+        let plain = match self.page {
+            Some(page) => Decoding::Page(page),
+            None => Decoding::Auto(page),
+        };
+        Ok(match self.mode {
+            Mode::Binary => {
+                let width = self.settings.binary_width.max(1);
+                TextFile::open(path, Layout::Fixed { width }, Decoding::Page(page))?
+            }
+            Mode::Hex => TextFile::open(path, Layout::Hex, Decoding::Page(page))?,
+            Mode::Html if std::fs::metadata(path)?.len() <= HTML_LIMIT => {
+                let source = match String::from_utf8(std::fs::read(path)?) {
+                    Ok(source) => source,
+                    Err(err) => codepage::decode(page, err.as_bytes()),
+                };
+                TextFile::text(html::to_text(&source), lines)
+            }
+            Mode::Unicode => {
+                let big_endian = self.big_endian;
+                TextFile::open(path, lines, Decoding::Utf16 { big_endian })?
+            }
+            Mode::Utf8 => TextFile::open(path, lines, Decoding::Utf8)?,
+            Mode::Text | Mode::Picture | Mode::Html => TextFile::open(path, lines, plain)?,
+        })
+    }
+
+    /// For the status bar.
+    fn describe(&self) -> String {
+        let page = self.page();
+        match self.mode {
+            Mode::Text => format!("Text · {page}"),
+            Mode::Binary => format!("Binary · {page}"),
+            Mode::Hex => format!("Hex · {page}"),
+            Mode::Picture => "Image".into(),
+            Mode::Html => "HTML text".into(),
+            Mode::Unicode => "UTF-16".into(),
+            Mode::Utf8 => "UTF-8".into(),
+        }
+    }
+}
+
+struct Viewer {
+    shown: Shown,
+    text: TextFile,
+    /// The file's, HTML's text is shorter.
+    size: u64,
+    fit: bool,
+    only_larger: bool,
     view: ViewHandle,
     focus: FocusHandle,
     _poll: Task<()>,
@@ -164,17 +349,24 @@ impl ScrollbarHandle for ViewHandle {
 }
 
 impl Viewer {
-    fn new(
-        path: PathBuf,
-        text: TextFile,
-        picture: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    fn new(shown: Shown, text: TextFile, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        // Shows the rows as the background index finds them.
-        let poll = cx.spawn(async move |this, cx| {
+        Self {
+            size: file_size(&shown, &text),
+            shown,
+            text,
+            fit: true,
+            only_larger: false,
+            view: ViewHandle::default(),
+            focus,
+            _poll: Self::poll(cx),
+        }
+    }
+
+    /// Shows the rows as the background index finds them.
+    fn poll(cx: &mut Context<Self>) -> Task<()> {
+        cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(50))
@@ -187,26 +379,125 @@ impl Viewer {
                     break;
                 }
             }
-        });
-        Self {
-            path,
-            text,
-            mode: if picture { Mode::Picture } else { Mode::Text },
-            picture,
-            view: ViewHandle::default(),
-            focus,
-            _poll: poll,
+        })
+    }
+
+    /// Shows the file again as `shown` says, at the top unless `keep_top`.
+    fn show(&mut self, keep_top: bool, window: &mut Window, cx: &mut Context<Self>) {
+        match self.shown.text() {
+            Ok(text) => self.replace(text, keep_top, window, cx),
+            Err(err) => self.failed(err, window, cx),
         }
     }
 
-    fn set_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
-        if mode == self.mode || mode == Mode::Picture && !self.picture {
+    fn replace(
+        &mut self,
+        text: TextFile,
+        keep_top: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.size = file_size(&self.shown, &text);
+        self.text = text;
+        if !keep_top {
+            let mut view = self.view.0.borrow_mut();
+            (view.top, view.x) = (0, px(0.));
+        }
+        self._poll = Self::poll(cx);
+        window.set_window_title(&title(self.shown.path()));
+        cx.notify();
+    }
+
+    fn failed(&mut self, err: io::Error, window: &mut Window, cx: &mut Context<Self>) {
+        let text = format!("{}: {err}", self.shown.path().display());
+        window.push_notification(Notification::error(text), cx);
+        cx.notify();
+    }
+
+    fn set_mode(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
+        if mode == self.shown.mode || mode == Mode::Picture && !self.shown.picture {
             return;
         }
-        self.mode = mode;
-        let mut view = self.view.0.borrow_mut();
-        (view.top, view.x) = (0, px(0.));
-        cx.notify();
+        self.shown.mode = mode;
+        self.show(false, window, cx);
+    }
+
+    /// ANSI and ASCII show text in their code page, as Lister does.
+    fn set_font(
+        &mut self,
+        font: Font,
+        page: Option<u16>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.shown.font = font;
+        self.shown.page = page;
+        if !matches!(self.shown.mode, Mode::Binary | Mode::Hex) {
+            self.shown.mode = Mode::Text;
+        }
+        self.show(true, window, cx);
+    }
+
+    fn toggle_wrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.shown.wrap = !self.shown.wrap;
+        self.show(false, window, cx);
+    }
+
+    /// The panel's next or previous file.
+    fn step(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let at = self.shown.at.checked_add_signed(by);
+        let Some(at) = at.filter(|&at| at < self.shown.files.len()) else {
+            return;
+        };
+        self.shown.at = at;
+        self.restart(window, cx);
+    }
+
+    fn restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.shown.start() {
+            Ok(text) => self.replace(text, false, window, cx),
+            Err(err) => self.failed(err, window, cx),
+        }
+    }
+
+    fn open_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                (this.shown.files, this.shown.at) = (paths, 0);
+                this.restart(window, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Copies the file elsewhere.
+    fn save_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let from = self.shown.path().to_owned();
+        let folder = from.parent().unwrap_or(Path::new("/"));
+        let name = from
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned());
+        let target = cx.prompt_for_new_path(folder, name.as_deref());
+        cx.spawn_in(window, async move |_, cx| {
+            let Ok(Ok(Some(to))) = target.await else {
+                return;
+            };
+            if let Err(err) = std::fs::copy(&from, &to) {
+                let text = format!("Could not save {}: {err}", to.display());
+                let _ =
+                    cx.update(|window, cx| window.push_notification(Notification::error(text), cx));
+            }
+        })
+        .detach();
     }
 
     fn scroll(&mut self, by: impl FnOnce(&mut Viewport), cx: &mut Context<Self>) {
@@ -228,13 +519,141 @@ impl Viewer {
         );
     }
 
+    /// File, Edit, Options and Encoding, as Lister's.
+    fn render_menus(&self, cx: &mut Context<Self>) -> Div {
+        let focus = self.focus.clone();
+        let bar_menu = move |label: &'static str,
+                             disabled: bool,
+                             items: Box<dyn Fn(PopupMenu) -> PopupMenu>| {
+            let focus = focus.clone();
+            Button::new(label)
+                .ghost()
+                .small()
+                .label(label)
+                .disabled(disabled)
+                .dropdown_menu(move |menu, _, _| items(menu.action_context(focus.clone())))
+        };
+        let Shown {
+            mode,
+            font,
+            page,
+            wrap,
+            picture,
+            ..
+        } = self.shown;
+        let (fit, only_larger) = (self.fit, self.only_larger);
+        let columns = self.shown.settings.text_width;
+        let file = |menu: PopupMenu| {
+            menu.menu("Open...", Box::new(OpenFile))
+                .menu("Save as...", Box::new(SaveAs))
+                .separator()
+                .menu("Next file", Box::new(NextFile))
+                .menu("Previous file", Box::new(PreviousFile))
+                .separator()
+                .menu("Reload", Box::new(Reload))
+                .separator()
+                .menu("Close", Box::new(Close))
+        };
+        let edit = |menu: PopupMenu| {
+            menu.menu_with_disabled("Copy as text", Box::new(CopyText), true)
+                .menu_with_disabled("Select all", Box::new(SelectAll), true)
+                .separator()
+                .menu_with_disabled("Find...", Box::new(Find), true)
+                .menu_with_disabled("Find next", Box::new(FindNext), true)
+        };
+        let options = move |mut menu: PopupMenu| {
+            let modes: [(&str, Mode, Box<dyn Action>); 7] = [
+                ("Text only", Mode::Text, Box::new(ShowText)),
+                (
+                    "Binary (fixed line length)",
+                    Mode::Binary,
+                    Box::new(ShowBinary),
+                ),
+                ("Hex", Mode::Hex, Box::new(ShowHex)),
+                ("Image", Mode::Picture, Box::new(ShowPicture)),
+                ("HTML text (strip tags)", Mode::Html, Box::new(ShowHtml)),
+                ("Unicode (UTF-16)", Mode::Unicode, Box::new(ShowUnicode)),
+                ("UTF-8", Mode::Utf8, Box::new(ShowUtf8)),
+            ];
+            for (label, this, action) in modes {
+                let off = this == Mode::Picture && !picture;
+                menu = menu.menu_with_check_and_disabled(label, mode == this, action, off);
+            }
+            menu = menu.separator();
+            let fonts: [(&str, Font, Box<dyn Action>); 3] = [
+                ("ANSI (Windows charset)", Font::Ansi, Box::new(FontAnsi)),
+                ("ASCII (DOS charset)", Font::Ascii, Box::new(FontAscii)),
+                (
+                    "Variable char width",
+                    Font::Variable,
+                    Box::new(FontVariable),
+                ),
+            ];
+            for (label, this, action) in fonts {
+                menu = menu.menu_with_check(label, font == this, action);
+            }
+            let image = mode == Mode::Picture;
+            let larger = "Fit only larger images";
+            menu.separator()
+                .menu_with_check(
+                    format!("Wrap text ({columns} columns)"),
+                    wrap,
+                    Box::new(ToggleWrap),
+                )
+                .separator()
+                .menu_with_check_and_disabled(
+                    "Fit image to window",
+                    fit,
+                    Box::new(FitImage),
+                    !image,
+                )
+                .menu_with_check_and_disabled(larger, only_larger, Box::new(FitLarger), !image)
+                .separator()
+                .menu("Configure...", Box::new(Configure))
+        };
+        let (ansi, dos) = codepage::system();
+        let encoding = move |mut menu: PopupMenu| {
+            menu = menu
+                .menu_with_check(
+                    "As set by the font",
+                    page.is_none(),
+                    Box::new(SetPage(None)),
+                )
+                .separator();
+            for &(label, number) in codepage::MENU {
+                let local = match number {
+                    _ if number == ansi => " (ANSI)",
+                    _ if number == dos => " (DOS)",
+                    _ => "",
+                };
+                let label = format!("{label}{local}");
+                menu = menu.menu_with_check(
+                    label,
+                    page == Some(number),
+                    Box::new(SetPage(Some(number))),
+                );
+            }
+            menu
+        };
+        // Text in UTF-8 or UTF-16 has no code page.
+        let unpaged = matches!(
+            mode,
+            Mode::Unicode | Mode::Utf8 | Mode::Html | Mode::Picture
+        );
+        h_flex()
+            .px_1()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(bar_menu("File", false, Box::new(file)))
+            .child(bar_menu("Edit", false, Box::new(edit)))
+            .child(bar_menu("Options", false, Box::new(options)))
+            .child(bar_menu("Encoding", unpaged, Box::new(encoding)))
+    }
+
     /// The rows on screen, and where they are in the file.
     fn render_rows(&self, window: &mut Window, cx: &mut Context<Self>) -> (AnyElement, String) {
         let theme = cx.theme();
-        let (rows, scanned, done) = match self.mode {
-            Mode::Hex => (self.text.hex_row_count(), self.text.len(), true),
-            _ => self.text.indexed(),
-        };
+        let (rows, scanned, done) = self.text.indexed();
         let top = {
             let mut view = self.view.0.borrow_mut();
             view.rows = rows;
@@ -245,14 +664,14 @@ impl Viewer {
             0 => FIRST_DRAWN,
             visible => visible + 1,
         };
-        let lines = match self.mode {
-            Mode::Hex => self.text.hex_rows(top..top + drawn),
-            _ => self.text.rows(top..top + drawn),
+        let lines = self.text.rows(top..top + drawn);
+        let (family, font_size) = match self.shown.font {
+            Font::Variable => (theme.font_family.clone(), theme.font_size),
+            Font::Ansi | Font::Ascii => (theme.mono_font_family.clone(), theme.mono_font_size),
         };
-        let font = font(theme.mono_font_family.clone());
         let text_system = window.text_system();
         let em = text_system
-            .em_advance(text_system.resolve_font(&font), theme.mono_font_size)
+            .em_advance(text_system.resolve_font(&font(family.clone())), font_size)
             .unwrap_or(px(8.));
         let widest = lines.iter().map(|line| line.chars().count()).max();
         let x = {
@@ -280,8 +699,8 @@ impl Viewer {
             .size_full()
             .relative()
             .overflow_hidden()
-            .font_family(theme.mono_font_family.clone())
-            .text_size(theme.mono_font_size)
+            .font_family(family)
+            .text_size(font_size)
             .on_scroll_wheel(cx.listener(Self::wheel))
             .on_action(
                 cx.listener(move |this, _: &Left, _, cx| this.scroll(|v| v.scroll_x(-em * 8.), cx)),
@@ -313,42 +732,41 @@ impl Viewer {
         (rows.into_any_element(), status)
     }
 
-    fn modes(&self) -> String {
-        let mut modes = vec![(Mode::Text, "1 Text"), (Mode::Hex, "3 Hex")];
-        if self.picture {
-            modes.push((Mode::Picture, "4 Picture"));
-        }
-        let names = modes
-            .into_iter()
-            .map(|(mode, name)| match mode == self.mode {
-                true => format!("[{name}]"),
-                false => name.to_owned(),
+    fn render_picture(&self) -> AnyElement {
+        let fit = match (self.fit, self.only_larger) {
+            (true, false) => ObjectFit::Contain,
+            (true, true) => ObjectFit::ScaleDown,
+            (false, _) => ObjectFit::None,
+        };
+        let picture = img(self.shown.path().to_owned())
+            .size_full()
+            // Else the picture's aspect ratio makes it as tall as wide allows.
+            .min_w_0()
+            .min_h_0()
+            .object_fit(fit)
+            .with_loading(|| div().p_4().child("Loading…").into_any_element())
+            .with_fallback(|| {
+                div()
+                    .p_4()
+                    .child("This picture cannot be shown; 1 shows it as text.")
+                    .into_any_element()
             });
-        names.collect::<Vec<_>>().join("  ")
+        v_flex()
+            .absolute()
+            .inset_0()
+            .p_2()
+            .child(picture)
+            .into_any_element()
     }
 }
 
 impl Render for Viewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (content, status) = match self.mode {
-            Mode::Picture => {
-                let picture = img(self.path.clone())
-                    .size_full()
-                    .object_fit(ObjectFit::Contain)
-                    .with_loading(|| div().p_4().child("Loading…").into_any_element())
-                    .with_fallback(|| {
-                        div()
-                            .p_4()
-                            .child("This picture cannot be shown; 1 shows it as text.")
-                            .into_any_element()
-                    });
-                (
-                    div().size_full().p_2().child(picture).into_any_element(),
-                    String::new(),
-                )
-            }
+        let (content, status) = match self.shown.mode {
+            Mode::Picture => (self.render_picture(), String::new()),
             _ => self.render_rows(window, cx),
         };
+        let menus = self.render_menus(cx);
         let theme = cx.theme();
         v_flex()
             .key_context(CONTEXT)
@@ -357,9 +775,46 @@ impl Render for Viewer {
             .bg(theme.background)
             .text_color(theme.foreground)
             .on_action(cx.listener(|_, _: &Close, window, _| window.remove_window()))
-            .on_action(cx.listener(|this, _: &ShowText, _, cx| this.set_mode(Mode::Text, cx)))
-            .on_action(cx.listener(|this, _: &ShowHex, _, cx| this.set_mode(Mode::Hex, cx)))
-            .on_action(cx.listener(|this, _: &ShowPicture, _, cx| this.set_mode(Mode::Picture, cx)))
+            .on_action(cx.listener(|this, _: &ShowText, w, cx| this.set_mode(Mode::Text, w, cx)))
+            .on_action(
+                cx.listener(|this, _: &ShowBinary, w, cx| this.set_mode(Mode::Binary, w, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ShowHex, w, cx| this.set_mode(Mode::Hex, w, cx)))
+            .on_action(
+                cx.listener(|this, _: &ShowPicture, w, cx| this.set_mode(Mode::Picture, w, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ShowHtml, w, cx| this.set_mode(Mode::Html, w, cx)))
+            .on_action(
+                cx.listener(|this, _: &ShowUnicode, w, cx| this.set_mode(Mode::Unicode, w, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ShowUtf8, w, cx| this.set_mode(Mode::Utf8, w, cx)))
+            .on_action(
+                cx.listener(|this, _: &FontAnsi, w, cx| this.set_font(Font::Ansi, None, w, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &FontAscii, w, cx| this.set_font(Font::Ascii, None, w, cx)),
+            )
+            .on_action(cx.listener(|this, _: &FontVariable, w, cx| {
+                this.set_font(Font::Variable, None, w, cx)
+            }))
+            .on_action(cx.listener(|this, SetPage(page): &SetPage, w, cx| {
+                this.set_font(this.shown.font, *page, w, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ToggleWrap, w, cx| this.toggle_wrap(w, cx)))
+            .on_action(cx.listener(|this, _: &FitImage, _, cx| {
+                this.fit = !this.fit;
+                cx.notify()
+            }))
+            .on_action(cx.listener(|this, _: &FitLarger, _, cx| {
+                this.only_larger = !this.only_larger;
+                cx.notify()
+            }))
+            .on_action(cx.listener(|this, _: &NextFile, w, cx| this.step(1, w, cx)))
+            .on_action(cx.listener(|this, _: &PreviousFile, w, cx| this.step(-1, w, cx)))
+            .on_action(cx.listener(|this, _: &Reload, w, cx| this.show(true, w, cx)))
+            .on_action(cx.listener(|this, _: &OpenFile, w, cx| this.open_file(w, cx)))
+            .on_action(cx.listener(|this, _: &SaveAs, w, cx| this.save_as(w, cx)))
+            .on_action(cx.listener(|_, _: &Configure, _, cx| crate::configure_viewer(cx)))
             .on_action(
                 cx.listener(|this, _: &LineUp, _, cx| this.scroll(|v| v.scroll_rows(-1), cx)),
             )
@@ -376,18 +831,23 @@ impl Render for Viewer {
             .on_action(
                 cx.listener(|this, _: &Bottom, _, cx| this.scroll(|v| v.top = v.max_top(), cx)),
             )
-            .child(div().flex_1().min_h_0().child(content))
+            .child(menus)
+            .child(div().flex_1().min_h_0().relative().child(content))
             .child(status_bar(
-                &self.path,
-                self.text.len(),
+                self.shown.path(),
+                self.size,
                 status,
-                self.modes(),
+                self.shown.describe(),
                 cx,
             ))
     }
 }
 
-fn status_bar(path: &Path, len: u64, status: String, modes: String, cx: &App) -> impl IntoElement {
+fn file_size(shown: &Shown, text: &TextFile) -> u64 {
+    std::fs::metadata(shown.path()).map_or(text.len(), |meta| meta.len())
+}
+
+fn status_bar(path: &Path, len: u64, status: String, shown: String, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     h_flex()
         .px_2()
@@ -405,5 +865,5 @@ fn status_bar(path: &Path, len: u64, status: String, modes: String, cx: &App) ->
         )
         .child(format!("{} bytes", pc_core::grouped(len)))
         .child(status)
-        .child(modes)
+        .child(shown)
 }

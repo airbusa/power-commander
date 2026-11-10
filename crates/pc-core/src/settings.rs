@@ -16,6 +16,50 @@ pub struct Settings {
     pub tab_header_always: bool,
     pub show_hidden: bool,
     pub show_system: bool,
+    pub viewer: ViewerSettings,
+}
+
+/// Lister's: what F3 shows a file as at first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StartMode {
+    Text,
+    Binary,
+    Hex,
+    #[default]
+    Auto,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StartFont {
+    Ansi,
+    Ascii,
+    Variable,
+    #[default]
+    Auto,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ViewerSettings {
+    pub start: StartMode,
+    pub font: StartFont,
+    pub wrap: bool,
+    /// Characters a row of wrapped text, and of Binary.
+    pub text_width: usize,
+    pub binary_width: usize,
+}
+
+/// Lister's defaults.
+impl Default for ViewerSettings {
+    fn default() -> Self {
+        Self {
+            start: StartMode::Auto,
+            font: StartFont::Auto,
+            wrap: true,
+            text_width: 81,
+            binary_width: 75,
+        }
+    }
 }
 
 /// The settings dialog's pages, with their depth in its tree.
