@@ -216,14 +216,6 @@ pub const MENUS: &[Menu] = &[
             cmd("Brief", Brief),
             cmd("Full", Full),
             Item::Submenu {
-                label: "Custom Columns Mode",
-                items: &[],
-            },
-            Item::Submenu {
-                label: "Custom View Modes",
-                items: &[],
-            },
-            Item::Submenu {
                 label: "Sidebar",
                 items: &[cmd("Folders", SidebarTree), cmd("Favourites", SidebarFavourites)],
             },
