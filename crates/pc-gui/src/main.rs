@@ -10,6 +10,7 @@ mod drag_drop;
 mod editor;
 mod file_tools;
 mod find_dialog;
+mod keys_dialog;
 mod mark_menu;
 mod media_view;
 mod menus;
@@ -31,7 +32,6 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{AppMenuBar, ContextMenuExt, PopupMenu};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::Scrollbar;
@@ -266,6 +266,7 @@ impl Commander {
             });
         }
         let colors = appearance::apply(&palette(&settings, window), cx);
+        menus::bind(&settings.keys, None, cx);
         menus::set(settings.appearance, cx);
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             if this.settings.appearance == Appearance::System {
@@ -350,6 +351,10 @@ impl Commander {
         if settings.viewer.minimap != self.settings.viewer.minimap {
             cx.set_global(ShowMinimap(settings.viewer.minimap));
             cx.refresh_windows();
+        }
+        if settings.keys != self.settings.keys {
+            menus::bind(&settings.keys, Some(&self.settings.keys), cx);
+            self.menu_bar.update(cx, |bar, cx| bar.reload(cx));
         }
         self.settings = settings;
         self.save_settings(window, cx);
@@ -754,20 +759,17 @@ impl Commander {
 
     fn render_button_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let buttons = BUTTON_BAR.iter().filter_map(|item| match *item {
-            Item::Command {
-                label,
-                keys,
-                command,
-            } => Some((label, keys, command)),
+            Item::Command { label, command } => {
+                let [key, _] = self.settings.keys.keys_of(command);
+                Some((label, key, command))
+            }
             _ => None,
         });
         h_flex()
             .border_t_1()
             .border_color(cx.theme().border)
             .children(buttons.map(|(label, keys, command)| {
-                let key = Keystroke::parse(keys)
-                    .map(|key| Kbd::format(&key))
-                    .unwrap_or_default();
+                let key = keys_dialog::shown(&keys);
                 Button::new(label)
                     .ghost()
                     .small()
@@ -1385,6 +1387,10 @@ impl Render for Commander {
                     Command::Settings => {
                         let commander = cx.entity().downgrade();
                         settings_dialog::open(commander, this.settings.clone(), 0, window, cx)
+                    }
+                    Command::Shortcuts => {
+                        let commander = cx.entity().downgrade();
+                        keys_dialog::open(commander, this.settings.keys.clone(), window, cx)
                     }
                     other => {
                         if !this.mark_command(*other, window, cx) {

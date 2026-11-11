@@ -1,6 +1,8 @@
-//! Keys in GPUI syntax; numpad keys are `add`, `subtract`, `multiply`, `divide`.
+//! The menus, the button bar and the commands; their keys are the key map's.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Command {
     // Files
     ChangeAttributes,
@@ -76,6 +78,7 @@ pub enum Command {
     RereadSource,
     // Configuration
     Settings,
+    Shortcuts,
     // Button bar
     View,
     Edit,
@@ -104,7 +107,6 @@ pub enum Command {
 pub enum Item {
     Command {
         label: &'static str,
-        keys: &'static str,
         command: Command,
     },
     Submenu {
@@ -127,12 +129,8 @@ pub struct Menu {
     pub items: &'static [Item],
 }
 
-const fn cmd(label: &'static str, keys: &'static str, command: Command) -> Item {
-    Item::Command {
-        label,
-        keys,
-        command,
-    }
+const fn cmd(label: &'static str, command: Command) -> Item {
+    Item::Command { label, command }
 }
 
 const SEP: Item = Item::Separator;
@@ -143,122 +141,86 @@ pub const MENUS: &[Menu] = &[
     Menu {
         label: "Files",
         items: &[
-            cmd("Change Attributes...", "", ChangeAttributes),
-            cmd("Pack...", "alt-f5", Pack),
-            cmd("Unpack Specific Files...", "alt-f9", UnpackSpecificFiles),
-            cmd("Test Archive(s)", "alt-shift-f9", TestArchives),
-            cmd("Compare By Content...", "", CompareByContent),
-            cmd("Associate With...", "", AssociateWith),
-            cmd(
-                "Internal Associations (PowerCommander Only)...",
-                "",
-                InternalAssociations,
-            ),
-            cmd("Properties...", "alt-enter", Properties),
-            cmd("Edit With External Editor", "ctrl-shift-f4", EditExternally),
-            cmd(
-                "Calculate Occupied Space...",
-                "ctrl-l",
-                CalculateOccupiedSpace,
-            ),
-            cmd("Multi-Rename Tool...", "ctrl-m", MultiRenameTool),
+            cmd("Change Attributes...", ChangeAttributes),
+            cmd("Pack...", Pack),
+            cmd("Unpack Specific Files...", UnpackSpecificFiles),
+            cmd("Test Archive(s)", TestArchives),
+            cmd("Compare By Content...", CompareByContent),
+            cmd("Associate With...", AssociateWith),
+            cmd("Internal Associations (PowerCommander Only)...", InternalAssociations),
+            cmd("Properties...", Properties),
+            cmd("Edit With External Editor", EditExternally),
+            cmd("Calculate Occupied Space...", CalculateOccupiedSpace),
+            cmd("Multi-Rename Tool...", MultiRenameTool),
             SEP,
-            cmd("Split File...", "", SplitFile),
-            cmd("Combine Files...", "", CombineFiles),
-            cmd(
-                "Create Checksum File(s) (CRC32, MD5, SHA1, SHA256, SHA512)...",
-                "",
-                CreateChecksumFiles,
-            ),
-            cmd(
-                "Verify Checksums (from checksum files)",
-                "",
-                VerifyChecksums,
-            ),
+            cmd("Split File...", SplitFile),
+            cmd("Combine Files...", CombineFiles),
+            cmd("Create Checksum File(s) (CRC32, MD5, SHA1, SHA256, SHA512)...", CreateChecksumFiles),
+            cmd("Verify Checksums (from checksum files)", VerifyChecksums),
             SEP,
-            cmd("Quit", "alt-f4", Quit),
+            cmd("Quit", Quit),
         ],
     },
     Menu {
         label: "Mark",
         items: &[
-            cmd("Select Group...", "add", SelectGroup),
-            cmd("Unselect Group...", "subtract", UnselectGroup),
-            cmd("Select All", "ctrl-add", SelectAll),
-            cmd("Unselect All", "ctrl-subtract", UnselectAll),
-            cmd("Invert Selection", "multiply", InvertSelection),
-            cmd(
-                "Select All With Same Extension",
-                "alt-add",
-                SelectAllWithSameExtension,
-            ),
+            cmd("Select Group...", SelectGroup),
+            cmd("Unselect Group...", UnselectGroup),
+            cmd("Select All", SelectAll),
+            cmd("Unselect All", UnselectAll),
+            cmd("Invert Selection", InvertSelection),
+            cmd("Select All With Same Extension", SelectAllWithSameExtension),
             SEP,
-            cmd("Save Selection", "", SaveSelection),
-            cmd("Restore Selection", "divide", RestoreSelection),
-            cmd("Save Selection To File", "", SaveSelectionToFile),
-            cmd("Load Selection From File", "", LoadSelectionFromFile),
+            cmd("Save Selection", SaveSelection),
+            cmd("Restore Selection", RestoreSelection),
+            cmd("Save Selection To File", SaveSelectionToFile),
+            cmd("Load Selection From File", LoadSelectionFromFile),
             SEP,
-            cmd("Copy Selected Names To Clipboard", "", CopyNamesToClipboard),
-            cmd(
-                "Copy Names With Path To Clipboard",
-                "",
-                CopyNamesWithPathToClipboard,
-            ),
-            cmd("Copy To Clipboard With All Details", "", CopyWithAllDetails),
-            cmd(
-                "Copy To Clipboard With Path+Details",
-                "",
-                CopyWithPathAndDetails,
-            ),
+            cmd("Copy Selected Names To Clipboard", CopyNamesToClipboard),
+            cmd("Copy Names With Path To Clipboard", CopyNamesWithPathToClipboard),
+            cmd("Copy To Clipboard With All Details", CopyWithAllDetails),
+            cmd("Copy To Clipboard With Path+Details", CopyWithPathAndDetails),
             SEP,
-            cmd("Compare Directories", "shift-f2", CompareDirectories),
-            cmd("Mark Newer, Hide Same Files", "", MarkNewerHideSame),
+            cmd("Compare Directories", CompareDirectories),
+            cmd("Mark Newer, Hide Same Files", MarkNewerHideSame),
         ],
     },
     Menu {
         label: "Commands",
         items: &[
-            cmd("Operation Queue...", "", OperationQueue),
-            cmd("CD Tree...", "alt-f10", CdTree),
-            cmd("Search...", "alt-f7", Search),
-            cmd(
-                "Search in separate Process...",
-                "alt-shift-f7",
-                SearchInSeparateProcess,
-            ),
-            cmd("Volume Label...", "", VolumeLabel),
-            cmd("System Information...", "", SystemInformation),
-            cmd("Synchronize Dirs...", "", SynchronizeDirs),
-            cmd("Directory Hotlist", "ctrl-d", DirectoryHotlist),
-            cmd("Go Back", "alt-left", GoBack),
+            cmd("Operation Queue...", OperationQueue),
+            cmd("CD Tree...", CdTree),
+            cmd("Search...", Search),
+            cmd("Search in separate Process...", SearchInSeparateProcess),
+            cmd("Volume Label...", VolumeLabel),
+            cmd("System Information...", SystemInformation),
+            cmd("Synchronize Dirs...", SynchronizeDirs),
+            cmd("Directory Hotlist", DirectoryHotlist),
+            cmd("Go Back", GoBack),
             SEP,
-            cmd("Open command prompt window", "", OpenTerminal),
+            cmd("Open command prompt window", OpenTerminal),
             SEP,
-            cmd("Branch View (With Subdirs)", "ctrl-b", BranchView),
-            cmd("Open Desktop Folder", "", OpenDesktopFolder),
-            cmd(
-                "Background Transfer Manager...",
-                "",
-                BackgroundTransferManager,
-            ),
+            cmd("Branch View (With Subdirs)", BranchView),
+            cmd("Open Desktop Folder", OpenDesktopFolder),
+            cmd("Background Transfer Manager...", BackgroundTransferManager),
             SEP,
-            cmd("Source<->Target", "ctrl-u", SwapPanels),
-            cmd("Target=Source", "", TargetEqualsSource),
+            cmd("Source<->Target", SwapPanels),
+            cmd("Target=Source", TargetEqualsSource),
         ],
     },
     Menu {
         label: "Net",
         items: &[
-            cmd("Connect to Server...", "ctrl-f", ConnectToServer),
-            cmd("Disconnect", "ctrl-shift-f", Disconnect),
+            cmd("Connect to Server...", ConnectToServer),
+            cmd("Disconnect", Disconnect),
         ],
     },
     Menu {
         label: "Show",
         items: &[
-            cmd("Brief", "ctrl-f1", Brief),
-            cmd("Full", "ctrl-f2", Full),
-            cmd("Comments", "ctrl-shift-f2", Comments),
+            cmd("Brief", Brief),
+            cmd("Full", Full),
+            cmd("Comments", Comments),
             Item::Submenu {
                 label: "Custom Columns Mode",
                 items: &[],
@@ -267,37 +229,38 @@ pub const MENUS: &[Menu] = &[
                 label: "Custom View Modes",
                 items: &[],
             },
-            cmd("Tree", "ctrl-f8", Tree),
+            cmd("Tree", Tree),
             Item::Submenu {
                 label: "Separate Tree",
                 items: &[],
             },
-            cmd("Thumbnail View", "ctrl-shift-f1", ThumbnailView),
-            cmd("Quick View Panel", "ctrl-q", QuickViewPanel),
-            cmd("Vertical Arrangement", "", VerticalArrangement),
-            cmd("Duplicate this tab", "ctrl-t", DuplicateTab),
+            cmd("Thumbnail View", ThumbnailView),
+            cmd("Quick View Panel", QuickViewPanel),
+            cmd("Vertical Arrangement", VerticalArrangement),
+            cmd("Duplicate this tab", DuplicateTab),
             SEP,
-            cmd("All Files", "ctrl-f10", AllFiles),
-            cmd("Programs", "ctrl-f11", Programs),
-            cmd("*.*", "", AllWithExtension),
-            cmd("Custom...", "ctrl-f12", CustomFilter),
-            cmd("Only Selected Files", "", OnlySelectedFiles),
+            cmd("All Files", AllFiles),
+            cmd("Programs", Programs),
+            cmd("*.*", AllWithExtension),
+            cmd("Custom...", CustomFilter),
+            cmd("Only Selected Files", OnlySelectedFiles),
             SEP,
-            cmd("Name", "ctrl-f3", SortByName),
-            cmd("Extension", "ctrl-f4", SortByExtension),
-            cmd("Time", "ctrl-f5", SortByTime),
-            cmd("Size", "ctrl-f6", SortBySize),
-            cmd("Unsorted", "ctrl-f7", Unsorted),
+            cmd("Name", SortByName),
+            cmd("Extension", SortByExtension),
+            cmd("Time", SortByTime),
+            cmd("Size", SortBySize),
+            cmd("Unsorted", Unsorted),
             SEP,
-            cmd("Reversed Order", "", ReversedOrder),
+            cmd("Reversed Order", ReversedOrder),
             SEP,
-            cmd("Reread Source", "ctrl-r", RereadSource),
+            cmd("Reread Source", RereadSource),
         ],
     },
     Menu {
         label: "Configuration",
         items: &[
-            cmd("Settings...", "", Settings),
+            cmd("Settings...", Settings),
+            cmd("Shortcuts...", Shortcuts),
             Item::Appearance { label: "Appearance" },
         ],
     },
@@ -305,86 +268,103 @@ pub const MENUS: &[Menu] = &[
 
 /// The right-click menu of folder tabs.
 pub const TAB_MENU: &[Item] = &[
-    cmd("Duplicate this tab", "ctrl-t", DuplicateTab),
-    cmd("Rename tab...", "", RenameTab),
-    cmd("Lock this tab", "", LockTab),
+    cmd("Duplicate this tab", DuplicateTab),
+    cmd("Rename tab...", RenameTab),
+    cmd("Lock this tab", LockTab),
     SEP,
-    cmd("Copy tab to other panel", "", CopyTabToOtherPanel),
+    cmd("Copy tab to other panel", CopyTabToOtherPanel),
     SEP,
-    cmd("Close this tab", "ctrl-w", CloseTab),
-    cmd("Close all tabs", "ctrl-shift-w", CloseAllTabs),
-    cmd("Close duplicate tabs", "", CloseDuplicateTabs),
+    cmd("Close this tab", CloseTab),
+    cmd("Close all tabs", CloseAllTabs),
+    cmd("Close duplicate tabs", CloseDuplicateTabs),
     Item::ClosedTabs {
         label: "Recently closed tabs",
     },
-    cmd("Show list of all tabs", "ctrl-shift-a", ListTabs),
+    cmd("Show list of all tabs", ListTabs),
 ];
 
 /// The function key buttons under the panels.
 pub const BUTTON_BAR: &[Item] = &[
-    cmd("View", "f3", View),
-    cmd("Edit", "f4", Edit),
-    cmd("Copy", "f5", Copy),
-    cmd("Move", "f6", Move),
-    cmd("New Folder", "f7", NewFolder),
-    cmd("Delete", "f8", Delete),
-    cmd("Exit", "alt-f4", Quit),
+    cmd("View", View),
+    cmd("Edit", Edit),
+    cmd("Copy", Copy),
+    cmd("Move", Move),
+    cmd("New Folder", NewFolder),
+    cmd("Delete", Delete),
+    cmd("Exit", Quit),
 ];
 
-/// Keys of commands on no menu or button.
-pub const OTHER_KEYS: &[Item] = &[
-    cmd("Mark", "insert", ToggleMark),
-    cmd("Mark", "space", ToggleMark),
-    cmd("Select All", "ctrl-a", SelectAll),
-    cmd("Delete", "delete", Delete),
-    cmd("Delete permanently", "shift-f8", DeletePermanently),
-    cmd("Delete permanently", "shift-delete", DeletePermanently),
-    cmd("Next tab", "ctrl-tab", NextTab),
-    cmd("Previous tab", "ctrl-shift-tab", PreviousTab),
-    // Terminals take Ctrl+Tab; Konsole passes these.
-    cmd("Next tab", "alt-shift-right", NextTab),
-    cmd("Previous tab", "alt-shift-left", PreviousTab),
-    // Files for other programs, and from them, as Total Commander's.
-    cmd("Copy to clipboard", "ctrl-c", CopyToClipboard),
-    cmd("Cut to clipboard", "ctrl-x", CutToClipboard),
-    cmd("Paste from clipboard", "ctrl-v", PasteFromClipboard),
+/// Commands on no menu or button.
+pub const OTHER: &[Item] = &[
+    cmd("Mark", ToggleMark),
+    cmd("Delete permanently", DeletePermanently),
+    cmd("Next tab", NextTab),
+    cmd("Previous tab", PreviousTab),
+    cmd("Copy to clipboard", CopyToClipboard),
+    cmd("Cut to clipboard", CutToClipboard),
+    cmd("Paste from clipboard", PasteFromClipboard),
 ];
 
-pub fn key_bindings() -> Vec<(&'static str, Command)> {
-    fn walk(items: &[Item], out: &mut Vec<(&'static str, Command)>) {
+/// Names for where the menu gives no context.
+const FULL_NAMES: &[(Command, &str)] = &[
+    (Brief, "Brief View"),
+    (Full, "Full View"),
+    (Comments, "Comments View"),
+    (Tree, "Tree View"),
+    (AllFiles, "Show All Files"),
+    (Programs, "Show Programs"),
+    (AllWithExtension, "Show *.*"),
+    (CustomFilter, "Custom Filter"),
+    (OnlySelectedFiles, "Show Only Selected Files"),
+    (SortByName, "Sort by Name"),
+    (SortByExtension, "Sort by Extension"),
+    (SortByTime, "Sort by Time"),
+    (SortBySize, "Sort by Size"),
+    (Unsorted, "Sort Unsorted"),
+];
+
+/// Every command once, under its menu's name, for the Shortcuts dialog.
+pub fn groups() -> Vec<(&'static str, Vec<(&'static str, Command)>)> {
+    fn walk(items: &[Item], seen: &mut Vec<Command>, out: &mut Vec<(&'static str, Command)>) {
         for item in items {
             match *item {
-                Item::Command { keys, command, .. }
-                    if !keys.is_empty() && !out.contains(&(keys, command)) =>
-                {
-                    out.push((keys, command))
+                Item::Command { label, command } if !seen.contains(&command) => {
+                    seen.push(command);
+                    let full = FULL_NAMES.iter().find(|(c, _)| *c == command);
+                    out.push((full.map_or(label.trim_end_matches("..."), |(_, name)| name), command));
                 }
-                Item::Submenu { items, .. } => walk(items, out),
+                Item::Submenu { items, .. } => walk(items, seen, out),
                 _ => {}
             }
         }
     }
-    let mut out = Vec::new();
-    for items in MENUS
-        .iter()
-        .map(|menu| menu.items)
-        .chain([TAB_MENU, BUTTON_BAR, OTHER_KEYS])
-    {
-        walk(items, &mut out);
+    let mut seen = Vec::new();
+    let named = MENUS.iter().map(|menu| (menu.label, menu.items));
+    let others = [("Tabs", TAB_MENU), ("Button bar", BUTTON_BAR), ("Other", OTHER)];
+    let mut groups = Vec::new();
+    for (name, items) in named.chain(others) {
+        let mut commands = Vec::new();
+        walk(items, &mut seen, &mut commands);
+        if !commands.is_empty() {
+            groups.push((name, commands));
+        }
     }
-    out
+    groups
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keymap::{KeySettings, Preset};
 
     #[test]
-    fn no_key_runs_two_commands() {
-        let mut all: Vec<_> = key_bindings().into_iter().map(|(keys, _)| keys).collect();
-        let count = all.len();
-        all.sort();
-        all.dedup();
-        assert_eq!(all.len(), count, "a key is given to two commands");
+    fn every_command_with_keys_is_listed() {
+        let listed: Vec<Command> = groups().into_iter().flat_map(|(_, c)| c).map(|(_, c)| c).collect();
+        for preset in Preset::ALL {
+            let keys = KeySettings { preset, ..Default::default() };
+            for (key, command) in keys.bindings() {
+                assert!(listed.contains(&command), "{key}: {command:?} is on no list");
+            }
+        }
     }
 }

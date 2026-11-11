@@ -12,6 +12,7 @@ pub mod edit;
 pub mod ftp;
 pub mod html;
 pub mod icons;
+pub mod keymap;
 pub mod media;
 pub mod menu;
 pub mod ops;

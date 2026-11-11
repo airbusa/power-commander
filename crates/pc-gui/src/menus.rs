@@ -1,7 +1,13 @@
 use gpui_kit::component::GlobalState;
 use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::{Action, App, Context, KeyBinding, Menu, MenuItem, SharedString, Window};
-use pc_core::menu::{self, Command, Item, MENUS};
+use std::rc::Rc;
+
+use gpui_kit::{
+    Action, App, Context, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate, Menu,
+    MenuItem, SharedString, Unbind, Window,
+};
+use pc_core::keymap::KeySettings;
+use pc_core::menu::{Command, Item, MENUS};
 use pc_core::theme::Appearance;
 
 #[derive(Action, Clone, PartialEq)]
@@ -22,12 +28,22 @@ pub struct SelectTab(pub usize);
 #[action(namespace = pc, no_json)]
 pub struct ReopenTab(pub usize);
 
+/// The commands' keys. Keys bound `before` are unbound first: the new
+/// bindings come after that, so they win.
+pub fn bind(keys: &KeySettings, before: Option<&KeySettings>, cx: &mut App) {
+    let context = || Some(Rc::new(KeyBindingContextPredicate::parse(crate::CONTEXT).unwrap()));
+    let binding = |key: &str, action: Box<dyn Action>| {
+        KeyBinding::load(key, action, context(), false, None, &DummyKeyboardMapper).ok()
+    };
+    let unbound = before.into_iter().flat_map(KeySettings::bindings);
+    let unbind = unbound.filter_map(|(key, _)| binding(&key, Box::new(Unbind(Run::name_for_type().into()))));
+    cx.bind_keys(unbind.collect::<Vec<_>>());
+    // A key the settings file got wrong is left out.
+    let bound = keys.bindings().into_iter();
+    cx.bind_keys(bound.filter_map(|(key, command)| binding(&key, Box::new(Run(command)))).collect::<Vec<_>>());
+}
+
 pub fn init(cx: &mut App) {
-    cx.bind_keys(
-        menu::key_bindings()
-            .into_iter()
-            .map(|(keys, command)| KeyBinding::new(keys, Run(command), Some(crate::CONTEXT))),
-    );
     cx.on_action(|Run(command): &Run, cx| {
         if *command == Command::Quit {
             cx.quit()

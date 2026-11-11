@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use pc_core::menu::{self, Command};
+use pc_core::keymap;
+use pc_core::menu::Command;
 use pc_core::origin::{self, Upload};
 use pc_core::session::{self, Session};
 use pc_core::settings::Settings;
@@ -72,7 +73,8 @@ pub struct App {
     pub places: Places,
     pub viewer: Option<Viewer>,
     pub form: Option<(Form, Purpose)>,
-    bindings: HashMap<&'static str, Command>,
+    /// Keys as the terminal names them; Cmd never reaches it, so `secondary` is Ctrl.
+    bindings: HashMap<String, Command>,
     /// For double clicks: when, and on which side's row.
     clicked: Option<(Instant, usize, usize)>,
     foreground: Option<Foreground>,
@@ -154,6 +156,9 @@ impl App {
             },
             top: 0,
         };
+        let bindings = (settings.keys.bindings().into_iter())
+            .map(|(key, command)| (keymap::normalize(&key, false), command))
+            .collect();
         let mut app = App {
             sides: [side(0), side(1)],
             active: session.active.min(1),
@@ -163,7 +168,7 @@ impl App {
             places: Places::default(),
             viewer: None,
             form: None,
-            bindings: menu::key_bindings().into_iter().collect(),
+            bindings,
             clicked: None,
             foreground: None,
             searches: None,
