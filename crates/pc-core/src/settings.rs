@@ -10,8 +10,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// None follows the system.
-    pub theme: Option<String>,
+    pub appearance: crate::theme::Appearance,
     /// Show the tab header also when there is only one tab.
     pub tab_header_always: bool,
     pub show_hidden: bool,
@@ -125,10 +124,6 @@ pub const PAGES: &[(u8, &str)] = &[
 
 pub fn config_dir() -> Option<PathBuf> {
     Some(dirs::config_dir()?.join("powercommander"))
-}
-
-pub fn themes_dir() -> Option<PathBuf> {
-    Some(config_dir()?.join("themes"))
 }
 
 impl Settings {

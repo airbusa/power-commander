@@ -1,81 +1,65 @@
-use gpui_kit::component::{ActiveTheme, Theme as KitTheme, ThemeMode};
-use gpui_kit::{App, Hsla, rgba};
-use pc_core::theme::{Kind, Theme};
+use gpui_kit::component::{Theme as KitTheme, ThemeMode};
+use gpui_kit::{App, Hsla, rgb};
+use pc_core::theme::Palette;
 
 #[derive(Clone, Copy)]
 pub struct Cursor {
     pub background: Option<Hsla>,
     pub foreground: Hsla,
-    /// High contrast only.
-    pub border: Option<Hsla>,
 }
 
 #[derive(Clone, Copy)]
 pub struct PanelColors {
     pub active: Cursor,
     pub inactive: Cursor,
-    /// High contrast only.
-    pub active_title_border: Option<Hsla>,
     /// Marked files' names.
     pub marked: Hsla,
 }
 
-pub fn apply(theme: &Theme, cx: &mut App) -> PanelColors {
-    let color = |key: &str| theme.color(key).map(|c| Hsla::from(rgba(c)));
-    let mode = match theme.kind.is_dark() {
+/// The system's look on GPUI Kit's colours, and the panels'.
+pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
+    let color = |value: u32| Hsla::from(rgb(value));
+    let mode = match palette.dark {
         true => ThemeMode::Dark,
         false => ThemeMode::Light,
     };
     KitTheme::change(mode, None, cx);
     KitTheme::update(cx, |kit| {
+        if let Some(font) = &palette.font {
+            kit.font_family = font.clone().into();
+        }
         let kit = &mut kit.colors;
-        let set = |field: &mut Hsla, key: &str| {
-            if let Some(c) = color(key) {
-                *field = c;
-            }
-        };
-        set(&mut kit.background, "editor.background");
-        set(&mut kit.foreground, "foreground");
-        set(&mut kit.border, "panel.border");
-        // Active panel title.
-        set(&mut kit.primary, "button.background");
-        set(&mut kit.primary_foreground, "button.foreground");
-        // Inactive title, column titles.
-        set(&mut kit.muted, "sideBar.background");
-        set(&mut kit.muted_foreground, "descriptionForeground");
-        set(&mut kit.popover, "menu.background");
-        set(&mut kit.popover_foreground, "menu.foreground");
-        set(&mut kit.accent, "menu.selectionBackground");
-        set(&mut kit.accent_foreground, "menu.selectionForeground");
-        set(&mut kit.list_active, "list.activeSelectionBackground");
+        kit.background = color(palette.view);
+        kit.foreground = color(palette.text);
+        kit.border = color(palette.border);
+        // The active panel's path; dialogs' main buttons.
+        kit.primary = color(palette.selection);
+        kit.primary_foreground = color(palette.selection_text);
+        // The inactive panel's path.
+        kit.muted = color(palette.header);
+        kit.muted_foreground = color(palette.dim);
+        kit.popover = color(palette.window);
+        kit.popover_foreground = color(palette.text);
+        kit.accent = color(palette.selection);
+        kit.accent_foreground = color(palette.selection_text);
+        kit.list_active = color(palette.selection);
         // Column titles.
-        set(&mut kit.list_head, "sideBarSectionHeader.background");
-        set(&mut kit.tab_bar, "editorGroupHeader.tabsBackground");
-        set(&mut kit.tab_active, "tab.activeBackground");
-        set(&mut kit.tab_foreground, "tab.inactiveForeground");
-        set(&mut kit.tab_active_foreground, "tab.activeForeground");
+        kit.list_head = color(palette.header);
+        kit.tab_bar = color(palette.window);
+        kit.tab_active = color(palette.view);
+        kit.tab_foreground = color(palette.dim);
+        kit.tab_active_foreground = color(palette.text);
     });
-    let foreground = cx.theme().foreground;
-    let high_contrast = matches!(theme.kind, Kind::HighContrastDark | Kind::HighContrastLight);
-    let cursor = |background, foreground_key, border_key| Cursor {
-        background: color(background),
-        foreground: color(foreground_key).unwrap_or(foreground),
-        border: high_contrast.then(|| color(border_key)).flatten(),
-    };
     PanelColors {
-        active: cursor(
-            "list.activeSelectionBackground",
-            "list.activeSelectionForeground",
-            "list.focusOutline",
-        ),
-        inactive: cursor(
-            "list.inactiveSelectionBackground",
-            "list.inactiveSelectionForeground",
-            "contrastBorder",
-        ),
-        active_title_border: high_contrast
-            .then(|| color("contrastActiveBorder"))
-            .flatten(),
-        marked: color("errorForeground").unwrap_or(foreground),
+        active: Cursor {
+            background: Some(color(palette.selection)),
+            foreground: color(palette.selection_text),
+        },
+        // The other panel's cursor: the selection, faint.
+        inactive: Cursor {
+            background: Some(color(palette.selection).opacity(0.3)),
+            foreground: color(palette.text),
+        },
+        marked: color(palette.marked),
     }
 }

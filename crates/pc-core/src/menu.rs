@@ -111,7 +111,8 @@ pub enum Item {
         label: &'static str,
         items: &'static [Item],
     },
-    Themes {
+    /// System, Light and Dark.
+    Appearance {
         label: &'static str,
     },
     /// A submenu of the side's recently closed tabs.
@@ -297,7 +298,7 @@ pub const MENUS: &[Menu] = &[
         label: "Configuration",
         items: &[
             cmd("Settings...", "", Settings),
-            Item::Themes { label: "Theme" },
+            Item::Appearance { label: "Appearance" },
         ],
     },
 ];

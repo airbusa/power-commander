@@ -2,16 +2,15 @@ use gpui_kit::component::GlobalState;
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{Action, App, Context, KeyBinding, Menu, MenuItem, SharedString, Window};
 use pc_core::menu::{self, Command, Item, MENUS};
-use pc_core::theme::Theme;
+use pc_core::theme::Appearance;
 
 #[derive(Action, Clone, PartialEq)]
 #[action(namespace = pc, no_json)]
 pub struct Run(pub Command);
 
-/// None follows the system.
 #[derive(Action, Clone, PartialEq)]
 #[action(namespace = pc, no_json)]
-pub struct SetTheme(pub Option<SharedString>);
+pub struct SetAppearance(pub Appearance);
 
 /// A tab of the active side.
 #[derive(Action, Clone, PartialEq)]
@@ -37,12 +36,12 @@ pub fn init(cx: &mut App) {
 }
 
 /// Call `AppMenuBar::reload` after.
-pub fn set(themes: &[Theme], chosen: Option<&str>, cx: &mut App) {
+pub fn set(chosen: Appearance, cx: &mut App) {
     let menus = MENUS
         .iter()
         .map(|menu| {
             Menu::new(menu.label)
-                .items(items(menu.items, themes, chosen))
+                .items(items(menu.items, chosen))
                 .owned()
         })
         .collect();
@@ -50,24 +49,24 @@ pub fn set(themes: &[Theme], chosen: Option<&str>, cx: &mut App) {
     GlobalState::global_mut(cx).set_app_menus(menus);
 }
 
-fn items(list: &[Item], themes: &[Theme], chosen: Option<&str>) -> Vec<MenuItem> {
+fn items(list: &[Item], chosen: Appearance) -> Vec<MenuItem> {
     list.iter()
         .filter_map(|item| match *item {
             Item::Separator => Some(MenuItem::separator()),
             Item::Submenu { label, items: sub } => Some(MenuItem::submenu(
-                Menu::new(label).items(items(sub, themes, chosen)),
+                Menu::new(label).items(items(sub, chosen)),
             )),
             Item::Command { label, command, .. } => Some(MenuItem::action(label, Run(command))),
-            Item::Themes { label } => {
-                let follow =
-                    MenuItem::action("Follow System", SetTheme(None)).checked(chosen.is_none());
-                let each = themes.iter().map(|theme| {
-                    let name = SharedString::from(theme.name.clone());
-                    MenuItem::action(name.clone(), SetTheme(Some(name)))
-                        .checked(chosen == Some(theme.name.as_str()))
+            Item::Appearance { label } => {
+                let each = [
+                    ("As the system", Appearance::System),
+                    ("Light", Appearance::Light),
+                    ("Dark", Appearance::Dark),
+                ]
+                .map(|(name, appearance)| {
+                    MenuItem::action(name, SetAppearance(appearance)).checked(chosen == appearance)
                 });
-                let list = [follow, MenuItem::separator()].into_iter().chain(each);
-                Some(MenuItem::submenu(Menu::new(label).items(list)))
+                Some(MenuItem::submenu(Menu::new(label).items(each)))
             }
             Item::ClosedTabs { .. } => None,
         })
@@ -106,8 +105,8 @@ pub fn context_menu(
                     menu
                 })
             }
-            // shortcut: no submenus or themes in context menus yet; add them when one has them.
-            Item::Submenu { .. } | Item::Themes { .. } => menu,
+            // shortcut: no submenus or appearances in context menus yet; add them when one has them.
+            Item::Submenu { .. } | Item::Appearance { .. } => menu,
         };
     }
     menu

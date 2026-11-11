@@ -43,12 +43,12 @@ use pc_core::menu::{BUTTON_BAR, Command, Item, TAB_MENU};
 use pc_core::remote::Address;
 use pc_core::session::Session;
 use pc_core::settings::{self, Settings};
-use pc_core::theme::{self, Theme};
+use pc_core::theme::{self, Appearance};
 use pc_core::{Panel, Sort, SortKey, Tabs, Typed, archive, edit, icons, ops, origin};
 
 use crate::appearance::PanelColors;
 use crate::drag_drop::{DragLabel, Dragged};
-use crate::menus::{ReopenTab, Run, SelectTab, SetTheme};
+use crate::menus::{ReopenTab, Run, SelectTab, SetAppearance};
 
 actions!(
     pc,
@@ -209,7 +209,6 @@ struct Commander {
     active: usize,
     focus: FocusHandle,
     menu_bar: Entity<AppMenuBar>,
-    themes: Vec<Theme>,
     settings: Settings,
     colors: PanelColors,
     /// Show list of all tabs: the side and its popup.
@@ -256,21 +255,6 @@ impl Commander {
             problems.push(format!("Could not read the open tabs: {err}"));
             Session::default()
         });
-        let mut themes = theme::builtin();
-        if let Some(dir) = settings::themes_dir() {
-            let (own, unreadable) = theme::load_dir(&dir);
-            problems.extend(unreadable);
-            for own in own {
-                match themes.iter().any(|t| t.name == own.name) {
-                    true => problems.push(format!(
-                        "{}: there is a theme named {} already",
-                        dir.display(),
-                        own.name
-                    )),
-                    false => themes.push(own),
-                }
-            }
-        }
         if !problems.is_empty() {
             // Notifications need the window's root first.
             window.defer(cx, move |window, cx| {
@@ -278,11 +262,11 @@ impl Commander {
                 window.push_notification(Notification::error(text).autohide(false), cx)
             });
         }
-        let colors = appearance::apply(pick(&themes, &settings, window), cx);
-        menus::set(&themes, settings.theme.as_deref(), cx);
+        let colors = appearance::apply(&palette(&settings, window), cx);
+        menus::set(settings.appearance, cx);
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
-            if this.settings.theme.is_none() {
-                this.colors = appearance::apply(pick(&this.themes, &this.settings, window), cx);
+            if this.settings.appearance == Appearance::System {
+                this.colors = appearance::apply(&palette(&this.settings, window), cx);
             }
         });
         let home = std::env::home_dir().unwrap_or_else(|| "/".into());
@@ -339,7 +323,6 @@ impl Commander {
             },
             focus,
             menu_bar: AppMenuBar::new(cx),
-            themes,
             settings,
             colors,
             tab_list: None,
@@ -377,11 +360,11 @@ impl Commander {
         }
     }
 
-    fn set_theme(&mut self, name: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.theme = name;
+    fn set_appearance(&mut self, chosen: Appearance, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.appearance = chosen;
         self.save_settings(window, cx);
-        self.colors = appearance::apply(pick(&self.themes, &self.settings, window), cx);
-        menus::set(&self.themes, self.settings.theme.as_deref(), cx);
+        self.colors = appearance::apply(&palette(&self.settings, window), cx);
+        menus::set(chosen, cx);
         self.menu_bar.update(cx, |bar, cx| bar.reload(cx));
         cx.notify();
     }
@@ -1185,12 +1168,6 @@ impl Commander {
                     .px_2()
                     .bg(title_bg)
                     .text_color(title_fg)
-                    .border_1()
-                    .border_color(gpui_kit::transparent_black())
-                    .when_some(
-                        self.colors.active_title_border.filter(|_| active),
-                        |el, border| el.border_color(border),
-                    )
                     .cursor_text()
                     .on_click(
                         cx.listener(move |this, _, window, cx| this.edit_path(ix, window, cx)),
@@ -1255,7 +1232,6 @@ impl Commander {
             .when_some(cursor, |el, cursor| {
                 el.text_color(cursor.foreground)
                     .when_some(cursor.background, |el, bg| el.bg(bg))
-                    .when_some(cursor.border, |el, border| el.border_color(border))
             })
             .when(marked, |el| el.text_color(self.colors.marked))
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
@@ -1414,8 +1390,8 @@ impl Render for Commander {
             .on_action(cx.listener(|this, ReopenTab(ix): &ReopenTab, window, cx| {
                 this.reopen_tab(*ix, window, cx)
             }))
-            .on_action(cx.listener(|this, SetTheme(name): &SetTheme, window, cx| {
-                this.set_theme(name.as_ref().map(|name| name.to_string()), window, cx)
+            .on_action(cx.listener(|this, SetAppearance(chosen): &SetAppearance, window, cx| {
+                this.set_appearance(*chosen, window, cx)
             }))
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<SplitDrag>, _, cx| {
@@ -1496,16 +1472,15 @@ pub(crate) fn over_main_window(title: String, bounds: WindowBounds, cx: &App) ->
     }
 }
 
-fn pick<'a>(themes: &'a [Theme], settings: &Settings, window: &Window) -> &'a Theme {
-    let dark = matches!(
-        window.appearance(),
-        WindowAppearance::Dark | WindowAppearance::VibrantDark
-    );
-    let named = |name: &str| themes.iter().find(|t| t.name == name);
-    settings
-        .theme
-        .as_deref()
-        .and_then(named)
-        .or_else(|| named(theme::default_name(dark)))
-        .expect("the default themes are built in")
+/// The system's look, light or dark as chosen.
+fn palette(settings: &Settings, window: &Window) -> theme::Palette {
+    let dark = match settings.appearance {
+        Appearance::System => matches!(
+            window.appearance(),
+            WindowAppearance::Dark | WindowAppearance::VibrantDark
+        ),
+        Appearance::Light => false,
+        Appearance::Dark => true,
+    };
+    theme::system(dark)
 }
