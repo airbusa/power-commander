@@ -465,8 +465,12 @@ impl Panel {
 
     /// Inside an archive, the file at the cursor.
     pub fn archive_member(&self) -> Option<archive::Member> {
+        self.archive_member_of(self.current_entry()?)
+    }
+
+    fn archive_member_of(&self, entry: &Entry) -> Option<archive::Member> {
         let archive = self.archive.as_ref()?;
-        let entry = self.current_entry().filter(|entry| !entry.is_dir)?;
+        let entry = Some(entry).filter(|entry| !entry.is_dir)?;
         let path = archive.dir.join(&entry.name);
         let item = archive.items.iter().find(|item| item.path == path)?;
         Some(archive::Member {
@@ -485,9 +489,14 @@ impl Panel {
 
     /// The file at the cursor, for viewers and editors.
     pub fn origin(&self) -> Option<origin::Origin> {
-        let entry = self.current_entry().filter(|entry| !entry.is_dir)?;
+        self.origin_of(self.current_entry()?)
+    }
+
+    /// An entry's file, as `origin` the cursor's.
+    pub fn origin_of(&self, entry: &Entry) -> Option<origin::Origin> {
+        let entry = Some(entry).filter(|entry| !entry.is_dir)?;
         if self.archive.is_some() {
-            let member = self.archive_member()?;
+            let member = self.archive_member_of(entry)?;
             return Some(origin::Origin::Archive(member, self.archive_origin()));
         }
         let path = self.folder().join(&entry.name);
