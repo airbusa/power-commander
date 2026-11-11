@@ -57,7 +57,7 @@ impl Viewer {
         settings: ViewerSettings,
         title: Option<String>,
     ) -> io::Result<Self> {
-        let mut shown = Shown::new(files, at, settings, PICTURES.as_slice(), false);
+        let mut shown = Shown::new(files, at, settings, PICTURES.as_slice(), false, false);
         // Wrapped rows are as wide as the terminal; pictures fit its rows.
         let (columns, lines) = ratatui::crossterm::terminal::size().unwrap_or((80, 24));
         shown.settings.text_width = columns as usize;

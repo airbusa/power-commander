@@ -20,6 +20,7 @@ use pc_core::viewer::{
 
 use crate::find_dialog;
 use crate::minimap::{self, Minimap};
+use crate::media_view::MediaView;
 use crate::pdf_view::PdfView;
 
 actions!(
@@ -56,6 +57,8 @@ actions!(
         SaveAs,
         Configure,
         ToggleMinimap,
+        PlayPause,
+        ToggleFullScreen,
         CopyText,
         CopyHex,
         SearchGoogle,
@@ -119,6 +122,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("f", FitImage, keys),
         KeyBinding::new("l", FitLarger, keys),
         KeyBinding::new("m", ToggleMinimap, keys),
+        KeyBinding::new("space", PlayPause, keys),
+        KeyBinding::new("f11", ToggleFullScreen, keys),
         KeyBinding::new("n", NextFile, keys),
         KeyBinding::new("p", PreviousFile, keys),
         KeyBinding::new("f2", Reload, keys),
@@ -140,7 +145,7 @@ pub fn open(
     bounds: WindowBounds,
     cx: &mut App,
 ) -> io::Result<()> {
-    let mut shown = Shown::new(files, at, settings, Img::extensions(), true);
+    let mut shown = Shown::new(files, at, settings, Img::extensions(), true, true);
     let text = shown.start()?;
     let options = WindowOptions {
         window_bounds: Some(bounds),
@@ -184,6 +189,8 @@ fn searches(cx: &mut App) -> &mut Searches {
 struct Viewer {
     shown: Shown,
     menu_bar: Entity<AppMenuBar>,
+    /// Video or sound being played.
+    media: Option<Entity<MediaView>>,
     /// Shared with a running Find.
     text: Arc<TextFile>,
     /// The file's, HTML's text is shorter.
@@ -419,6 +426,7 @@ impl Viewer {
         window.focus(&focus, cx);
         Self {
             menu_bar: menu_bar(cx.entity().downgrade(), cx),
+            media: media_view(&shown, None, cx),
             size: file_size(&shown, &text),
             markdown: markdown(&shown, &text),
             pdf: pdf_view(&shown, cx),
@@ -480,6 +488,7 @@ impl Viewer {
         self.size = file_size(&self.shown, &text);
         self.markdown = markdown(&self.shown, &text);
         self.pdf = pdf_view(&self.shown, cx);
+        self.media = media_view(&self.shown, self.media.take(), cx);
         self.text = Arc::new(text);
         self.selection = (0, 0);
         self.stop_finding();
@@ -802,6 +811,11 @@ impl Viewer {
         );
     }
 
+    /// The player, when video or sound is shown.
+    fn player(&self, cx: &App) -> Option<Rc<pc_core::media::Player>> {
+        self.media.as_ref().and_then(|media| media.read(cx).player())
+    }
+
     /// One of the menus, as it is now.
     fn menu(&self, name: &str, menu: PopupMenu, cx: &App) -> PopupMenu {
         let Shown {
@@ -845,7 +859,7 @@ impl Viewer {
                     Box::new(ShowBinary),
                 ),
                 ("Hex", Mode::Hex, Box::new(ShowHex)),
-                ("Image", Mode::Picture, Box::new(ShowPicture)),
+                ("Image/Multimedia", Mode::Picture, Box::new(ShowPicture)),
                 ("HTML text (strip tags)", Mode::Html, Box::new(ShowHtml)),
                 ("Unicode (UTF-16)", Mode::Unicode, Box::new(ShowUnicode)),
                 ("UTF-8", Mode::Utf8, Box::new(ShowUtf8)),
@@ -869,7 +883,7 @@ impl Viewer {
             for (label, this, action) in fonts {
                 menu = menu.menu_with_check(label, font == this, action);
             }
-            let image = mode == Mode::Picture;
+            let image = mode == Mode::Picture && !self.shown.media;
             let larger = "Fit only larger images";
             menu.separator()
                 .menu_with_check(
@@ -1140,7 +1154,10 @@ impl Viewer {
 impl Render for Viewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (content, status) = match self.shown.mode {
-            Mode::Picture => (self.render_picture(), String::new()),
+            Mode::Picture => match &self.media {
+                Some(media) => (media.clone().into_any_element(), String::new()),
+                None => (self.render_picture(), String::new()),
+            },
             Mode::Markdown => (self.render_markdown(), String::new()),
             Mode::Pdf => match &self.pdf {
                 Some(pdf) => (pdf.clone().into_any_element(), pdf.read(cx).status()),
@@ -1218,25 +1235,58 @@ impl Render for Viewer {
             }))
             .on_action(cx.listener(|_, _: &Configure, _, cx| crate::configure_viewer(cx)))
             .on_action(cx.listener(|_, _: &ToggleMinimap, _, cx| crate::toggle_minimap(cx)))
-            .on_action(cx.listener(|this, _: &LineUp, _, cx| match &this.pdf {
-                Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_by(-PDF_LINE, cx)),
-                None => this.scroll(|v| v.scroll_rows(-1), cx),
+            .on_action(cx.listener(|this, _: &PlayPause, _, cx| {
+                this.player(cx).inspect(|player| player.toggle_pause());
             }))
-            .on_action(cx.listener(|this, _: &LineDown, _, cx| match &this.pdf {
-                Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_by(PDF_LINE, cx)),
-                None => this.scroll(|v| v.scroll_rows(1), cx),
+            .on_action(cx.listener(|_, _: &ToggleFullScreen, window, _| {
+                window.toggle_fullscreen()
             }))
-            .on_action(cx.listener(|this, _: &PageUp, _, cx| match &this.pdf {
-                Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_by(-pdf.page_height(), cx)),
-                None => this.scroll(|v| v.scroll_rows(-(v.visible().max(2) as isize - 1)), cx),
+            .on_action(cx.listener(|this, _: &Left, _, cx| {
+                this.player(cx).inspect(|player| player.seek_by(-5.));
             }))
-            .on_action(cx.listener(|this, _: &PageDown, _, cx| match &this.pdf {
-                Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_by(pdf.page_height(), cx)),
-                None => this.scroll(|v| v.scroll_rows(v.visible().max(2) as isize - 1), cx),
+            .on_action(cx.listener(|this, _: &Right, _, cx| {
+                this.player(cx).inspect(|player| player.seek_by(5.));
             }))
-            .on_action(cx.listener(|this, _: &Top, _, cx| match &this.pdf {
-                Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_to_end(false, cx)),
-                None => this.scroll(|v| v.top = 0, cx),
+            .on_action(cx.listener(|this, _: &LineUp, _, cx| {
+                match (this.player(cx), &this.pdf) {
+                    (Some(player), _) => player.change_volume(5.),
+                    (None, Some(pdf)) => pdf.update(cx, |pdf, cx| pdf.scroll_by(-PDF_LINE, cx)),
+                    (None, None) => this.scroll(|v| v.scroll_rows(-1), cx),
+                }
+            }))
+            .on_action(cx.listener(|this, _: &LineDown, _, cx| {
+                match (this.player(cx), &this.pdf) {
+                    (Some(player), _) => player.change_volume(-5.),
+                    (None, Some(pdf)) => pdf.update(cx, |pdf, cx| pdf.scroll_by(PDF_LINE, cx)),
+                    (None, None) => this.scroll(|v| v.scroll_rows(1), cx),
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PageUp, _, cx| {
+                match (this.player(cx), &this.pdf) {
+                    (Some(player), _) => player.seek_by(-60.),
+                    (None, Some(pdf)) => {
+                        pdf.update(cx, |pdf, cx| pdf.scroll_by(-pdf.page_height(), cx))
+                    }
+                    (None, None) => {
+                        this.scroll(|v| v.scroll_rows(-(v.visible().max(2) as isize - 1)), cx)
+                    }
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PageDown, _, cx| {
+                match (this.player(cx), &this.pdf) {
+                    (Some(player), _) => player.seek_by(60.),
+                    (None, Some(pdf)) => pdf.update(cx, |pdf, cx| pdf.scroll_by(pdf.page_height(), cx)),
+                    (None, None) => {
+                        this.scroll(|v| v.scroll_rows(v.visible().max(2) as isize - 1), cx)
+                    }
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Top, _, cx| {
+                match (this.player(cx), &this.pdf) {
+                    (Some(player), _) => player.seek_to(0.),
+                    (None, Some(pdf)) => pdf.update(cx, |pdf, cx| pdf.scroll_to_end(false, cx)),
+                    (None, None) => this.scroll(|v| v.top = 0, cx),
+                }
             }))
             .on_action(cx.listener(|this, _: &Bottom, _, cx| match &this.pdf {
                 Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_to_end(true, cx)),
@@ -1264,6 +1314,20 @@ impl Render for Viewer {
                 cx,
             ))
     }
+}
+
+/// The one playing goes on while its file is shown.
+fn media_view(
+    shown: &Shown,
+    playing: Option<Entity<MediaView>>,
+    cx: &mut App,
+) -> Option<Entity<MediaView>> {
+    if shown.mode != Mode::Picture || !shown.media {
+        return None;
+    }
+    let playing = playing.filter(|view| view.read(cx).path() == shown.path());
+    let path = shown.path().to_owned();
+    Some(playing.unwrap_or_else(|| cx.new(|cx| MediaView::new(path, cx))))
 }
 
 fn pdf_view(shown: &Shown, cx: &mut App) -> Option<Entity<PdfView>> {

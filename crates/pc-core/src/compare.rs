@@ -379,6 +379,8 @@ impl Visible {
 }
 
 #[cfg(test)]
+// Ranges here are values, not lists to fill.
+#[allow(clippy::single_range_in_vec_init)]
 mod tests {
     use super::*;
 

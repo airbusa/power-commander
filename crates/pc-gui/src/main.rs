@@ -10,6 +10,7 @@ mod editor;
 mod file_tools;
 mod find_dialog;
 mod mark_menu;
+mod media_view;
 mod menus;
 mod minimap;
 mod name_dialog;
@@ -66,11 +67,15 @@ actions!(
 
 include!(concat!(env!("OUT_DIR"), "/material_icons.rs"));
 
-/// GPUI Kit's icons, and the file icons as `material/<name>.svg`.
+/// GPUI Kit's icons, the file icons as `material/<name>.svg`, the player's as `media/`.
 struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if let Some(name) = path.strip_prefix("media/") {
+            let found = media_view::ICONS.iter().find(|(icon, _)| *icon == name);
+            return Ok(found.map(|(_, svg)| Cow::Borrowed(*svg)));
+        }
         let Some(name) = path.strip_prefix("material/") else {
             return gpui_kit::assets::Assets.load(path);
         };

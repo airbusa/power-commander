@@ -859,10 +859,14 @@ pub struct Shown {
     pub picture: bool,
     /// A PDF, and PDFium is there.
     pub pdf: bool,
+    /// Video or sound, and the front end plays it: Image/Multimedia plays it.
+    pub media: bool,
     /// Extensions of the pictures the viewer can show.
     pictures: &'static [&'static str],
     /// The viewer renders Markdown; else it is text.
     markdown: bool,
+    /// The front end plays video and sound.
+    plays: bool,
 }
 
 impl Shown {
@@ -872,6 +876,7 @@ impl Shown {
         settings: ViewerSettings,
         pictures: &'static [&'static str],
         markdown: bool,
+        plays: bool,
     ) -> Self {
         let font = match settings.font {
             StartFont::Ascii => Font::Ascii,
@@ -889,8 +894,10 @@ impl Shown {
             big_endian: false,
             picture: false,
             pdf: false,
+            media: false,
             pictures,
             markdown,
+            plays,
         }
     }
 
@@ -903,13 +910,15 @@ impl Shown {
         let path = self.path();
         let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
         let extension = extension.as_deref().unwrap_or_default();
-        let picture = self.pictures.contains(&extension);
+        let media = self.plays && crate::media::is_media(path) && crate::media::available();
+        let picture = self.pictures.contains(&extension) || media;
         let html = matches!(extension, "htm" | "html" | "xhtml");
         let markdown = self.markdown
             && matches!(extension, "md" | "markdown")
             && std::fs::metadata(path)?.len() <= MARKDOWN_LIMIT;
         let detected = detect(path)?;
         self.picture = picture;
+        self.media = media;
         self.pdf = extension == "pdf" && crate::pdf::available();
         self.big_endian = detected == Detected::Utf16 { big_endian: true };
         self.page = None;
@@ -988,6 +997,7 @@ impl Shown {
             Mode::Text => format!("Text · {page}"),
             Mode::Binary => format!("Binary · {page}"),
             Mode::Hex => format!("Hex · {page}"),
+            Mode::Picture if self.media => "Multimedia".into(),
             Mode::Picture => "Image".into(),
             Mode::Html => "HTML text".into(),
             Mode::Unicode => "UTF-16".into(),

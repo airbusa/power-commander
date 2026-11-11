@@ -23,6 +23,8 @@ memchr = "2"
 keyring = "4"
 # PDF pages for the viewer, by the bundled PDFium (vendor/pdfium).
 pdfium-render = { version = "0.9", default-features = false, features = ["pdfium_8125", "thread_safe"] }
+# libmpv, loaded when there for video and sound; GPUI builds it already.
+libloading = "0.8"
 # The viewer's Find; GPUI builds it already.
 regex = "1"
 # SFTP in pure Rust: ring, as GPUI has it, rather than a C crypto build.
@@ -38,3 +40,8 @@ trash = "5.3.0"
 suppaftp = { version = "12", default-features = false, features = ["rustls-ring"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 ring = "0.17"
+
+# mpv draws frames with OpenGL, by EGL with no window; wgpu builds both already.
+[target.'cfg(target_os = "linux")'.dependencies]
+khronos-egl = { version = "6", features = ["dynamic"] }
+glow = "0.17"

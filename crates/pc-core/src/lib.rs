@@ -10,6 +10,7 @@ pub mod edit;
 pub mod ftp;
 pub mod html;
 pub mod icons;
+pub mod media;
 pub mod menu;
 pub mod ops;
 pub mod origin;
