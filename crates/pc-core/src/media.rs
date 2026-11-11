@@ -93,6 +93,8 @@ impl Player {
             ("vo", "libmpv"),
             ("keep-open", "yes"),
             ("hwdec", "auto-safe"),
+            // mpv's probe of NVIDIA's prints "Cannot load libcuda.so.1" where it is missing.
+            ("gpu-hwdec-interop", if nvidia() { "auto" } else { "vaapi" }),
             ("input-default-bindings", "no"),
             ("terminal", "no"),
         ] {
@@ -218,6 +220,13 @@ impl Drop for Player {
         // SAFETY: the render context is freed and no thread uses the handle now.
         unsafe { (self.mpv.terminate_destroy)(self.handle.0) };
     }
+}
+
+/// NVIDIA's CUDA is installed: its hardware decoding is worth probing.
+fn nvidia() -> bool {
+    static FOUND: OnceLock<bool> = OnceLock::new();
+    // SAFETY: loads NVIDIA's driver library, as mpv would.
+    *FOUND.get_or_init(|| cfg!(target_os = "linux") && unsafe { libloading::Library::new("libcuda.so.1") }.is_ok())
 }
 
 fn text(text: &str) -> Result<CString, String> {

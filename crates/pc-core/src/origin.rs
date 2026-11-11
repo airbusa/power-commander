@@ -4,9 +4,10 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::archive::Member;
+use crate::ops::{Report, Task};
 use crate::vfs::{self, Fs, Local, Remote};
 
 /// After each save: the copy goes back where it came from, and says so.
@@ -71,8 +72,51 @@ impl Origin {
     }
 }
 
-/// A server's file.
-fn upload_to(fs: Arc<dyn Fs>, path: PathBuf) -> Upload {
+/// Fetches a server's file into a temporary folder as a queue task, its
+/// progress shown and cancellable; `done` gets the copy, or why not.
+pub fn fetch_task(
+    fs: Arc<dyn Fs>,
+    path: PathBuf,
+    title: String,
+    done: impl FnOnce(io::Result<PathBuf>) + Send + 'static,
+) -> Task {
+    Task {
+        title,
+        run: Box::new(move |report| {
+            let fetched = fetch(&*fs, &path, report);
+            // The queue shows a failure; `done` gets it too.
+            let shown = match &fetched {
+                Ok(_) => Ok(String::new()),
+                Err(err) => Err(io::Error::new(err.kind(), err.to_string())),
+            };
+            done(fetched);
+            shown
+        }),
+    }
+}
+
+fn fetch(fs: &dyn Fs, path: &Path, report: &mut Report) -> io::Result<PathBuf> {
+    let meta = fs.metadata(path)?;
+    (report.progress.total_files, report.progress.total_bytes) = (1, meta.size);
+    report.progress.current = path.to_owned();
+    report.show();
+    let local = crate::archive::fresh_scratch()?.join(path.file_name().unwrap_or_default());
+    let mut shown = Instant::now();
+    vfs::copy_file(fs, path, &Local, &local, &meta, &mut |read| {
+        report.progress.bytes += read;
+        if shown.elapsed() > Duration::from_millis(100) {
+            report.show();
+            shown = Instant::now();
+        }
+        report.check()
+    })?;
+    report.progress.files = 1;
+    report.show();
+    Ok(local)
+}
+
+/// How an edited copy of a server's file goes back.
+pub fn upload_to(fs: Arc<dyn Fs>, path: PathBuf) -> Upload {
     Arc::new(move |local| {
         let named =
             |err: io::Error| io::Error::new(err.kind(), format!("{}: {err}", path.display()));
@@ -100,6 +144,47 @@ pub fn send_back(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fetches_as_a_task_beside_the_queue() {
+        let dir = std::env::temp_dir().join(format!("pc-fetch-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("film.mkv");
+        std::fs::write(&file, vec![7u8; 300_000]).unwrap();
+        let queue = crate::ops::Queue::default();
+        let (sent, got) = std::sync::mpsc::channel();
+        let task = fetch_task(Arc::new(Local), file.clone(), "View film.mkv".into(), move |fetched| {
+            let _ = sent.send(fetched);
+        });
+        let id = queue.run_now(task);
+        let copy = got.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+        assert_ne!(copy, file);
+        assert_eq!(std::fs::read(&copy).unwrap(), std::fs::read(&file).unwrap());
+        std::fs::remove_dir_all(copy.parent().unwrap()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let done = loop {
+            let job = queue.jobs().into_iter().find(|job| job.id == id).unwrap();
+            if job.status != crate::ops::Status::Running || Instant::now() > deadline {
+                break job;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(done.status, crate::ops::Status::Done);
+        assert_eq!(done.progress.bytes, 300_000);
+
+        // Cancelled at once: no copy, nothing left behind.
+        let big = dir.join("big.bin");
+        std::fs::write(&big, vec![1u8; 64 << 20]).unwrap();
+        let (sent, got) = std::sync::mpsc::channel();
+        let task = fetch_task(Arc::new(Local), big, "View big.bin".into(), move |fetched| {
+            let _ = sent.send(fetched);
+        });
+        let id = queue.run_now(task);
+        queue.cancel(id);
+        let fetched = got.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(fetched.unwrap_err().kind(), io::ErrorKind::Interrupted);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn sends_back_only_changes() {

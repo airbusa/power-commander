@@ -222,6 +222,37 @@ impl Queue {
         self.add(task.title.clone(), Work::Task(task))
     }
 
+    /// Starts the task now, on a thread of its own beside the queue's one
+    /// at a time; listed, shown and cancelled as the others.
+    pub fn run_now(&self, task: Task) -> u64 {
+        let (id, cancel) = {
+            let mut state = self.lock();
+            state.next += 1;
+            let (id, cancel) = (state.next, Arc::<AtomicBool>::default());
+            state.jobs.push(Job {
+                view: JobView {
+                    id,
+                    title: task.title.clone(),
+                    status: Status::Running,
+                    progress: Progress::default(),
+                    question: None,
+                    note: None,
+                },
+                work: None,
+                answer: None,
+                cancel: cancel.clone(),
+            });
+            state.version += 1;
+            (id, cancel)
+        };
+        let queue = self.clone();
+        std::thread::spawn(move || {
+            let (status, note) = queue.run_task(id, task, cancel);
+            queue.update(id, |job| (job.view.status, job.view.note) = (status, note));
+        });
+        id
+    }
+
     fn add(&self, title: String, work: Work) -> u64 {
         let mut state = self.lock();
         state.next += 1;
@@ -363,21 +394,23 @@ impl Queue {
                         Err(Cancelled) => (Status::Cancelled, None),
                     }
                 }
-                Work::Task(task) => {
-                    let mut report = Report {
-                        queue: &self,
-                        id,
-                        cancel,
-                        progress: Progress::default(),
-                    };
-                    match (task.run)(&mut report) {
-                        _ if report.cancelled() => (Status::Cancelled, None),
-                        Ok(note) => (Status::Done, Some(note).filter(|note| !note.is_empty())),
-                        Err(err) => (Status::Failed, Some(err.to_string())),
-                    }
-                }
+                Work::Task(task) => self.run_task(id, task, cancel),
             };
             self.update(id, |job| (job.view.status, job.view.note) = (status, note));
+        }
+    }
+
+    fn run_task(&self, id: u64, task: Task, cancel: Arc<AtomicBool>) -> (Status, Option<String>) {
+        let mut report = Report {
+            queue: self,
+            id,
+            cancel,
+            progress: Progress::default(),
+        };
+        match (task.run)(&mut report) {
+            _ if report.cancelled() => (Status::Cancelled, None),
+            Ok(note) => (Status::Done, Some(note).filter(|note| !note.is_empty())),
+            Err(err) => (Status::Failed, Some(err.to_string())),
         }
     }
 

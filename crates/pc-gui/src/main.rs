@@ -26,7 +26,7 @@ mod viewer;
 
 use std::borrow::Cow;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -43,7 +43,7 @@ use pc_core::remote::Address;
 use pc_core::session::Session;
 use pc_core::settings::{self, Settings};
 use pc_core::theme::{self, Theme};
-use pc_core::{Panel, Sort, SortKey, Tabs, Typed, archive, edit, icons, ops};
+use pc_core::{Panel, Sort, SortKey, Tabs, Typed, archive, edit, icons, ops, origin};
 
 use crate::appearance::PanelColors;
 use crate::menus::{ReopenTab, Run, SelectTab, SetTheme};
@@ -410,6 +410,52 @@ impl Commander {
             (remote::Open::External, _) => Some(settings.editor.external.clone()),
             (_, own) => own,
         };
+        let finish = move |prepared: io::Result<(PathBuf, Option<origin::Upload>)>,
+                           window: &mut Window,
+                           cx: &mut App| {
+            let opened = prepared.and_then(|(file, upload)| match (how, upload) {
+                (remote::Open::View, _) if let Some(program) = &program => {
+                    edit::edit_externally(program, &file)
+                }
+                (_, Some(upload)) if let Some(program) = &program => {
+                    remote::edit_externally(file, upload, program, window, cx)
+                }
+                (_, None) if let Some(program) = &program => edit::edit_externally(program, &file),
+                (remote::Open::View, _) => {
+                    let (files, at) = around.unwrap_or_else(|| (vec![file], 0));
+                    viewer::open(files, at, settings.viewer, bounds, cx)
+                }
+                (remote::Open::Edit | remote::Open::External, upload) => {
+                    editor::open(file, settings.editor.limit_mb, upload, cx)
+                }
+            });
+            if let Err(err) = opened {
+                window.push_notification(Notification::error(format!("{name}: {err}")), cx);
+            }
+        };
+        // A server's file comes by a task the queue shows, which can be cancelled.
+        if let origin::Origin::Server(fs, path) = origin {
+            let upload =
+                (how != remote::Open::View).then(|| origin::upload_to(fs.clone(), path.clone()));
+            let file = path.file_name().unwrap_or_default().display().to_string();
+            let title = match how {
+                remote::Open::View => format!("Download {file} to view"),
+                _ => format!("Download {file} to edit"),
+            };
+            let (sent, received) = futures::channel::oneshot::channel();
+            let task = origin::fetch_task(fs, path, title, move |fetched| {
+                let _ = sent.send(fetched);
+            });
+            self.transfers.queue.run_now(task);
+            cx.spawn_in(window, async move |_, cx| {
+                // The queue shows a failure; a cancel opens nothing.
+                if let Ok(Ok(file)) = received.await {
+                    let _ = cx.update(|window, cx| finish(Ok((file, upload)), window, cx));
+                }
+            })
+            .detach();
+            return cx.notify();
+        }
         cx.spawn_in(window, async move |_, cx| {
             let prepare = async move {
                 match how {
@@ -418,29 +464,7 @@ impl Commander {
                 }
             };
             let prepared = cx.background_executor().spawn(prepare).await;
-            let _ = cx.update(|window, cx| {
-                let opened = prepared.and_then(|(file, upload)| match (how, upload) {
-                    (remote::Open::View, _) if let Some(program) = &program => {
-                        edit::edit_externally(program, &file)
-                    }
-                    (_, Some(upload)) if let Some(program) = &program => {
-                        remote::edit_externally(file, upload, program, window, cx)
-                    }
-                    (_, None) if let Some(program) = &program => {
-                        edit::edit_externally(program, &file)
-                    }
-                    (remote::Open::View, _) => {
-                        let (files, at) = around.unwrap_or_else(|| (vec![file], 0));
-                        viewer::open(files, at, settings.viewer, bounds, cx)
-                    }
-                    (remote::Open::Edit | remote::Open::External, upload) => {
-                        editor::open(file, settings.editor.limit_mb, upload, cx)
-                    }
-                });
-                if let Err(err) = opened {
-                    window.push_notification(Notification::error(format!("{name}: {err}")), cx);
-                }
-            });
+            let _ = cx.update(|window, cx| finish(prepared, window, cx));
         })
         .detach();
     }
