@@ -33,6 +33,9 @@ pub enum Command {
     CopyNamesWithPathToClipboard,
     CopyWithAllDetails,
     CopyWithPathAndDetails,
+    CopyToClipboard,
+    CutToClipboard,
+    PasteFromClipboard,
     CompareDirectories,
     MarkNewerHideSame,
     // Commands
@@ -340,6 +343,10 @@ pub const OTHER_KEYS: &[Item] = &[
     // Terminals take Ctrl+Tab; Konsole passes these.
     cmd("Next tab", "alt-shift-right", NextTab),
     cmd("Previous tab", "alt-shift-left", PreviousTab),
+    // Files for other programs, and from them, as Total Commander's.
+    cmd("Copy to clipboard", "ctrl-c", CopyToClipboard),
+    cmd("Cut to clipboard", "ctrl-x", CutToClipboard),
+    cmd("Paste from clipboard", "ctrl-v", PasteFromClipboard),
 ];
 
 pub fn key_bindings() -> Vec<(&'static str, Command)> {

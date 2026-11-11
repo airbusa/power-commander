@@ -6,6 +6,7 @@ mod associations_dialog;
 mod attributes_dialog;
 mod compare_view;
 mod connections_dialog;
+mod drag_drop;
 mod editor;
 mod file_tools;
 mod find_dialog;
@@ -46,6 +47,7 @@ use pc_core::theme::{self, Theme};
 use pc_core::{Panel, Sort, SortKey, Tabs, Typed, archive, edit, icons, ops, origin};
 
 use crate::appearance::PanelColors;
+use crate::drag_drop::{DragLabel, Dragged};
 use crate::menus::{ReopenTab, Run, SelectTab, SetTheme};
 
 actions!(
@@ -225,6 +227,8 @@ struct Commander {
     transfers: transfer::Transfers,
     /// Save Selection's names, for Restore Selection.
     saved_selection: Vec<std::ffi::OsString>,
+    /// Ctrl+C's or Ctrl+X's files.
+    file_clip: Option<drag_drop::FileClip>,
 }
 
 struct Side {
@@ -339,6 +343,7 @@ impl Commander {
             _command: command_entered,
             transfers: transfer::Transfers::default(),
             saved_selection: Vec::new(),
+            file_clip: None,
         }
     }
 
@@ -1080,11 +1085,28 @@ impl Commander {
         .track_scroll(&side.scroll)
         .flex_1();
         let tab_list = self.tab_list.as_ref().filter(|(side, ..)| *side == ix);
+        let ring = theme.ring;
         v_flex()
             .size_full()
             .min_w_0()
             .border_1()
             .border_color(theme.border)
+            // A click anywhere in it makes it the active one, as Total Commander's.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.active = ix;
+                    cx.notify();
+                }),
+            )
+            .drag_over::<Dragged>(move |style, _, _, _| style.border_color(ring))
+            .drag_over::<ExternalPaths>(move |style, _, _, _| style.border_color(ring))
+            .on_drop(cx.listener(move |this, dragged: &Dragged, window, cx| {
+                this.drop_files(*dragged, ix, None, window, cx)
+            }))
+            .on_drop(cx.listener(move |this, paths: &ExternalPaths, window, cx| {
+                this.drop_paths(paths, ix, None, window, cx)
+            }))
             .when_some(tab_list, |el, (_, list, _)| {
                 el.child(deferred(
                     anchored()
@@ -1196,8 +1218,28 @@ impl Commander {
         let (name, extension) = entry.name_and_extension();
         let [ext, size, date, attr] = self.columns.map(px);
         let marked = panel.is_marked(entry);
+        let (labels, payloads) = (cx.entity(), cx.entity());
+        let target = cx.theme().accent.opacity(0.35);
         h_flex()
             .id(("row", row))
+            .on_drag(Dragged { side: ix, row }, move |dragged, grab, _, cx| {
+                let text = labels.read(cx).drag_label(*dragged);
+                cx.new(|_| DragLabel { text, grab })
+            })
+            .external_drag_payload(move |dragged: &Dragged, _, cx| {
+                payloads.read(cx).drag_payload(*dragged)
+            })
+            // A folder takes what is dropped onto it.
+            .when(entry.is_dir, |el| {
+                el.drag_over::<Dragged>(move |style, _, _, _| style.bg(target))
+                    .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(target))
+                    .on_drop(cx.listener(move |this, dragged: &Dragged, window, cx| {
+                        this.drop_files(*dragged, ix, Some(row), window, cx)
+                    }))
+                    .on_drop(cx.listener(move |this, paths: &ExternalPaths, window, cx| {
+                        this.drop_paths(paths, ix, Some(row), window, cx)
+                    }))
+            })
             .w_full()
             .h(ROW)
             .px_1()
@@ -1314,6 +1356,9 @@ impl Render for Commander {
                     Command::DeletePermanently => this.confirm_delete(false, window, cx),
                     Command::ToggleMark => this.mark(Panel::toggle_mark, cx),
                     Command::Copy => this.transfer(ops::Kind::Copy, window, cx),
+                    Command::CopyToClipboard => this.copy_files(false, window, cx),
+                    Command::CutToClipboard => this.copy_files(true, window, cx),
+                    Command::PasteFromClipboard => this.paste_files(window, cx),
                     Command::Move => this.transfer(ops::Kind::Move, window, cx),
                     Command::ConnectToServer => {
                         let side = this.active;

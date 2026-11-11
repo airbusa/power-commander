@@ -490,7 +490,10 @@ impl App {
             | Command::Move
             | Command::NewFolder
             | Command::Delete
-            | Command::DeletePermanently => self.not_yet("File operations"),
+            | Command::DeletePermanently
+            | Command::CopyToClipboard
+            | Command::CutToClipboard
+            | Command::PasteFromClipboard => self.not_yet("File operations"),
             Command::ConnectToServer | Command::Disconnect => self.not_yet("Servers"),
             _ => self.not_yet("This command"),
         }

@@ -2,6 +2,7 @@ pub mod archive;
 pub mod associations;
 pub mod attributes;
 pub mod checksum;
+pub mod clipboard;
 pub mod codepage;
 pub mod command;
 pub mod compare;
@@ -548,14 +549,16 @@ impl Panel {
     /// Inside an archive: the chosen entries taken out with their folders
     /// into a temporary folder, for F5 to copy from there. Blocks.
     pub fn extract_chosen(&self) -> io::Result<Vec<PathBuf>> {
+        let names: Vec<OsString> = self.chosen().iter().map(|e| e.name.clone()).collect();
+        self.extract(&names)
+    }
+
+    /// Inside an archive: these entries taken out, as `extract_chosen`.
+    pub fn extract(&self, names: &[OsString]) -> io::Result<Vec<PathBuf>> {
         let Some(archive) = &self.archive else {
             return Err(io::Error::other("not in an archive"));
         };
-        let paths: Vec<PathBuf> = self
-            .chosen()
-            .iter()
-            .map(|e| archive.dir.join(&e.name))
-            .collect();
+        let paths: Vec<PathBuf> = names.iter().map(|name| archive.dir.join(name)).collect();
         let listed = paths.iter().filter_map(|path| {
             let item = archive.items.iter().find(|item| item.path == *path)?;
             Some(item.listed.as_str())
@@ -741,6 +744,16 @@ impl Panel {
             }
         }
         count
+    }
+
+    /// What a drag from `row` takes: the marked entries when it is one of
+    /// them, else it alone; never `..`.
+    pub fn dragged(&self, row: usize) -> Vec<&Entry> {
+        match self.entries.get(row).filter(|entry| !entry.is_parent()) {
+            Some(entry) if self.is_marked(entry) => self.chosen(),
+            Some(entry) => vec![entry],
+            None => Vec::new(),
+        }
     }
 
     /// What an operation works on, as in Total Commander: the marked
@@ -1264,6 +1277,25 @@ mod tests {
         panel.move_cursor(-1);
         assert!(panel.open().is_err());
         assert_eq!(panel.path(), root, "stays where it was");
+    }
+
+    #[test]
+    fn drags_the_marked_or_the_one() {
+        let root = std::env::temp_dir().join(format!("pc-drag-test-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        for name in ["a", "b", "c"] {
+            std::fs::write(root.join(name), name).unwrap();
+        }
+        let mut panel = Panel::new(root.clone(), Filter::default()).unwrap();
+        let names = |entries: Vec<&Entry>| -> Vec<String> {
+            entries.iter().map(|e| e.display_name()).collect()
+        };
+        assert!(panel.dragged(0).is_empty(), "never ..");
+        assert_eq!(names(panel.dragged(2)), ["b"]);
+        panel.mark_names(&["a".into(), "c".into()]);
+        assert_eq!(names(panel.dragged(1)), ["a", "c"], "a marked one takes all marked");
+        assert_eq!(names(panel.dragged(2)), ["b"], "an unmarked one goes alone");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

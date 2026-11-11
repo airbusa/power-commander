@@ -2,6 +2,7 @@
 //! the questions a running job asks.
 
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::path::{MAIN_SEPARATOR, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -42,48 +43,135 @@ pub struct Transfers {
     started: Option<(u64, Instant)>,
 }
 
+/// Where files go: a panel's folder, or a folder shown in it.
+pub(crate) struct Place {
+    pub fs: Arc<dyn Fs>,
+    pub folder: PathBuf,
+    /// A server's address, for the dialog.
+    pub server: Option<String>,
+    pub in_archive: bool,
+}
+
+impl Place {
+    pub fn of(panel: &Panel) -> Self {
+        Place {
+            fs: panel.fs(),
+            folder: panel.folder().to_owned(),
+            server: panel.remote().map(|remote| remote.url()),
+            in_archive: panel.in_archive(),
+        }
+    }
+}
+
+/// What goes: a panel's entries, or files from another program.
+#[derive(Clone)]
+pub(crate) struct Batch {
+    pub from: Arc<dyn Fs>,
+    /// Their folder, the dialog's text being relative to it.
+    pub folder: PathBuf,
+    pub sources: Vec<PathBuf>,
+    /// The one's name, shown name and whether a folder; none for several.
+    pub one: Option<(OsString, String, bool)>,
+    /// Inside an archive: the panel takes `names` out first.
+    pub archived: Option<(Panel, Vec<OsString>)>,
+    /// The side whose marks are dropped once queued.
+    pub unmark: Option<usize>,
+}
+
+impl Batch {
+    /// A panel's chosen entries; with `row`, what a drag from there takes.
+    pub fn of(panel: &Panel, side: usize, row: Option<usize>) -> Option<Self> {
+        let entries = match row {
+            Some(row) => panel.dragged(row),
+            None => panel.chosen(),
+        };
+        let folder = panel.folder().to_owned();
+        let one = match entries.as_slice() {
+            [] => return None,
+            [one] => Some((one.name.clone(), one.display_name(), one.is_dir)),
+            _ => None,
+        };
+        let names: Vec<OsString> = entries.iter().map(|e| e.name.clone()).collect();
+        Some(Batch {
+            from: match panel.in_archive() {
+                true => Arc::new(Local),
+                false => panel.fs(),
+            },
+            sources: names.iter().map(|name| folder.join(name)).collect(),
+            archived: panel.in_archive().then(|| (panel.clone(), names)),
+            unmark: Some(side),
+            folder,
+            one,
+        })
+    }
+
+    /// Files of this computer, from another program.
+    pub fn paths(paths: Vec<PathBuf>) -> Option<Self> {
+        let folder = paths.first()?.parent()?.to_owned();
+        let one = match paths.as_slice() {
+            [one] => {
+                let name = one.file_name()?.to_owned();
+                Some((name.clone(), name.display().to_string(), one.is_dir()))
+            }
+            _ => None,
+        };
+        Some(Batch {
+            from: Arc::new(Local),
+            folder,
+            sources: paths,
+            one,
+            archived: None,
+            unmark: None,
+        })
+    }
+}
+
 impl Commander {
     /// The chosen entries into the other panel's folder, by way of the queue.
     pub(crate) fn transfer(&mut self, kind: Kind, window: &mut Window, cx: &mut Context<Self>) {
         let side = self.active;
-        let source = self.panels[side].tabs.current();
-        let other = self.panels[1 - side].tabs.current();
-        if other.in_archive() || source.in_archive() && kind == Kind::Move {
+        let Some(batch) = Batch::of(self.panels[side].tabs.current(), side, None) else {
+            return;
+        };
+        let to = Place::of(self.panels[1 - side].tabs.current());
+        self.open_transfer(kind, batch, to, window, cx);
+    }
+
+    /// F5's or F6's dialog for `batch` into `to`, then the queue.
+    pub(crate) fn open_transfer(
+        &mut self,
+        kind: Kind,
+        batch: Batch,
+        to: Place,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if to.in_archive || batch.archived.is_some() && kind == Kind::Move {
             let text =
                 "Copying into archives and moving out of them are not possible yet; F5 copies out.";
             return window.push_notification(Notification::warning(text), cx);
         }
-        let chosen = source.chosen();
-        let folder = source.folder().to_owned();
-        let sources: Vec<PathBuf> = chosen.iter().map(|e| folder.join(&e.name)).collect();
-        let (what, target) = match chosen.as_slice() {
-            [] => return,
-            [one] if !one.is_dir => (
-                format!("\"{}\"", one.display_name()),
-                other.folder().join(&one.name).display().to_string(),
+        let (what, target) = match &batch.one {
+            Some((name, shown, false)) => (
+                format!("\"{shown}\""),
+                to.folder.join(name).display().to_string(),
             ),
-            [one] => (
-                format!("\"{}\"", one.display_name()),
-                folder_text(other.folder()),
+            Some((_, shown, true)) => (format!("\"{shown}\""), folder_text(&to.folder)),
+            None => (
+                format!("{} items", batch.sources.len()),
+                folder_text(&to.folder),
             ),
-            many => (format!("{} items", many.len()), folder_text(other.folder())),
         };
         let verb = match kind {
             Kind::Copy => "Copy",
             Kind::Move => "Move",
         };
-        // Out of an archive: taken out first, then copied from there.
-        let archived = source.in_archive().then(|| source.clone());
-        let (from, to): (Arc<dyn Fs>, _) = match archived {
-            Some(_) => (Arc::new(Local), other.fs()),
-            None => (source.fs(), other.fs()),
-        };
-        let server = other.remote().map(|remote| remote.url());
-        let label = match &server {
+        let label = match &to.server {
             Some(url) => format!("{verb} {what} to {url}:"),
             None => format!("{verb} {what} to:"),
         };
         let commander = cx.entity().downgrade();
+        let Place { fs: to, server, .. } = to;
         open_dialog(
             verb,
             label,
@@ -97,47 +185,62 @@ impl Commander {
                         .as_deref()
                         .and_then(|url| text.strip_prefix(url))
                         .unwrap_or(&text);
-                    let target = Target::parse(text, &folder, sources.len(), &*to);
-                    let (from, to) = (from.clone(), to.clone());
-                    let queue = this.transfers.queue.clone();
-                    let push = move |sources| {
-                        queue.push(Operation {
-                            kind,
-                            from,
-                            sources,
-                            to,
-                            target,
-                            overwrite,
-                        })
-                    };
-                    match archived.clone() {
-                        None => drop(push(sources.clone())),
-                        Some(panel) => {
-                            cx.spawn_in(window, async move |_, cx| {
-                                let taken = cx
-                                    .background_executor()
-                                    .spawn(async move { panel.extract_chosen() })
-                                    .await;
-                                match taken {
-                                    Ok(sources) => drop(push(sources)),
-                                    Err(err) => {
-                                        let text = format!("Could not take them out: {err}");
-                                        let note = Notification::error(text).autohide(false);
-                                        let _ = cx.update(|window, cx| {
-                                            window.push_notification(note, cx)
-                                        });
-                                    }
-                                }
-                            })
-                            .detach();
-                        }
-                    }
-                    // Queued: the marks have done their work.
-                    this.panels[side].tabs.current_mut().mark_all(false);
-                    cx.notify();
+                    let target = Target::parse(text, &batch.folder, batch.sources.len(), &*to);
+                    this.enqueue(kind, batch.clone(), to.clone(), target, overwrite, window, cx);
                 });
             },
         );
+    }
+
+    /// Into the queue; an archive's are taken out first.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn enqueue(
+        &mut self,
+        kind: Kind,
+        batch: Batch,
+        to: Arc<dyn Fs>,
+        target: Target,
+        overwrite: Overwrite,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let queue = self.transfers.queue.clone();
+        let from = batch.from.clone();
+        let push = move |sources| {
+            queue.push(Operation {
+                kind,
+                from,
+                sources,
+                to,
+                target,
+                overwrite,
+            })
+        };
+        match batch.archived {
+            None => drop(push(batch.sources)),
+            Some((panel, names)) => {
+                cx.spawn_in(window, async move |_, cx| {
+                    let taken = cx
+                        .background_executor()
+                        .spawn(async move { panel.extract(&names) })
+                        .await;
+                    match taken {
+                        Ok(sources) => drop(push(sources)),
+                        Err(err) => {
+                            let text = format!("Could not take them out: {err}");
+                            let note = Notification::error(text).autohide(false);
+                            let _ = cx.update(|window, cx| window.push_notification(note, cx));
+                        }
+                    }
+                })
+                .detach();
+            }
+        }
+        // Queued: the marks have done their work.
+        if let Some(side) = batch.unmark {
+            self.panels[side].tabs.current_mut().mark_all(false);
+        }
+        cx.notify();
     }
 
     /// Checks the queue several times a second while the window lives.
