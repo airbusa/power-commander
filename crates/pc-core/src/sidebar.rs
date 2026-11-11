@@ -203,8 +203,7 @@ pub struct Favourite {
 /// The servers by protocol: the saved, then `~/.ssh/config`'s hosts under
 /// SFTP. Protocols with none are left out.
 pub fn favourites(saved: &[Connection], hosts: &[String]) -> Vec<(Scheme, Vec<Favourite>)> {
-    let schemes = [Scheme::Sftp, Scheme::Ftp, Scheme::Ftps];
-    let groups = schemes.map(|scheme| {
+    let groups = Scheme::ALL.map(|scheme| {
         let saved = saved.iter().enumerate().filter(|(_, c)| c.scheme == scheme);
         let mut servers: Vec<Favourite> = saved
             .map(|(ix, connection)| Favourite {

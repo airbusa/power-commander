@@ -51,7 +51,7 @@ use pc_core::session::Session;
 use pc_core::settings::{self, Settings};
 use pc_core::sidebar::SidebarTab;
 use pc_core::theme::{self, Appearance};
-use pc_core::{Panel, Sort, SortKey, Tabs, Typed, View, archive, edit, icons, ops, origin};
+use pc_core::{Panel, Sort, SortKey, Tabs, Typed, View, archive, edit, icons, mounts, ops, origin};
 
 use crate::appearance::PanelColors;
 use crate::drag_drop::{DragLabel, Dragged};
@@ -684,6 +684,10 @@ impl Commander {
             self.cancel_path_edit(window, cx);
             return self.connect(ix, address, window, cx);
         }
+        if mounts::is_url(&typed) {
+            self.cancel_path_edit(window, cx);
+            return self.mount_url(ix, typed, window, cx);
+        }
         let panel = self.panels[ix].tabs.current();
         let target = match panel.typed_location(&typed) {
             // The server's, in the background.
@@ -734,6 +738,11 @@ impl Commander {
         if let Some(address) = Address::parse(target) {
             self.focus_panels(window, cx);
             return self.connect(self.active, address, window, cx);
+        }
+        if mounts::is_url(target) {
+            let url = target.to_owned();
+            self.focus_panels(window, cx);
+            return self.mount_url(self.active, url, window, cx);
         }
         let panel = self.panels[self.active].tabs.current();
         if let Some(remote) = panel.remote().filter(|_| !line.trim().is_empty()) {

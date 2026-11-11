@@ -32,19 +32,7 @@ impl Connection {
 
     /// `sftp://user@host:2222/path`, as the path field takes it.
     pub fn url(&self) -> String {
-        let user = self.user.as_deref().filter(|user| !user.is_empty());
-        let user = user.map(|user| format!("{user}@")).unwrap_or_default();
-        let port = self.port.map(|port| format!(":{port}")).unwrap_or_default();
-        let path = self
-            .path
-            .as_deref()
-            .filter(|path| path.starts_with('/'))
-            .unwrap_or("");
-        format!(
-            "{}://{user}{}{port}{path}",
-            self.scheme.name(),
-            self.host.trim()
-        )
+        self.address().url()
     }
 }
 

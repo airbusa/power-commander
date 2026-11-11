@@ -18,12 +18,13 @@ use gpui_kit::*;
 use pc_core::edit;
 use pc_core::origin::{self, Upload};
 use pc_core::remote::{self, Address, Ask, Prompt, Reply};
-use pc_core::secrets;
+use pc_core::{mounts, secrets};
 
 use crate::Commander;
 
 impl Commander {
-    /// `sftp://…`, `ftp://…`: connects in the background, then shows it on `side`.
+    /// `sftp://…`, `ftp://…`: connects in the background, then shows it on
+    /// `side`; `smb://…` and the like the desktop mounts.
     pub(crate) fn connect(
         &mut self,
         side: usize,
@@ -31,6 +32,9 @@ impl Commander {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if address.scheme.mounted() {
+            return self.mount_url(side, address.url(), window, cx);
+        }
         let (prompts, mut asked) = channel::unbounded::<(Prompt, mpsc::Sender<Reply>)>();
         // A password the user asked to keep, once it has logged in.
         let keep: Keep = Arc::default();
@@ -82,6 +86,37 @@ impl Commander {
                     ),
                     Err(err) => {
                         let text = format!("{server}: {err}");
+                        window.push_notification(Notification::error(text).autohide(false), cx);
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The desktop mounts `url` (kio-fuse, gvfs) in the background; `side`
+    /// shows the folder, read in the background too: it is on the network.
+    pub(crate) fn mount_url(&mut self, side: usize, url: String, window: &mut Window, cx: &mut Context<Self>) {
+        let note = Notification::info(format!("Connecting to {url}...")).id1::<Connecting>(url.clone()).autohide(false);
+        window.push_notification(note, cx);
+        let mounting = {
+            let url = url.clone();
+            cx.background_executor().spawn(async move { mounts::mount(&url) })
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            let mounted = mounting.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                window.remove_notification1::<Connecting>(url.clone(), cx);
+                match mounted {
+                    Ok(path) => {
+                        let go = move |panel: &mut pc_core::Panel| match panel.remote() {
+                            Some(_) => panel.disconnect(path),
+                            None => panel.go_to_folder(path),
+                        };
+                        this.navigate_on(side, true, go, window, cx);
+                    }
+                    Err(err) => {
+                        let text = format!("{url}: {err}");
                         window.push_notification(Notification::error(text).autohide(false), cx);
                     }
                 }

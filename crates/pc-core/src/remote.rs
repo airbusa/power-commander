@@ -18,14 +18,26 @@ pub enum Scheme {
     Ftp,
     /// FTP over TLS, explicit (AUTH TLS) on the FTP port.
     Ftps,
+    // The desktop mounts these: see `mounts`.
+    Smb,
+    Webdav,
+    Webdavs,
+    Nfs,
 }
 
 impl Scheme {
+    pub const ALL: [Scheme; 7] =
+        [Scheme::Sftp, Scheme::Ftp, Scheme::Ftps, Scheme::Smb, Scheme::Webdav, Scheme::Webdavs, Scheme::Nfs];
+
     pub fn name(self) -> &'static str {
         match self {
             Scheme::Sftp => "sftp",
             Scheme::Ftp => "ftp",
             Scheme::Ftps => "ftps",
+            Scheme::Smb => "smb",
+            Scheme::Webdav => "webdav",
+            Scheme::Webdavs => "webdavs",
+            Scheme::Nfs => "nfs",
         }
     }
 
@@ -33,7 +45,16 @@ impl Scheme {
         match self {
             Scheme::Sftp => 22,
             Scheme::Ftp | Scheme::Ftps => 21,
+            Scheme::Smb => 445,
+            Scheme::Webdav => 80,
+            Scheme::Webdavs => 443,
+            Scheme::Nfs => 2049,
         }
+    }
+
+    /// Not ours: the desktop mounts it as a folder, and asks for passwords itself.
+    pub fn mounted(self) -> bool {
+        matches!(self, Scheme::Smb | Scheme::Webdav | Scheme::Webdavs | Scheme::Nfs)
     }
 }
 
@@ -55,6 +76,10 @@ impl Address {
             "sftp" => Scheme::Sftp,
             "ftp" => Scheme::Ftp,
             "ftps" => Scheme::Ftps,
+            "smb" | "cifs" => Scheme::Smb,
+            "webdav" | "dav" => Scheme::Webdav,
+            "webdavs" | "davs" => Scheme::Webdavs,
+            "nfs" => Scheme::Nfs,
             _ => return None,
         };
         let (authority, path) = match rest.find('/') {
@@ -77,6 +102,16 @@ impl Address {
             port,
             path,
         })
+    }
+}
+
+impl Address {
+    /// `smb://user@host:port/path`, as typed.
+    pub fn url(&self) -> String {
+        let user = self.user.as_ref().map(|user| format!("{user}@")).unwrap_or_default();
+        let port = self.port.map(|port| format!(":{port}")).unwrap_or_default();
+        let path = self.path.as_deref().unwrap_or("");
+        format!("{}://{user}{}{port}{path}", self.scheme.name(), self.host)
     }
 }
 
@@ -145,6 +180,10 @@ pub fn connect(address: &Address, ask: Ask) -> io::Result<(Arc<dyn Remote>, Path
             let ftp = crate::ftp::Ftp::connect(address, ask)?;
             let start = ftp.start(address);
             Ok((ftp, start))
+        }
+        // `mounts` takes these.
+        Scheme::Smb | Scheme::Webdav | Scheme::Webdavs | Scheme::Nfs => {
+            Err(io::Error::from(io::ErrorKind::Unsupported))
         }
     }
 }

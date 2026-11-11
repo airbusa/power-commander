@@ -16,6 +16,7 @@ pub mod icons;
 pub mod keymap;
 pub mod media;
 pub mod menu;
+pub mod mounts;
 pub mod ops;
 pub mod origin;
 pub mod packing;
@@ -307,12 +308,13 @@ impl Panel {
         }
     }
 
-    /// The path as the title bar shows it: `sftp://user@host/dir` on a server.
+    /// The path as the title bar shows it: `sftp://user@host/dir` on a
+    /// server, `smb://nas/media` where the desktop mounted it.
     pub fn location(&self) -> String {
-        let path = self.path().display().to_string();
+        let path = self.path();
         match &self.remote {
-            Some(remote) => format!("{}{}", remote.url(), path),
-            None => path,
+            Some(remote) => format!("{}{}", remote.url(), path.display()),
+            None => mounts::url_of(&path).unwrap_or_else(|| path.display().to_string()),
         }
     }
 

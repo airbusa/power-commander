@@ -12,17 +12,22 @@ use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::connections::{self, Connection, Connections};
+use pc_core::mounts;
 use pc_core::remote::{self, Address, Scheme};
 use pc_core::secrets;
 
 use crate::Commander;
 
-const SCHEMES: [Scheme; 3] = [Scheme::Sftp, Scheme::Ftp, Scheme::Ftps];
+/// Ours, then the desktop's: a row each.
+const SCHEMES: [&[(Scheme, &str)]; 2] = [
+    &[(Scheme::Sftp, "SFTP"), (Scheme::Ftp, "FTP"), (Scheme::Ftps, "FTPS")],
+    &[(Scheme::Smb, "SMB"), (Scheme::Webdav, "WebDAV"), (Scheme::Webdavs, "WebDAVS"), (Scheme::Nfs, "NFS")],
+];
 
 pub fn open(commander: WeakEntity<Commander>, side: usize, window: &mut Window, cx: &mut App) {
     let address = cx.new(|cx| {
         InputState::new(window, cx)
-            .placeholder("sftp://user@host:port/path, ftp://, ftps://, or a host below")
+            .placeholder("sftp://user@host/path, ftp://, smb://, webdav://, mtp:/, or a host below")
     });
     let view = cx.new(|_| {
         let saved = Connections::load().unwrap_or_default().saved;
@@ -87,6 +92,13 @@ impl ConnectionsDialog {
         let text = self.address.read(cx).value().trim().to_string();
         if text.is_empty() {
             return self.connect_selected(window, cx);
+        }
+        // mtp:/ and the like: the desktop's.
+        if mounts::is_url(&text) && Address::parse(&text).is_none() {
+            window.close_dialog(cx);
+            let side = self.side;
+            let _ = self.commander.update(cx, |commander, cx| commander.mount_url(side, text, window, cx));
+            return;
         }
         let text = match text.contains("://") {
             true => text,
@@ -466,7 +478,7 @@ impl EditConnection {
             path: some(path),
         };
         let password = self.password.read(cx).value().to_string();
-        if !password.is_empty() || self.forget {
+        if !self.scheme.mounted() && (!password.is_empty() || self.forget) {
             let key = remote::keyring_key(&connection.address());
             let forget = self.forget;
             std::thread::spawn(move || match forget {
@@ -488,7 +500,18 @@ impl Render for EditConnection {
                 .child(div().w(px(96.)).flex_none().child(label))
                 .child(div().flex_1().child(Input::new(input)))
         };
-        let selected = SCHEMES.iter().position(|scheme| *scheme == self.scheme);
+        let row = |ix: usize, cx: &mut Context<Self>| {
+            let schemes = SCHEMES[ix];
+            RadioGroup::horizontal(("connection-scheme", ix))
+                .children(schemes.iter().map(|(_, label)| *label))
+                .selected_index(schemes.iter().position(|(scheme, _)| *scheme == self.scheme))
+                .on_click(cx.listener(move |this, at: &usize, _, cx| {
+                    this.scheme = schemes[*at].0;
+                    cx.notify();
+                }))
+        };
+        let (ours, desktops) = (row(0, cx), row(1, cx));
+        let mounted = self.scheme.mounted();
         let [name, rest @ ..] = &self.fields;
         v_flex()
             .w_full()
@@ -499,34 +522,32 @@ impl Render for EditConnection {
                 h_flex()
                     .gap_3()
                     .child(div().w(px(96.)).flex_none().child("Protocol"))
-                    .child(
-                        RadioGroup::horizontal("connection-scheme")
-                            .children(["SFTP", "FTP", "FTPS"])
-                            .selected_index(selected)
-                            .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                                this.scheme = SCHEMES[*ix];
-                                cx.notify();
-                            })),
-                    ),
+                    .child(ours),
             )
+            .child(h_flex().gap_3().child(div().w(px(96.)).flex_none()).child(desktops))
             .children(
                 labels[1..]
                     .iter()
                     .zip(rest)
                     .map(|(label, input)| field(label, input)),
             )
-            .child(field("Password", &self.password))
-            .child(
-                h_flex().gap_3().child(div().w(px(96.)).flex_none()).child(
-                    Checkbox::new("connection-forget")
-                        .label("Forget the kept password")
-                        .checked(self.forget)
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            this.forget = *checked;
-                            cx.notify();
-                        })),
-                ),
-            )
+            .when(!mounted, |el| {
+                el.child(field("Password", &self.password)).child(
+                    h_flex().gap_3().child(div().w(px(96.)).flex_none()).child(
+                        Checkbox::new("connection-forget")
+                            .label("Forget the kept password")
+                            .checked(self.forget)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.forget = *checked;
+                                cx.notify();
+                            })),
+                    ),
+                )
+            })
+            .when(mounted, |el| {
+                let note = "The desktop mounts it as a folder, and asks for the password and keeps it.";
+                el.child(h_flex().gap_3().child(div().w(px(96.)).flex_none()).child(div().flex_1().min_w_0().text_color(cx.theme().muted_foreground).child(note)))
+            })
             .child(
                 h_flex()
                     .pt_2()
