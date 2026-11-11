@@ -314,6 +314,13 @@ impl Commander {
             true
         });
         Self::watch_queue(window, cx);
+        // Back from another program, which may have changed the folders.
+        cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.reread_local(cx);
+            }
+        })
+        .detach();
         let command = cx.new(|cx| InputState::new(window, cx));
         let command_entered = cx.subscribe_in(&command, window, |this, _, event, window, cx| {
             if let InputEvent::PressEnter { .. } = event {

@@ -253,6 +253,19 @@ impl RenameDialog {
 
 impl Commander {
     /// The side's panel reads its folder again.
+    /// The folders on this computer shown, read again; marks and cursor stay.
+    pub(crate) fn reread_local(&mut self, cx: &mut Context<Self>) {
+        for side in &mut self.panels {
+            let panel = side.tabs.current_mut();
+            if panel.remote().is_none() && !panel.in_archive() {
+                // shortcut: a folder that cannot be read now keeps its old list.
+                let _ = panel.reload();
+                side.scroll_to_cursor();
+            }
+        }
+        cx.notify();
+    }
+
     pub(crate) fn reread(&mut self, side: usize, cx: &mut Context<Self>) {
         let side = &mut self.panels[side];
         // shortcut: a server's folder is read on the UI thread here.
