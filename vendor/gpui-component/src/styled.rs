@@ -25,6 +25,7 @@ const SURFACE_SHADOW_INK: f32 = 0.1;
 /// as part of one grounded surface rather than as an outline with a separate
 /// shadow below it. An opaque border cannot reproduce that — a border composites
 /// over the element's own background, not over the shadow.
+#[allow(dead_code)] // PowerCommander patch: the ring is the theme's border.
 const POPOVER_RING_INK: f32 = 0.1;
 
 /// The colour of a popup surface's hairline ring in this theme.
@@ -34,7 +35,8 @@ const POPOVER_RING_INK: f32 = 0.1;
 /// token: a fixed black ring would all but vanish on a dark surface.
 ///
 pub(crate) fn popover_ring(cx: &App) -> Hsla {
-    cx.theme().foreground.alpha(POPOVER_RING_INK)
+    // PowerCommander patch: the theme's border, as KDE frames menus.
+    cx.theme().border
 }
 
 /// shadcn/ui's popup surface shadow — a hairline `ring` plus `shadow-md` — at

@@ -12,6 +12,8 @@ pub struct PanelColors {
     pub header_border: Hsla,
     /// The sorted column's title and the active panel's path.
     pub sorted_header: Hsla,
+    /// The menu bar and the button bar.
+    pub bar: Hsla,
     /// Marked files' names.
     pub marked: Hsla,
 }
@@ -24,6 +26,7 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         false => ThemeMode::Light,
     };
     let list = palette.list();
+    let menu = palette.menu();
     KitTheme::change(mode, None, cx);
     KitTheme::update(cx, |kit| {
         if let Some(font) = &palette.font {
@@ -40,10 +43,12 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         // The inactive panel's path.
         kit.muted = color(list.header);
         kit.muted_foreground = color(palette.dim);
-        kit.popover = color(palette.window);
+        // Menus and popups; `ring` frames the highlighted item, and focus.
+        kit.popover = color(menu.popup);
         kit.popover_foreground = color(palette.text);
-        kit.accent = color(palette.selection);
-        kit.accent_foreground = color(palette.selection_text);
+        kit.accent = color(menu.hover);
+        kit.accent_foreground = color(palette.text);
+        kit.ring = color(menu.hover_frame);
         kit.list_active = color(palette.selection);
         // Column titles.
         kit.list_head = color(list.header);
@@ -58,6 +63,7 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         alternate_row: color(list.alternate_row),
         header_border: color(list.header_border),
         sorted_header: color(list.sorted_header),
+        bar: color(palette.bar),
         marked: color(palette.marked),
     }
 }

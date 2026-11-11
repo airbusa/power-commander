@@ -766,6 +766,7 @@ impl Commander {
             _ => None,
         });
         h_flex()
+            .bg(self.colors.bar)
             .border_t_1()
             .border_color(cx.theme().border)
             .children(buttons.map(|(label, keys, command)| {
@@ -1457,6 +1458,7 @@ impl Render for Commander {
             .text_sm()
             .child(
                 div()
+                    .bg(self.colors.bar)
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(self.menu_bar.clone()),

@@ -102,6 +102,10 @@ impl RenderOnce for MenuItemElement {
             .px_2()
             .text_base()
             .text_color(cx.theme().foreground)
+            // PowerCommander patch: the highlighted item framed in `ring`, as KDE's.
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().transparent)
             .relative()
             .items_center()
             .justify_between()
@@ -116,10 +120,12 @@ impl RenderOnce for MenuItemElement {
                 this.hover(|this| {
                     this.bg(cx.theme().tokens.accent)
                         .text_color(cx.theme().accent_foreground)
+                        .border_color(cx.theme().ring)
                 })
                 .when(self.selected, |this| {
                     this.bg(cx.theme().tokens.accent)
                         .text_color(cx.theme().accent_foreground)
+                        .border_color(cx.theme().ring)
                 })
                 .when_some(self.on_click, |this, on_click| {
                     this.on_mouse_down(MouseButton::Left, move |_, _, cx| {

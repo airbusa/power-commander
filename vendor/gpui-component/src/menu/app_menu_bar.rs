@@ -6,7 +6,8 @@
 use crate::{
     InteractiveElementExt as _, Selectable, Sizable,
     actions::{Cancel, SelectLeft, SelectRight},
-    button::{Button, ButtonVariants},
+    ActiveTheme as _,
+    button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants},
     global_state::GlobalState,
     h_flex,
     menu::PopupMenu,
@@ -320,6 +321,16 @@ impl Render for AppMenu {
             self._subscription = None;
         }
 
+        // PowerCommander patch: an open menu's name in the accent, as KDE's.
+        let theme = cx.theme();
+        let colors = ButtonCustomVariant::new(cx)
+            .color(theme.transparent)
+            .foreground(match is_open {
+                true => theme.primary_foreground,
+                false => theme.foreground,
+            })
+            .hover(theme.accent)
+            .active(theme.primary);
         div()
             .id(self.ix)
             .relative()
@@ -328,7 +339,7 @@ impl Render for AppMenu {
                     .small()
                     .py_0p5()
                     .compact()
-                    .ghost()
+                    .with_variant(ButtonVariant::Custom(colors))
                     .label(self.name.clone())
                     .open(is_open)
                     .on_mouse_down(

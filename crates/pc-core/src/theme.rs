@@ -17,8 +17,10 @@ pub enum Appearance {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Palette {
     pub dark: bool,
-    /// Menus, bars and dialogs.
+    /// Dialogs.
     pub window: u32,
+    /// The menu bar and the button bar: KDE's header colour.
+    pub bar: u32,
     /// The file lists, the viewer's and editor's pages.
     pub view: u32,
     pub text: u32,
@@ -61,6 +63,29 @@ impl Palette {
             header_border: mix(background, text, share(0.20, 0.16)),
             sorted_header: mix(header, accent, share(0.18, 0.12)),
             selected_row: mix(background, accent, share(0.30, 0.22)),
+        }
+    }
+}
+
+/// Menus as KDE's Breeze draws them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MenuColors {
+    /// The window's colour, a little toward the view's.
+    pub popup: u32,
+    pub frame: u32,
+    /// The item under the pointer or the keys: the accent, faint, and framed.
+    pub hover: u32,
+    pub hover_frame: u32,
+}
+
+impl Palette {
+    pub fn menu(&self) -> MenuColors {
+        let popup = mix(self.window, self.view, 0.3);
+        MenuColors {
+            popup,
+            frame: mix(self.window, self.text, 0.2),
+            hover: mix(popup, self.selection, 0.3),
+            hover_frame: mix(self.selection, self.selection_text, 0.15),
         }
     }
 }
@@ -122,11 +147,13 @@ fn kde(kdeglobals: &str) -> Option<Palette> {
         }
     };
     let window = color("Colors:Window", "BackgroundNormal")?;
+    let bar = color("Colors:Header", "BackgroundNormal").unwrap_or(window);
     let text = color("Colors:View", "ForegroundNormal")?;
     let font = values.get(&("General", "font")).and_then(|font| font.split(',').next());
     Some(Palette {
         dark: luminance(window) < 0.5,
         window,
+        bar,
         view: color("Colors:View", "BackgroundNormal")?,
         text,
         dim: color("Colors:View", "ForegroundInactive").unwrap_or(text),
@@ -145,6 +172,7 @@ fn breeze(dark: bool) -> Palette {
         true => Palette {
             dark,
             window: 0x202326,
+            bar: 0x292c30,
             view: 0x141618,
             text: 0xfcfcfc,
             dim: 0xa1a9b1,
@@ -157,6 +185,7 @@ fn breeze(dark: bool) -> Palette {
         false => Palette {
             dark,
             window: 0xeff0f1,
+            bar: 0xdee0e2,
             view: 0xffffff,
             text: 0x232629,
             dim: 0x707d8a,
@@ -175,6 +204,7 @@ fn adwaita(dark: bool) -> Palette {
         true => Palette {
             dark,
             window: 0x222226,
+            bar: 0x2e2e32,
             view: 0x1d1d20,
             text: 0xffffff,
             dim: 0x9a9a9e,
@@ -187,6 +217,7 @@ fn adwaita(dark: bool) -> Palette {
         false => Palette {
             dark,
             window: 0xfafafb,
+            bar: 0xebebed,
             view: 0xffffff,
             text: 0x2e2e33,
             dim: 0x6e6e73,
@@ -206,6 +237,7 @@ fn windows(dark: bool) -> Palette {
         true => Palette {
             dark,
             window: 0x202020,
+            bar: 0x202020,
             view: 0x1c1c1c,
             text: 0xffffff,
             dim: 0xc5c5c5,
@@ -218,6 +250,7 @@ fn windows(dark: bool) -> Palette {
         false => Palette {
             dark,
             window: 0xf3f3f3,
+            bar: 0xf3f3f3,
             view: 0xffffff,
             text: 0x1a1a1a,
             dim: 0x5d5d5d,
@@ -237,6 +270,7 @@ fn mac(dark: bool) -> Palette {
         true => Palette {
             dark,
             window: 0x323232,
+            bar: 0x2a2a2a,
             view: 0x1e1e1e,
             text: 0xe6e6e6,
             dim: 0x989898,
@@ -249,6 +283,7 @@ fn mac(dark: bool) -> Palette {
         false => Palette {
             dark,
             window: 0xececec,
+            bar: 0xf5f5f5,
             view: 0xffffff,
             text: 0x262626,
             dim: 0x808080,
@@ -304,5 +339,10 @@ mod tests {
         let list = scheme.list();
         assert_eq!((list.header, list.selected_row), (0x27282a, 0x204457));
         assert_eq!(list.sorted_header, mix(0x27282a, 0x3daee9, 0.18));
+        assert_eq!(scheme.bar, 0x292c30);
+        // As a screenshot of Krusader's menu has them.
+        let menu = scheme.menu();
+        assert_eq!((menu.popup, menu.frame), (0x1c1f22, 0x4c4e51));
+        assert_eq!((menu.hover, menu.hover_frame), (0x264a5e, 0x5abaec));
     }
 }
