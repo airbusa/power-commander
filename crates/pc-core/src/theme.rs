@@ -110,6 +110,12 @@ pub fn system(dark: bool) -> Palette {
     }
 }
 
+/// GNOME, Ubuntu's own desktop among them (`ubuntu:GNOME`).
+pub fn on_gnome() -> bool {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    desktop.split(':').any(|name| name == "GNOME")
+}
+
 fn on_kde() -> bool {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     desktop.split(':').any(|name| name == "KDE")

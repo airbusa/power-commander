@@ -1,3 +1,6 @@
+// Modified for PowerCommander (Apache-2.0, section 4b): the window's buttons
+// are those the desktop's layout names. Changes are marked "PowerCommander patch".
+
 use std::rc::Rc;
 
 use crate::{
@@ -252,7 +255,7 @@ struct WindowControls {
 }
 
 impl RenderOnce for WindowControls {
-    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         if cfg!(target_os = "macos") || cfg!(target_family = "wasm") {
             return div().id("window-controls").test_support();
         }
@@ -274,7 +277,14 @@ impl RenderOnce for WindowControls {
         // The window manager declares which controls it can honor; a tiling
         // compositor may support neither minimize nor maximize. Close is
         // always ours to offer.
-        let supported = window.window_controls();
+        let mut supported = window.window_controls();
+        // PowerCommander patch: only the buttons the desktop's layout names (GNOME's default: close alone).
+        // shortcut: they stay on the right where the layout puts them left; follow its sides when asked.
+        if let Some(layout) = cx.button_layout() {
+            let named = |button| layout.left.iter().chain(&layout.right).any(|named| *named == Some(button));
+            supported.minimize &= named(gpui::WindowButton::Minimize);
+            supported.maximize &= named(gpui::WindowButton::Maximize);
+        }
 
         h_flex()
             .id("window-controls")

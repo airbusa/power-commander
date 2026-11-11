@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Settings {
     pub appearance: crate::theme::Appearance,
+    pub menu: MenuStyle,
     /// Show the tab header also when there is only one tab.
     pub tab_header_always: bool,
     pub show_hidden: bool,
@@ -20,6 +21,25 @@ pub struct Settings {
     /// Files' own programs for Enter, F3 and F4.
     pub associations: Vec<crate::associations::Association>,
     pub keys: crate::keymap::KeySettings,
+}
+
+/// Where the menus are: a bar under the title, or behind a ☰ button in the
+/// window's own title bar, as GNOME's apps have them. Linux only.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MenuStyle {
+    /// The ☰ button on GNOME, the bar elsewhere.
+    #[default]
+    Automatic,
+    Bar,
+    Button,
+}
+
+impl MenuStyle {
+    /// Whether the menus go behind the ☰ button.
+    pub fn button(self) -> bool {
+        let linux = cfg!(any(target_os = "linux", target_os = "freebsd"));
+        linux && (self == MenuStyle::Button || self == MenuStyle::Automatic && crate::theme::on_gnome())
+    }
 }
 
 /// F4 edits in the built-in editor, Ctrl+Shift+F4 in another program.

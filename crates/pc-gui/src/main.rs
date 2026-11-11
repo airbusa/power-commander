@@ -10,6 +10,7 @@ mod drag_drop;
 mod editor;
 mod file_tools;
 mod find_dialog;
+mod header;
 mod keys_dialog;
 mod mark_menu;
 mod media_view;
@@ -79,7 +80,7 @@ actions!(
 include!(concat!(env!("OUT_DIR"), "/material_icons.rs"));
 
 // Lucide icons beyond GPUI Kit's own set.
-gpui_kit::assets::icon_assets!(ExtraIcons, [Server, Smartphone, Tablet, Laptop, Monitor, Tv, Usb]);
+gpui_kit::assets::icon_assets!(ExtraIcons, [Server, Smartphone, Tablet, Laptop, Monitor, Tv, Usb, Menu]);
 
 /// GPUI Kit's icons, the file icons as `material/<name>.svg`, the player's as `media/`.
 struct AppAssets;
@@ -184,7 +185,9 @@ fn main() {
             ..Default::default()
         };
         gpui_kit::open_window(options, cx, |window, cx| {
-            cx.new(|cx| Commander::new(window, cx))
+            let commander = cx.new(|cx| Commander::new(window, cx));
+            commander.read(cx).request_frame(window);
+            commander
         })
         .expect("open the main window");
     });
@@ -433,7 +436,11 @@ impl Commander {
             menus::bind(&settings.keys, Some(&self.settings.keys), cx);
             self.menu_bar.update(cx, |bar, cx| bar.reload(cx));
         }
+        let menu = settings.menu != self.settings.menu;
         self.settings = settings;
+        if menu {
+            self.request_frame(window);
+        }
         self.save_settings(window, cx);
         cx.notify();
     }
@@ -1697,13 +1704,15 @@ impl Render for Commander {
             .children(self.render_transfers(cx))
             .child(self.render_command_line(cx))
             .child(self.render_button_bar(cx));
+        // macOS shows the menus on the system's menu bar.
+        let menu_bar = !cfg!(target_os = "macos") && !self.menus_behind_button(window);
         // The sidebar may let the desktop through: everything else paints its own background.
         v_flex()
             .size_full()
             .text_color(cx.theme().foreground)
             .text_sm()
-            // macOS shows the menus on the system's menu bar.
-            .when(!cfg!(target_os = "macos"), |el| {
+            .children(self.render_header(window))
+            .when(menu_bar, |el| {
                 el.child(
                     div()
                         .bg(self.colors.bar)

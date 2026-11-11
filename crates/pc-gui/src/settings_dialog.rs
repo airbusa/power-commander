@@ -6,7 +6,7 @@ use gpui_kit::component::radio::RadioGroup;
 use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use pc_core::settings::{PAGES, Settings, StartFont, StartMode};
+use pc_core::settings::{MenuStyle, PAGES, Settings, StartFont, StartMode};
 
 use crate::Commander;
 
@@ -291,6 +291,23 @@ impl SettingsDialog {
     fn render_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (_, title) = PAGES[self.page];
         let content = match title {
+            // GNOME's apps have their menus behind a ☰ button in the title bar.
+            "Layout" if cfg!(any(target_os = "linux", target_os = "freebsd")) => {
+                let styles = [
+                    (MenuStyle::Automatic, "Automatic: a ☰ button on GNOME, a menu bar elsewhere"),
+                    (MenuStyle::Bar, "Menu bar"),
+                    (MenuStyle::Button, "☰ button in the title bar"),
+                ];
+                vec![GroupBox::new().outline().title("Menus").child(
+                    RadioGroup::vertical("menu-style")
+                        .children(styles.map(|(_, label)| label))
+                        .selected_index(styles.iter().position(|(style, _)| *style == self.draft.menu))
+                        .on_click(cx.listener(move |this, at: &usize, _, cx| {
+                            this.draft.menu = styles[*at].0;
+                            cx.notify();
+                        })),
+                )]
+            }
             "Display" => vec![
                 GroupBox::new().outline().title("File display").child(
                     h_flex()

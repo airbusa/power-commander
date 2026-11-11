@@ -1,6 +1,6 @@
 diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
---- a/src/dialog/dialog.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/dialog/dialog.rs	2026-11-11 07:40:05.965584961 +0100
+--- a/src/dialog/dialog.rs	2026-11-11 23:21:28.287916676 +0100
++++ b/src/dialog/dialog.rs	2026-11-11 23:21:28.298917193 +0100
 @@ -1,13 +1,20 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a dialog moves by
 +// its title, can open centred over a part of the window, and fades in
@@ -277,8 +277,8 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
  pub(crate) mod tests {
      use super::*;
 diff -ruN a/src/highlighter/input_adapter.rs b/src/highlighter/input_adapter.rs
---- a/src/highlighter/input_adapter.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/highlighter/input_adapter.rs	2026-11-10 08:48:57.490700524 +0100
+--- a/src/highlighter/input_adapter.rs	2026-11-11 23:21:28.289166010 +0100
++++ b/src/highlighter/input_adapter.rs	2026-11-11 23:21:28.300850186 +0100
 @@ -1,3 +1,7 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the highlighter
 +// factory is public, and a background parse leaves the fold candidates alone
@@ -314,8 +314,8 @@ diff -ruN a/src/highlighter/input_adapter.rs b/src/highlighter/input_adapter.rs
          });
          parse_task.borrow_mut().replace(task);
 diff -ruN a/src/highlighter/mod.rs b/src/highlighter/mod.rs
---- a/src/highlighter/mod.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/highlighter/mod.rs	2026-11-10 08:48:57.490700524 +0100
+--- a/src/highlighter/mod.rs	2026-11-11 23:21:28.289944309 +0100
++++ b/src/highlighter/mod.rs	2026-11-11 23:21:28.300754895 +0100
 @@ -1,3 +1,7 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the editor's
 +// highlighter factory is public, so an app can wrap it. Changes are marked
@@ -340,8 +340,8 @@ diff -ruN a/src/highlighter/mod.rs b/src/highlighter/mod.rs
  }
  
 diff -ruN a/src/input/popovers/completion_menu.rs b/src/input/popovers/completion_menu.rs
---- a/src/input/popovers/completion_menu.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/input/popovers/completion_menu.rs	2026-11-10 08:48:57.491408567 +0100
+--- a/src/input/popovers/completion_menu.rs	2026-11-11 23:21:28.290634751 +0100
++++ b/src/input/popovers/completion_menu.rs	2026-11-11 23:21:28.301519528 +0100
 @@ -1,3 +1,7 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the completion
 +// menu is as wide as the editor's configured width. Changes are marked
@@ -363,8 +363,8 @@ diff -ruN a/src/input/popovers/completion_menu.rs b/src/input/popovers/completio
                      )
                      .when_some(selected_documentation, |this, documentation| {
 diff -ruN a/src/kbd.rs b/src/kbd.rs
---- a/src/kbd.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/kbd.rs	2026-11-10 09:11:23.004519613 +0100
+--- a/src/kbd.rs	2026-11-11 23:21:28.290909093 +0100
++++ b/src/kbd.rs	2026-11-11 23:21:28.306111756 +0100
 @@ -1,3 +1,8 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a binding of
 +// several keystrokes shows them all. Changes are marked "WDS patch".
@@ -460,8 +460,8 @@ diff -ruN a/src/kbd.rs b/src/kbd.rs
      }
  }
 diff -ruN a/src/list/list.rs b/src/list/list.rs
---- a/src/list/list.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/list/list.rs	2026-11-10 08:48:57.491860684 +0100
+--- a/src/list/list.rs	2026-11-11 23:21:28.291081861 +0100
++++ b/src/list/list.rs	2026-11-11 23:21:28.301949646 +0100
 @@ -1,3 +1,6 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a list can take
 +// a single click as selecting only. Changes are marked "WDS patch".
@@ -513,8 +513,8 @@ diff -ruN a/src/list/list.rs b/src/list/list.rs
                          &Confirm {
                              secondary: e.modifiers().secondary(),
 diff -ruN a/src/menu/app_menu_bar.rs b/src/menu/app_menu_bar.rs
---- a/src/menu/app_menu_bar.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/menu/app_menu_bar.rs	2026-11-11 15:48:49.059153530 +0100
+--- a/src/menu/app_menu_bar.rs	2026-11-11 23:21:28.291258587 +0100
++++ b/src/menu/app_menu_bar.rs	2026-11-11 23:21:28.302326702 +0100
 @@ -1,7 +1,13 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): menu-bar menus may
 +// use the window's height. Changes are marked "WDS patch".
@@ -672,8 +672,8 @@ diff -ruN a/src/menu/app_menu_bar.rs b/src/menu/app_menu_bar.rs
                      .open(is_open)
                      .on_mouse_down(
 diff -ruN a/src/menu/menu_item.rs b/src/menu/menu_item.rs
---- a/src/menu/menu_item.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/menu/menu_item.rs	2026-11-11 15:48:42.455936658 +0100
+--- a/src/menu/menu_item.rs	2026-11-11 23:21:28.291372594 +0100
++++ b/src/menu/menu_item.rs	2026-11-11 23:21:28.302220571 +0100
 @@ -102,6 +102,10 @@
              .px_2()
              .text_base()
@@ -699,8 +699,8 @@ diff -ruN a/src/menu/menu_item.rs b/src/menu/menu_item.rs
                  .when_some(self.on_click, |this, on_click| {
                      this.on_mouse_down(MouseButton::Left, move |_, _, cx| {
 diff -ruN a/src/menu/mod.rs b/src/menu/mod.rs
---- a/src/menu/mod.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/menu/mod.rs	2026-11-11 07:56:50.895948099 +0100
+--- a/src/menu/mod.rs	2026-11-11 23:21:28.291394034 +0100
++++ b/src/menu/mod.rs	2026-11-11 23:21:28.302250006 +0100
 @@ -1,3 +1,6 @@
 +// Modified for PowerCommander: exports MenuBuilder. Changes are marked
 +// "PowerCommander patch".
@@ -719,13 +719,14 @@ diff -ruN a/src/menu/mod.rs b/src/menu/mod.rs
  pub use dropdown_menu::DropdownMenu;
  pub use popup_menu::{PopupMenu, PopupMenuItem};
 diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
---- a/src/menu/popup_menu.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/menu/popup_menu.rs	2026-11-10 10:07:56.951018750 +0100
-@@ -1,8 +1,12 @@
+--- a/src/menu/popup_menu.rs	2026-11-11 23:21:28.291431586 +0100
++++ b/src/menu/popup_menu.rs	2026-11-11 23:21:28.302284652 +0100
+@@ -1,8 +1,13 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a long menu's
 +// scrollbar shows while it scrolls. Changes are marked "WDS patch".
 +// Modified for PowerCommander: menus take the window's height, scroll only
-+// past it and show no scrollbar. Changes are marked "PowerCommander patch".
++// past it and show no scrollbar; `with_menu_items` is public. Changes are
++// marked "PowerCommander patch".
 +
  use crate::ThemeStyled as _;
  use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
@@ -735,7 +736,7 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
  use crate::{ActiveTheme, ElementExt, Icon, IconName, Sizable as _, h_flex, v_flex};
  use crate::{Side, Size, kbd::Kbd};
  use gpui::{
-@@ -303,7 +307,6 @@
+@@ -303,7 +308,6 @@
  
      /// The parent menu of this menu, if this is a submenu
      parent_menu: Option<WeakEntity<Self>>,
@@ -743,7 +744,7 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
      external_link_icon: bool,
      scroll_handle: ScrollHandle,
      // This will update on render
-@@ -345,7 +348,6 @@
+@@ -345,7 +349,6 @@
              max_height: None,
              check_side: Side::Left,
              bounds: Bounds::default(),
@@ -751,7 +752,7 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
              scroll_handle: ScrollHandle::default(),
              external_link_icon: true,
              size: Size::default(),
-@@ -445,9 +447,8 @@
+@@ -445,9 +448,8 @@
          self
      }
  
@@ -763,7 +764,17 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
          self
      }
  
-@@ -820,10 +821,6 @@
+@@ -783,7 +785,8 @@
+         self
+     }
+ 
+-    pub(super) fn with_menu_items<I>(
++    // PowerCommander patch: public, so a ☰ button's menu holds the app's menus as the menu bar does.
++    pub fn with_menu_items<I>(
+         mut self,
+         items: impl IntoIterator<Item = I>,
+         window: &mut Window,
+@@ -820,10 +823,6 @@
              }
          }
  
@@ -774,7 +785,7 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
          self
      }
  
-@@ -1466,10 +1463,10 @@
+@@ -1466,10 +1465,10 @@
          let view = cx.entity().clone();
          let items_count = self.menu_items.len();
  
@@ -789,7 +800,7 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
  
          let has_left_icon = self
              .menu_items
-@@ -1508,11 +1505,9 @@
+@@ -1508,11 +1507,9 @@
                      .min_w(rems(8.))
                      .when_some(self.min_width, |this, min_width| this.min_w(min_width))
                      .max_w(max_width)
@@ -804,7 +815,7 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
                      .children(
                          self.menu_items
                              .iter()
-@@ -1523,9 +1518,6 @@
+@@ -1523,9 +1520,6 @@
                      )
                      .on_prepaint(move |bounds, _, cx| view.update(cx, |r, _| r.bounds = bounds)),
              )
@@ -815,8 +826,8 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
  }
  
 diff -ruN a/src/root.rs b/src/root.rs
---- a/src/root.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/root.rs	2026-11-11 17:36:29.321504482 +0100
+--- a/src/root.rs	2026-11-11 23:21:28.292151795 +0100
++++ b/src/root.rs	2026-11-11 23:21:28.303012085 +0100
 @@ -1,3 +1,6 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): notifications paint
 +// above dialogs. Changes are marked "WDS patch".
@@ -890,8 +901,8 @@ diff -ruN a/src/root.rs b/src/root.rs
      }
  }
 diff -ruN a/src/styled.rs b/src/styled.rs
---- a/src/styled.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/styled.rs	2026-11-11 15:50:39.421115469 +0100
+--- a/src/styled.rs	2026-11-11 23:21:28.293764490 +0100
++++ b/src/styled.rs	2026-11-11 23:21:28.304510102 +0100
 @@ -25,6 +25,7 @@
  /// as part of one grounded surface rather than as an outline with a separate
  /// shadow below it. An opaque border cannot reproduce that — a border composites
@@ -911,8 +922,8 @@ diff -ruN a/src/styled.rs b/src/styled.rs
  
  /// shadcn/ui's popup surface shadow — a hairline `ring` plus `shadow-md` — at
 diff -ruN a/src/tab/tab_bar.rs b/src/tab/tab_bar.rs
---- a/src/tab/tab_bar.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/tab/tab_bar.rs	2026-11-10 08:48:57.494531671 +0100
+--- a/src/tab/tab_bar.rs	2026-11-11 23:21:28.293923001 +0100
++++ b/src/tab/tab_bar.rs	2026-11-11 23:21:28.304653214 +0100
 @@ -1,3 +1,6 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the segmented
 +// indicator uses the active tab colour. Changes are marked "WDS patch".
@@ -931,8 +942,8 @@ diff -ruN a/src/tab/tab_bar.rs b/src/tab/tab_bar.rs
                          .shadow(raised_shadow()),
                  ),
 diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
---- a/src/tab/tab.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/tab/tab.rs	2026-11-11 14:32:24.477777277 +0100
+--- a/src/tab/tab.rs	2026-11-11 23:21:28.293875180 +0100
++++ b/src/tab/tab.rs	2026-11-11 23:21:28.304608960 +0100
 @@ -861,6 +861,10 @@
                  )
              })
@@ -945,8 +956,8 @@ diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
                  this.child(
                      div()
 diff -ruN a/src/table/data_table.rs b/src/table/data_table.rs
---- a/src/table/data_table.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/table/data_table.rs	2026-11-10 08:48:57.494640337 +0100
+--- a/src/table/data_table.rs	2026-11-11 23:21:28.294003955 +0100
++++ b/src/table/data_table.rs	2026-11-11 23:21:28.304774555 +0100
 @@ -1,5 +1,10 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): optional lines
 +// between columns; shift and an arrow extends a range of cells; no focus
@@ -1041,8 +1052,8 @@ diff -ruN a/src/table/data_table.rs b/src/table/data_table.rs
      }
  }
 diff -ruN a/src/table/delegate.rs b/src/table/delegate.rs
---- a/src/table/delegate.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/table/delegate.rs	2026-11-10 08:48:57.494640337 +0100
+--- a/src/table/delegate.rs	2026-11-11 23:21:28.294027119 +0100
++++ b/src/table/delegate.rs	2026-11-11 23:21:28.304875386 +0100
 @@ -1,7 +1,10 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a cell can have a
 +// context menu and a background of its own. Changes are marked "WDS patch".
@@ -1082,8 +1093,8 @@ diff -ruN a/src/table/delegate.rs b/src/table/delegate.rs
      fn render_td(
          &mut self,
 diff -ruN a/src/table/state.rs b/src/table/state.rs
---- a/src/table/state.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/table/state.rs	2026-11-10 08:48:57.494640337 +0100
+--- a/src/table/state.rs	2026-11-11 23:21:28.294134343 +0100
++++ b/src/table/state.rs	2026-11-11 23:21:28.304931503 +0100
 @@ -1,3 +1,11 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): in cell selection,
 +// the row header shows row numbers, and the selected cell's row number and
@@ -1614,9 +1625,44 @@ diff -ruN a/src/table/state.rs b/src/table/state.rs
                      }
                  }
              })
+diff -ruN a/src/title_bar.rs b/src/title_bar.rs
+--- a/src/title_bar.rs	2026-11-11 23:21:28.294984609 +0100
++++ b/src/title_bar.rs	2026-11-11 23:21:28.305790766 +0100
+@@ -1,3 +1,6 @@
++// Modified for PowerCommander (Apache-2.0, section 4b): the window's buttons
++// are those the desktop's layout names. Changes are marked "PowerCommander patch".
++
+ use std::rc::Rc;
+ 
+ use crate::{
+@@ -252,7 +255,7 @@
+ }
+ 
+ impl RenderOnce for WindowControls {
+-    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
++    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+         if cfg!(target_os = "macos") || cfg!(target_family = "wasm") {
+             return div().id("window-controls").test_support();
+         }
+@@ -274,7 +277,14 @@
+         // The window manager declares which controls it can honor; a tiling
+         // compositor may support neither minimize nor maximize. Close is
+         // always ours to offer.
+-        let supported = window.window_controls();
++        let mut supported = window.window_controls();
++        // PowerCommander patch: only the buttons the desktop's layout names (GNOME's default: close alone).
++        // shortcut: they stay on the right where the layout puts them left; follow its sides when asked.
++        if let Some(layout) = cx.button_layout() {
++            let named = |button| layout.left.iter().chain(&layout.right).any(|named| *named == Some(button));
++            supported.minimize &= named(gpui::WindowButton::Minimize);
++            supported.maximize &= named(gpui::WindowButton::Maximize);
++        }
+ 
+         h_flex()
+             .id("window-controls")
 diff -ruN a/src/tree.rs b/src/tree.rs
---- a/src/tree.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/tree.rs	2026-11-10 08:48:57.495643280 +0100
+--- a/src/tree.rs	2026-11-11 23:21:28.295175040 +0100
++++ b/src/tree.rs	2026-11-11 23:21:28.306000715 +0100
 @@ -1,3 +1,8 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a context menu
 +// builder gets the menu's context, so it can add submenus; the row renderer
@@ -1691,8 +1737,8 @@ diff -ruN a/src/tree.rs b/src/tree.rs
                              .into_any_element()
                      })
 diff -ruN a/src/window_ext.rs b/src/window_ext.rs
---- a/src/window_ext.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/window_ext.rs	2026-11-11 17:36:29.321728788 +0100
+--- a/src/window_ext.rs	2026-11-11 23:21:28.295256275 +0100
++++ b/src/window_ext.rs	2026-11-11 23:21:28.306081078 +0100
 @@ -11,6 +11,10 @@
  
  /// Extension trait for [`Window`] to add dialog, sheet .. functionality.

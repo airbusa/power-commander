@@ -1,7 +1,8 @@
 // Modified for Water Data Studio (Apache-2.0, section 4b): a long menu's
 // scrollbar shows while it scrolls. Changes are marked "WDS patch".
 // Modified for PowerCommander: menus take the window's height, scroll only
-// past it and show no scrollbar. Changes are marked "PowerCommander patch".
+// past it and show no scrollbar; `with_menu_items` is public. Changes are
+// marked "PowerCommander patch".
 
 use crate::ThemeStyled as _;
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
@@ -784,7 +785,8 @@ impl PopupMenu {
         self
     }
 
-    pub(super) fn with_menu_items<I>(
+    // PowerCommander patch: public, so a ☰ button's menu holds the app's menus as the menu bar does.
+    pub fn with_menu_items<I>(
         mut self,
         items: impl IntoIterator<Item = I>,
         window: &mut Window,
