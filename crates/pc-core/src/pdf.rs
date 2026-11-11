@@ -178,6 +178,8 @@ fn render_page(document: &PdfDocument, page: usize, width: u32) -> io::Result<Bi
     let config = PdfRenderConfig::new()
         .set_target_width(width as Pixels)
         .set_format(PdfBitmapFormat::BGRA)
+        // pdfium-render reverses it to RGBA by default.
+        .set_reverse_byte_order(false)
         .set_clear_color(PdfColor::WHITE)
         .render_form_data(true)
         .render_annotations(true);
@@ -206,9 +208,9 @@ fn render_page(document: &PdfDocument, page: usize, width: u32) -> io::Result<Bi
 mod tests {
     use super::*;
 
-    /// A one-page PDF saying `text`, 200 by 100 points.
+    /// A one-page PDF saying `text`, 200 by 100 points, its left 20 pure blue.
     fn pdf(text: &str) -> Vec<u8> {
-        let stream = format!("BT /F1 24 Tf 20 40 Td ({text}) Tj ET");
+        let stream = format!("0 0 1 rg 0 0 20 100 re f 0 g BT /F1 24 Tf 30 40 Td ({text}) Tj ET");
         let objects = [
             "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
@@ -258,6 +260,8 @@ mod tests {
             (400, 200, 400 * 200 * 4)
         );
         assert!(page.bgra.chunks(4).all(|pixel| pixel[3] == 255), "opaque");
+        let blue = &page.bgra[(100 * 400 + 10) * 4..][..4];
+        assert_eq!(blue, [255, 0, 0, 255], "blue in BGRA");
         let wide = PageSize {
             width: 200.,
             height: 100.,
