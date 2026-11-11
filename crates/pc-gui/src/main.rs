@@ -128,6 +128,8 @@ struct ColumnDrag {
 struct SplitDrag;
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    name_the_app();
     let app = gpui_kit::application().with_assets(AppAssets);
     app.run(|cx| {
         gpui_kit::init(cx);
@@ -150,6 +152,18 @@ fn main() {
             KeyBinding::new("escape", CancelPathEdit, Some("PathEdit > Input")),
         ]);
         menus::init(cx);
+        // Settings and Shortcuts where the panels do not take them, as from
+        // the menu bar over another window: over the main window.
+        cx.on_action(|Run(command): &Run, cx| {
+            let page = match command {
+                Command::Settings => Some(0),
+                Command::Shortcuts => None,
+                // To the next listener: Quit's.
+                _ => return cx.propagate(),
+            };
+            // The window the action came to may be the main one, being updated.
+            cx.defer(move |cx| configure(page, cx));
+        });
         // Files taken out of archives for the viewer.
         std::thread::spawn(archive::remove_stale_scratch);
         cx.on_app_quit(|_| {
@@ -176,6 +190,25 @@ fn main() {
     });
 }
 
+/// macOS's menu bar and Dock show a bundle's name; an executable without
+/// one is named after its file. Before the app starts, which reads it.
+#[cfg(target_os = "macos")]
+fn name_the_app() {
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::{NSBundle, NSMutableDictionary, NSString, ns_string};
+    let Some(info) = NSBundle::mainBundle().infoDictionary() else {
+        return;
+    };
+    // A bundle's Info.plist names it already.
+    if info.objectForKey(ns_string!("CFBundleName")).is_some() {
+        return;
+    }
+    // SAFETY: the dictionary made for an executable without a bundle is a mutable one.
+    let info: Retained<NSMutableDictionary<NSString, AnyObject>> = unsafe { Retained::cast_unchecked(info) };
+    info.insert(ns_string!("CFBundleName"), ns_string!("Power Commander"));
+}
+
 /// Where Settings opens from other windows.
 #[derive(Clone)]
 struct MainWindow(AnyWindowHandle, WeakEntity<Commander>);
@@ -184,18 +217,26 @@ impl Global for MainWindow {}
 
 /// Settings on its Edit/View page, over the main window.
 fn configure_viewer(cx: &mut App) {
-    let Some(MainWindow(main, commander)) = cx.try_global::<MainWindow>().cloned() else {
-        return;
-    };
     let page = settings::PAGES
         .iter()
         .position(|&(_, name)| name == "Edit/View");
+    configure(Some(page.unwrap_or(0)), cx);
+}
+
+/// Settings on `page`, or Shortcuts, over the main window.
+fn configure(page: Option<usize>, cx: &mut App) {
+    let Some(MainWindow(main, commander)) = cx.try_global::<MainWindow>().cloned() else {
+        return;
+    };
     let _ = main.update(cx, |_, window, cx| {
         window.activate_window();
         let Ok(settings) = commander.read_with(cx, |this, _| this.settings.clone()) else {
             return;
         };
-        settings_dialog::open(commander, settings, page.unwrap_or(0), window, cx);
+        match page {
+            Some(page) => settings_dialog::open(commander, settings, page, window, cx),
+            None => keys_dialog::open(commander, settings.keys, window, cx),
+        }
     });
 }
 
@@ -413,10 +454,13 @@ impl Commander {
     }
 
     fn reload_menus(&self, cx: &mut Context<Self>) {
-        let quick = self.quick.is_some();
-        let checked = |command| self.sidebar.shows(command) || (command == Command::QuickViewPanel && quick);
-        menus::set(self.settings.appearance, &checked, cx);
+        menus::set(self.settings.appearance, &|command| self.checked(command), cx);
         self.menu_bar.update(cx, |bar, cx| bar.reload(cx));
+    }
+
+    /// The menus show these commands checked.
+    fn checked(&self, command: Command) -> bool {
+        self.sidebar.shows(command) || (command == Command::QuickViewPanel && self.quick.is_some())
     }
 
     fn move_cursor(&mut self, rows: isize, cx: &mut Context<Self>) {
@@ -1445,6 +1489,8 @@ impl Commander {
 impl Render for Commander {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_quick_view(window, cx);
+        #[cfg(target_os = "macos")]
+        menus::show(window, menus::main_menus(self.settings.appearance, &|command| self.checked(command)), cx);
         self.quick_keys = self.quick_focused(window, cx);
         self.trim_thumbnails(window);
         let vertical = self.vertical;
@@ -1656,13 +1702,16 @@ impl Render for Commander {
             .size_full()
             .text_color(cx.theme().foreground)
             .text_sm()
-            .child(
-                div()
-                    .bg(self.colors.bar)
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(self.menu_bar.clone()),
-            )
+            // macOS shows the menus on the system's menu bar.
+            .when(!cfg!(target_os = "macos"), |el| {
+                el.child(
+                    div()
+                        .bg(self.colors.bar)
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(self.menu_bar.clone()),
+                )
+            })
             .child(
                 h_flex()
                     .flex_1()

@@ -123,6 +123,10 @@ impl TextEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // macOS: the application and Window menus only.
+        #[cfg(target_os = "macos")]
+        cx.observe_window_activation(window, |_, window, cx| crate::menus::show(window, Vec::new(), cx))
+            .detach();
         let editor = cx.new(|cx| {
             let mut editor = EditorState::new(window, cx)
                 .language("text")

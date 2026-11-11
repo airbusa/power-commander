@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use gpui_kit::component::menu::{AppMenuBar, ContextMenuExt, MenuBuilder, PopupMenu};
+use gpui_kit::component::menu::{AppMenuBar, ContextMenuExt, MenuBuilder};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarHandle};
 use gpui_kit::component::text::TextView;
@@ -22,7 +22,7 @@ use pc_core::viewer::{
 };
 
 use crate::find_dialog;
-use crate::menus::Run;
+use crate::menus::{Entries, Run};
 use crate::minimap::{self, Minimap};
 use crate::media_view::MediaView;
 use crate::pdf_view::PdfView;
@@ -285,12 +285,17 @@ impl Drop for Viewer {
 }
 
 /// The minimap's view of the rows.
+const MENUS: [&str; 4] = ["File", "Edit", "Options", "Encoding"];
+
 /// File, Edit, Options and Encoding, as Lister's; each built as it opens.
 fn menu_bar(viewer: WeakEntity<Viewer>, cx: &mut App) -> Entity<AppMenuBar> {
-    let menus = ["File", "Edit", "Options", "Encoding"].map(|name| {
+    let menus = MENUS.map(|name| {
         let viewer = viewer.clone();
         let build: MenuBuilder = Rc::new(move |menu, _, cx| match viewer.upgrade() {
-            Some(viewer) => viewer.read(cx).menu(name, menu, cx),
+            Some(viewer) => {
+                let viewer = viewer.read(cx);
+                viewer.menu(name, menu.action_context(viewer.focus.clone()), cx)
+            }
             None => menu,
         });
         (name.into(), build)
@@ -1019,7 +1024,7 @@ impl Viewer {
     }
 
     /// One of the menus, as it is now.
-    fn menu(&self, name: &str, menu: PopupMenu, cx: &App) -> PopupMenu {
+    fn menu<M: Entries>(&self, name: &str, menu: M, cx: &App) -> M {
         let Shown {
             mode,
             font,
@@ -1033,26 +1038,26 @@ impl Viewer {
         let minimap = crate::minimap_shown(cx);
         let columns = self.shown.settings.text_width;
         let none = self.selected().is_empty();
-        let file = |menu: PopupMenu| {
-            menu.menu("Open...", Box::new(OpenFile))
-                .menu("Save as...", Box::new(SaveAs))
+        let file = |menu: M| {
+            menu.entry("Open...", false, Box::new(OpenFile), false)
+                .entry("Save as...", false, Box::new(SaveAs), false)
                 .separator()
-                .menu("Next file", Box::new(NextFile))
-                .menu("Previous file", Box::new(PreviousFile))
+                .entry("Next file", false, Box::new(NextFile), false)
+                .entry("Previous file", false, Box::new(PreviousFile), false)
                 .separator()
-                .menu("Reload", Box::new(Reload))
+                .entry("Reload", false, Box::new(Reload), false)
                 .separator()
-                .menu("Close", Box::new(Close))
+                .entry("Close", false, Box::new(Close), false)
         };
         let picture_shown = matches!(mode, Mode::Picture | Mode::Markdown | Mode::Pdf);
-        let edit = move |menu: PopupMenu| {
-            menu.menu_with_disabled("Copy as text", Box::new(CopyText), none)
-                .menu("Select all", Box::new(SelectAll))
+        let edit = move |menu: M| {
+            menu.entry("Copy as text", false, Box::new(CopyText), none)
+                .entry("Select all", false, Box::new(SelectAll), false)
                 .separator()
-                .menu_with_disabled("Find...", Box::new(Find), picture_shown)
-                .menu_with_disabled("Find next", Box::new(FindNext), picture_shown)
+                .entry("Find...", false, Box::new(Find), picture_shown)
+                .entry("Find next", false, Box::new(FindNext), picture_shown)
         };
-        let options = move |mut menu: PopupMenu| {
+        let options = move |mut menu: M| {
             let modes: [(&str, Mode, Box<dyn Action>); 9] = [
                 ("Text only", Mode::Text, Box::new(ShowText)),
                 (
@@ -1070,7 +1075,7 @@ impl Viewer {
             ];
             for (label, this, action) in modes {
                 let off = this == Mode::Picture && !picture || this == Mode::Pdf && !pdf;
-                menu = menu.menu_with_check_and_disabled(label, mode == this, action, off);
+                menu = menu.entry(label, mode == this, action, off);
             }
             menu = menu.separator();
             let fonts: [(&str, Font, Box<dyn Action>); 3] = [
@@ -1083,33 +1088,34 @@ impl Viewer {
                 ),
             ];
             for (label, this, action) in fonts {
-                menu = menu.menu_with_check(label, font == this, action);
+                menu = menu.entry(label, font == this, action, false);
             }
             let image = mode == Mode::Picture && !self.shown.media;
             let larger = "Fit only larger images";
             menu.separator()
-                .menu_with_check(
+                .entry(
                     format!("Wrap text ({columns} columns)"),
                     wrap,
                     Box::new(ToggleWrap),
+                    false,
                 )
                 .separator()
-                .menu_with_check_and_disabled(
+                .entry(
                     "Fit image to window",
                     fit,
                     Box::new(FitImage),
                     !image,
                 )
-                .menu_with_check_and_disabled(larger, only_larger, Box::new(FitLarger), !image)
+                .entry(larger, only_larger, Box::new(FitLarger), !image)
                 .separator()
-                .menu_with_check("Minimap", minimap, Box::new(ToggleMinimap))
+                .entry("Minimap", minimap, Box::new(ToggleMinimap), false)
                 .separator()
-                .menu("Configure...", Box::new(Configure))
+                .entry("Configure...", false, Box::new(Configure), false)
         };
         let (ansi, dos) = codepage::system();
-        let encoding = move |mut menu: PopupMenu, off: bool| {
+        let encoding = move |mut menu: M, off: bool| {
             menu = menu
-                .menu_with_check_and_disabled(
+                .entry(
                     "As set by the font",
                     page.is_none(),
                     Box::new(SetPage(None)),
@@ -1123,7 +1129,7 @@ impl Viewer {
                     _ => "",
                 };
                 let label = format!("{label}{local}");
-                menu = menu.menu_with_check_and_disabled(
+                menu = menu.entry(
                     label,
                     page == Some(number),
                     Box::new(SetPage(Some(number))),
@@ -1137,7 +1143,6 @@ impl Viewer {
             mode,
             Mode::Unicode | Mode::Utf8 | Mode::Html | Mode::Picture | Mode::Markdown | Mode::Pdf
         );
-        let menu = menu.action_context(self.focus.clone());
         match name {
             "File" => file(menu),
             "Edit" => edit(menu),
@@ -1371,6 +1376,11 @@ impl Viewer {
 
 impl Render for Viewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(target_os = "macos")]
+        if !self.quick {
+            let menus = MENUS.map(|name| Menu::new(name).items(self.menu(name, Vec::new(), cx)));
+            crate::menus::show(window, menus.into(), cx);
+        }
         let (content, status) = match self.shown.mode {
             Mode::Picture => match &self.media {
                 Some(media) => (media.clone().into_any_element(), String::new()),
@@ -1542,7 +1552,8 @@ impl Render for Viewer {
                 Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_to_end(true, cx)),
                 None => this.scroll(|v| v.top = v.max_top(), cx),
             }))
-            .when(!self.quick, |el| {
+            // macOS shows the menus on the system's menu bar.
+            .when(!self.quick && !cfg!(target_os = "macos"), |el| {
                 el.child(
                     div()
                         .px_1()

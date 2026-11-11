@@ -74,6 +74,10 @@ fn open(files: [Arc<Origin>; 2], bounds: WindowBounds, cx: &mut App) -> Result<(
         let view = cx.new(|cx| {
             let focus = cx.focus_handle();
             window.focus(&focus, cx);
+            // macOS: the application and Window menus only.
+            #[cfg(target_os = "macos")]
+            cx.observe_window_activation(window, |_, window, cx| crate::menus::show(window, Vec::new(), cx))
+                .detach();
             CompareView {
                 files,
                 inputs,
