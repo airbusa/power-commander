@@ -1,3 +1,6 @@
+// Modified for PowerCommander: exports MenuBuilder. Changes are marked
+// "PowerCommander patch".
+
 use gpui::App;
 
 mod app_menu_bar;
@@ -6,7 +9,8 @@ mod dropdown_menu;
 mod menu_item;
 mod popup_menu;
 
-pub use app_menu_bar::AppMenuBar;
+// PowerCommander patch: MenuBuilder.
+pub use app_menu_bar::{AppMenuBar, MenuBuilder};
 pub use context_menu::{ContextMenu, ContextMenuExt, ContextMenuState};
 pub use dropdown_menu::DropdownMenu;
 pub use popup_menu::{PopupMenu, PopupMenuItem};

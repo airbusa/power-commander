@@ -6,12 +6,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenu};
+use gpui_kit::component::menu::{AppMenuBar, ContextMenuExt, MenuBuilder, PopupMenu};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarHandle};
 use gpui_kit::component::text::TextView;
-use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, WindowExt, h_flex, v_flex};
 use gpui_kit::*;
 use pc_core::codepage;
 use pc_core::settings::ViewerSettings;
@@ -119,6 +118,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("w", ToggleWrap, keys),
         KeyBinding::new("f", FitImage, keys),
         KeyBinding::new("l", FitLarger, keys),
+        KeyBinding::new("m", ToggleMinimap, keys),
         KeyBinding::new("n", NextFile, keys),
         KeyBinding::new("p", PreviousFile, keys),
         KeyBinding::new("f2", Reload, keys),
@@ -183,6 +183,7 @@ fn searches(cx: &mut App) -> &mut Searches {
 
 struct Viewer {
     shown: Shown,
+    menu_bar: Entity<AppMenuBar>,
     /// Shared with a running Find.
     text: Arc<TextFile>,
     /// The file's, HTML's text is shorter.
@@ -215,6 +216,19 @@ impl Drop for Viewer {
 }
 
 /// The minimap's view of the rows.
+/// File, Edit, Options and Encoding, as Lister's; each built as it opens.
+fn menu_bar(viewer: WeakEntity<Viewer>, cx: &mut App) -> Entity<AppMenuBar> {
+    let menus = ["File", "Edit", "Options", "Encoding"].map(|name| {
+        let viewer = viewer.clone();
+        let build: MenuBuilder = Rc::new(move |menu, _, cx| match viewer.upgrade() {
+            Some(viewer) => viewer.read(cx).menu(name, menu, cx),
+            None => menu,
+        });
+        (name.into(), build)
+    });
+    AppMenuBar::built(menus.into(), cx)
+}
+
 struct ViewerMap(WeakEntity<Viewer>);
 
 /// The minimap's view of a rendered Markdown page: its source lines,
@@ -404,6 +418,7 @@ impl Viewer {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         Self {
+            menu_bar: menu_bar(cx.entity().downgrade(), cx),
             size: file_size(&shown, &text),
             markdown: markdown(&shown, &text),
             pdf: pdf_view(&shown, cx),
@@ -787,20 +802,8 @@ impl Viewer {
         );
     }
 
-    /// File, Edit, Options and Encoding, as Lister's.
-    fn render_menus(&self, cx: &mut Context<Self>) -> Div {
-        let focus = self.focus.clone();
-        let bar_menu = move |label: &'static str,
-                             disabled: bool,
-                             items: Box<dyn Fn(PopupMenu) -> PopupMenu>| {
-            let focus = focus.clone();
-            Button::new(label)
-                .ghost()
-                .small()
-                .label(label)
-                .disabled(disabled)
-                .dropdown_menu(move |menu, _, _| items(menu.action_context(focus.clone())))
-        };
+    /// One of the menus, as it is now.
+    fn menu(&self, name: &str, menu: PopupMenu, cx: &App) -> PopupMenu {
         let Shown {
             mode,
             font,
@@ -888,12 +891,13 @@ impl Viewer {
                 .menu("Configure...", Box::new(Configure))
         };
         let (ansi, dos) = codepage::system();
-        let encoding = move |mut menu: PopupMenu| {
+        let encoding = move |mut menu: PopupMenu, off: bool| {
             menu = menu
-                .menu_with_check(
+                .menu_with_check_and_disabled(
                     "As set by the font",
                     page.is_none(),
                     Box::new(SetPage(None)),
+                    off,
                 )
                 .separator();
             for &(label, number) in codepage::MENU {
@@ -903,10 +907,11 @@ impl Viewer {
                     _ => "",
                 };
                 let label = format!("{label}{local}");
-                menu = menu.menu_with_check(
+                menu = menu.menu_with_check_and_disabled(
                     label,
                     page == Some(number),
                     Box::new(SetPage(Some(number))),
+                    off,
                 );
             }
             menu
@@ -916,14 +921,13 @@ impl Viewer {
             mode,
             Mode::Unicode | Mode::Utf8 | Mode::Html | Mode::Picture | Mode::Markdown | Mode::Pdf
         );
-        h_flex()
-            .px_1()
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .child(bar_menu("File", false, Box::new(file)))
-            .child(bar_menu("Edit", false, Box::new(edit)))
-            .child(bar_menu("Options", false, Box::new(options)))
-            .child(bar_menu("Encoding", unpaged, Box::new(encoding)))
+        let menu = menu.action_context(self.focus.clone());
+        match name {
+            "File" => file(menu),
+            "Edit" => edit(menu),
+            "Options" => options(menu),
+            _ => encoding(menu, unpaged),
+        }
     }
 
     /// The rows on screen, and where they are in the file.
@@ -1144,7 +1148,6 @@ impl Render for Viewer {
             },
             _ => self.render_rows(window, cx),
         };
-        let menus = self.render_menus(cx);
         // The PDF view has its own, of page thumbnails.
         let minimap = match self.shown.mode {
             Mode::Picture | Mode::Pdf => None,
@@ -1239,7 +1242,13 @@ impl Render for Viewer {
                 Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_to_end(true, cx)),
                 None => this.scroll(|v| v.top = v.max_top(), cx),
             }))
-            .child(menus)
+            .child(
+                div()
+                    .px_1()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(self.menu_bar.clone()),
+            )
             .child(
                 h_flex()
                     .flex_1()

@@ -17,7 +17,7 @@ a notice, and every change is marked `WDS patch`.
 | `src/input/popovers/completion_menu.rs` | the completion menu is as wide as `CompletionMenuOptions::max_width`; sized to its first measured item, it stayed too narrow for later items |
 | `src/kbd.rs` | a key binding of several keystrokes (a chord, Ctrl+K Ctrl+0) shows them all, not only the first; PowerCommander patch: the numpad's `add`, `subtract`, `multiply`, `divide` show as Num +, Num -, Num *, Num / |
 | `src/list/list.rs` | `ListState::confirm_on_double_click`: a click only selects, a double click or Enter confirms |
-| `src/menu/app_menu_bar.rs` | menu-bar menus may be as tall as the window minus 48 px (upstream: half the window, at most 450 px, then scrolling) |
+| `src/menu/app_menu_bar.rs`, `src/menu/mod.rs` | menu-bar menus may be as tall as the window minus 48 px (upstream: half the window, at most 450 px, then scrolling); PowerCommander patch: `AppMenuBar::built` makes a bar of a window's own menus (the viewer's), each built by a `MenuBuilder` as it opens, so it shows the window's state then |
 | `src/menu/popup_menu.rs` | PowerCommander patch: every menu and submenu may be as tall as the window minus 16 px (upstream: menus of over 20 items scroll within half the window, at most 450 px); only a menu taller than that scrolls, by wheel and keys, and no menu shows a scrollbar; `scrollable()` has no effect |
 | `src/tree.rs` | `Tree::context_menu` builders get the menu's `Context<PopupMenu>` instead of `Context<TreeState>`, so tree menus can have submenus; the row renderer's `selected` is not overridden, so the app can show several selected rows |
 | `src/root.rs` | notifications paint above dialogs (deferred, priority 90) |

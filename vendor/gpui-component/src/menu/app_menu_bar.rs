@@ -1,5 +1,7 @@
 // Modified for Water Data Studio (Apache-2.0, section 4b): menu-bar menus may
 // use the window's height. Changes are marked "WDS patch".
+// Modified for PowerCommander: a bar of a window's own menus, each built as
+// it opens. Changes are marked "PowerCommander patch".
 
 use crate::{
     InteractiveElementExt as _, Selectable, Sizable,
@@ -17,6 +19,16 @@ use gpui::{
 };
 
 const CONTEXT: &str = "AppMenuBar";
+
+/// PowerCommander patch: builds a window's own menu each time it opens.
+pub type MenuBuilder =
+    std::rc::Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
+
+/// PowerCommander patch: the app's menu, or a window's own.
+enum Items {
+    App(OwnedMenu),
+    Built(MenuBuilder),
+}
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("escape", Cancel, Some(CONTEXT)),
@@ -43,6 +55,24 @@ impl AppMenuBar {
             };
             this.reload(cx);
             this
+        })
+    }
+
+    /// PowerCommander patch: a bar of a window's own menus instead of the app's.
+    pub fn built(menus: Vec<(SharedString, MenuBuilder)>, cx: &mut App) -> Entity<Self> {
+        cx.new(|cx| {
+            let menu_bar = cx.entity();
+            let menus = menus.into_iter().enumerate();
+            Self {
+                selected_index: None,
+                action_context: None,
+                menus: menus
+                    .map(|(ix, (name, build))| {
+                        let items = Items::Built(build);
+                        cx.new(|_| AppMenu::with_items(ix, name, items, menu_bar.clone()))
+                    })
+                    .collect(),
+            }
         })
     }
 
@@ -141,7 +171,7 @@ pub(super) struct AppMenu {
     menu_bar: Entity<AppMenuBar>,
     ix: usize,
     name: SharedString,
-    menu: OwnedMenu,
+    items: Items,
     popup_menu: Option<Entity<PopupMenu>>,
 
     _subscription: Option<Subscription>,
@@ -154,15 +184,24 @@ impl AppMenu {
         menu_bar: Entity<AppMenuBar>,
         cx: &mut App,
     ) -> Entity<Self> {
-        let name = menu.name.clone();
-        cx.new(|_| Self {
+        let items = Items::App(menu.clone());
+        cx.new(|_| Self::with_items(ix, menu.name.clone(), items, menu_bar))
+    }
+
+    fn with_items(
+        ix: usize,
+        name: SharedString,
+        items: Items,
+        menu_bar: Entity<AppMenuBar>,
+    ) -> Self {
+        Self {
             ix,
             menu_bar,
             name,
-            menu: menu.clone(),
+            items,
             popup_menu: None,
             _subscription: None,
-        })
+        }
     }
 
     /// Whether this menu's popup is the one the menu bar currently has open.
@@ -178,13 +217,23 @@ impl AppMenu {
         let action_context = self.menu_bar.read(cx).action_context.clone();
         let popup_menu = match self.popup_menu.as_ref() {
             None => {
-                let items = self.menu.items.clone();
                 // WDS patch: room for long menus (the default limit is half the
                 // window, at most 450px).
                 let max_height = window.viewport_size().height - px(48.);
-                let popup_menu = PopupMenu::build(window, cx, |menu, window, cx| {
-                    menu.with_menu_items(items, window, cx).max_h(max_height)
-                });
+                let popup_menu = match &self.items {
+                    Items::App(menu) => {
+                        let items = menu.items.clone();
+                        PopupMenu::build(window, cx, |menu, window, cx| {
+                            menu.with_menu_items(items, window, cx).max_h(max_height)
+                        })
+                    }
+                    Items::Built(build) => {
+                        let build = build.clone();
+                        PopupMenu::build(window, cx, move |menu, window, cx| {
+                            build(menu, window, cx).max_h(max_height)
+                        })
+                    }
+                };
                 popup_menu.update(cx, |menu, cx| {
                     menu.set_action_context(action_context.clone(), cx);
                 });
@@ -264,6 +313,12 @@ impl AppMenu {
 impl Render for AppMenu {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_open = self.is_open(cx);
+        // PowerCommander patch: a window's own menu is built anew as it opens,
+        // as what it shows may have changed.
+        if !is_open && matches!(self.items, Items::Built(_)) {
+            self.popup_menu = None;
+            self._subscription = None;
+        }
 
         div()
             .id(self.ix)
