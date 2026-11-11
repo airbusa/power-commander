@@ -3,6 +3,13 @@ use std::path::Path;
 use std::{env, fs};
 
 fn main() {
+    // Windows: the app's icon in the .exe, resource 1, which GPUI loads for its windows.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rerun-if-changed=../../packaging/windows/powercommander.ico");
+        let mut resource = winresource::WindowsResource::new();
+        resource.set_icon("../../packaging/windows/powercommander.ico");
+        resource.compile().expect("the Windows icon resource");
+    }
     let manifest = env::var("CARGO_MANIFEST_DIR").unwrap();
     let dir = Path::new(&manifest).join("../../vendor/material-icon-theme/icons");
     println!("cargo:rerun-if-changed={}", dir.display());

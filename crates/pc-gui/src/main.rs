@@ -182,6 +182,7 @@ fn main() {
             }),
             window_min_size: Some(size(px(600.), px(400.))),
             app_id: Some("powercommander".into()),
+            icon: window_icon(),
             ..Default::default()
         };
         gpui_kit::open_window(options, cx, |window, cx| {
@@ -1751,8 +1752,18 @@ pub(crate) fn over_main_window(title: String, bounds: WindowBounds, cx: &App) ->
             ..Default::default()
         }),
         app_id: Some("powercommander".into()),
+        icon: window_icon(),
         ..Default::default()
     }
+}
+
+/// The app's icon on its windows, as X11 takes it; Wayland's desktop finds it
+/// by the app id, through the installed `powercommander.desktop`.
+pub(crate) fn window_icon() -> Option<std::sync::Arc<image::RgbaImage>> {
+    static ICON: std::sync::OnceLock<Option<std::sync::Arc<image::RgbaImage>>> = std::sync::OnceLock::new();
+    let png = include_bytes!("../../../packaging/linux/hicolor/256x256/apps/powercommander.png");
+    let decode = || image::load_from_memory_with_format(png, image::ImageFormat::Png).ok();
+    ICON.get_or_init(|| decode().map(|icon| std::sync::Arc::new(icon.into_rgba8()))).clone()
 }
 
 /// The system's look, light or dark as chosen.

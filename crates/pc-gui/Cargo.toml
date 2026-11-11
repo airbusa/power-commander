@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 gpui-kit = "0.7.3"
 # Rendered PDF pages become GPUI images; GPUI builds it already.
-image = { version = "0.25", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png"] }
 # Server prompts reach the window by a channel; GPUI builds it already.
 futures = "0.3"
 pc-core.workspace = true
@@ -21,3 +21,7 @@ pc-core.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSDictionary", "NSObject", "NSString"] }
+
+# The .exe's icon on Windows, which GPUI gives its windows (resource 1).
+[build-dependencies]
+winresource = "0.1.34"

@@ -58,6 +58,7 @@ fn open(files: [Arc<Origin>; 2], bounds: WindowBounds, cx: &mut App) -> Result<(
             ..Default::default()
         }),
         app_id: Some("powercommander".into()),
+        icon: crate::window_icon(),
         ..Default::default()
     };
     gpui_kit::open_window(options, cx, |window, cx| {
