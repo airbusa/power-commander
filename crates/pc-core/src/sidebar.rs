@@ -13,6 +13,8 @@ pub enum SidebarTab {
     #[default]
     Tree,
     Favourites,
+    /// Shown while KDE Connect has paired devices.
+    Devices,
 }
 
 struct Node {

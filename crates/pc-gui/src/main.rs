@@ -73,7 +73,7 @@ actions!(
 include!(concat!(env!("OUT_DIR"), "/material_icons.rs"));
 
 // Lucide icons beyond GPUI Kit's own set.
-gpui_kit::assets::icon_assets!(ExtraIcons, [Server]);
+gpui_kit::assets::icon_assets!(ExtraIcons, [Server, Smartphone, Tablet, Laptop, Monitor, Tv]);
 
 /// GPUI Kit's icons, the file icons as `material/<name>.svg`, the player's as `media/`.
 struct AppAssets;
@@ -312,6 +312,7 @@ impl Commander {
             true
         });
         Self::watch_queue(window, cx);
+        Self::watch_devices(cx);
         // Back from another program, which may have changed the folders.
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {

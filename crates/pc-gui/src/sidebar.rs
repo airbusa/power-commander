@@ -1,7 +1,9 @@
 //! The sidebar: its tabs on a rail, this computer's folders as a tree that
 //! follows the active panel, and the servers by protocol.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -13,6 +15,7 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, StyledExt, Windo
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::connections::{self, Connection, Connections};
+use pc_core::devices::{self, Device};
 use pc_core::menu::Command;
 use pc_core::remote::{Address, Scheme};
 use pc_core::sidebar::{self, FolderTree, SidebarTab};
@@ -39,7 +42,14 @@ pub(crate) struct Sidebar {
     hosts: Vec<String>,
     closed: Vec<Scheme>,
     selected: Option<(Scheme, usize)>,
+    /// KDE Connect's paired devices; none hides their tab.
+    devices: Vec<Device>,
+    /// The folders of the devices mounted, by id.
+    device_folders: HashMap<String, Vec<(PathBuf, String)>>,
 }
+
+/// The "Opening…" note of a device being mounted.
+struct Mounting;
 
 /// Dragging the sidebar's edge.
 pub(crate) struct SidebarDrag;
@@ -57,6 +67,8 @@ impl Sidebar {
             hosts: connections::ssh_hosts(),
             closed: Vec::new(),
             selected: None,
+            devices: Vec::new(),
+            device_folders: HashMap::new(),
         }
     }
 
@@ -206,10 +218,14 @@ impl Commander {
             .gap_1()
             .items_center()
             .child(rail_item("rail-tree", "tree.svg", "Folders", SidebarTab::Tree))
-            .child(rail_item("rail-favourites", "folder-server.svg", "Favourites", SidebarTab::Favourites));
+            .child(rail_item("rail-favourites", "folder-server.svg", "Favourites", SidebarTab::Favourites))
+            .when(!self.sidebar.devices.is_empty(), |el| {
+                el.child(rail_item("rail-devices", "folder-mobile.svg", "Devices", SidebarTab::Devices))
+            });
         let content = match tab {
             SidebarTab::Tree => self.render_tree(cx).into_any_element(),
             SidebarTab::Favourites => self.render_favourites(cx).into_any_element(),
+            SidebarTab::Devices => self.render_devices(cx).into_any_element(),
         };
         let theme = cx.theme();
         Some(
@@ -321,6 +337,138 @@ impl Commander {
                 }
                 cx.notify();
             }))
+    }
+
+    /// Asks KDE Connect for its devices now and every few seconds after, for
+    /// as long as the window is there.
+    pub(crate) fn watch_devices(cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                let found = cx.background_executor().spawn(async { devices::paired() }).await;
+                if this.update(cx, |this, cx| this.set_devices(found, cx)).is_err() {
+                    break;
+                }
+                cx.background_executor().timer(Duration::from_secs(10)).await;
+            }
+        })
+        .detach();
+    }
+
+    fn set_devices(&mut self, devices: Vec<Device>, cx: &mut Context<Self>) {
+        if devices == self.sidebar.devices {
+            return;
+        }
+        // KDE Connect unmounts what it can no longer reach.
+        let browsable = |id: &String| devices.iter().any(|device| device.id == *id && device.browsable);
+        self.sidebar.device_folders.retain(|id, _| browsable(id));
+        if devices.is_empty() && self.sidebar.tab == Some(SidebarTab::Devices) {
+            self.sidebar.tab = Some(SidebarTab::Tree);
+        }
+        self.sidebar.devices = devices;
+        cx.notify();
+    }
+
+    /// Mounts the device in the background, then shows its widest folder.
+    fn open_device(&mut self, device: &Device, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(folders) = self.sidebar.device_folders.get(&device.id) {
+            let first = folders[0].0.clone();
+            return self.open_folder(first, window, cx);
+        }
+        let (id, name) = (device.id.clone(), device.name.clone());
+        let note = Notification::info(format!("Opening {name}...")).id1::<Mounting>(id.clone()).autohide(false);
+        window.push_notification(note, cx);
+        let mount = {
+            let id = id.clone();
+            cx.background_executor().spawn(async move { devices::mount(&id) })
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            let mounted = mount.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                window.remove_notification1::<Mounting>(id.clone(), cx);
+                match mounted {
+                    Ok(folders) => {
+                        let first = folders[0].0.clone();
+                        this.sidebar.device_folders.insert(id, folders);
+                        this.open_folder(first, window, cx);
+                    }
+                    Err(err) => {
+                        let note = Notification::error(format!("{name}: {err}")).autohide(false);
+                        window.push_notification(note, cx);
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn render_devices(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let panel = self.panels[self.active].tabs.current();
+        let here = panel.remote().is_none().then(|| panel.folder().to_owned());
+        let mut list = v_flex().id("devices").flex_1().min_h_0().overflow_y_scroll().px_1();
+        for device in &self.sidebar.devices {
+            let theme = cx.theme();
+            let icon = match device.kind.as_str() {
+                "tablet" => Lucide::Tablet,
+                "laptop" => Lucide::Laptop,
+                "desktop" => Lucide::Monitor,
+                "tv" => Lucide::Tv,
+                _ => Lucide::Smartphone,
+            };
+            let detail = match (device.reachable, device.browsable) {
+                (false, _) => "not connected",
+                (true, false) => "shares no files",
+                (true, true) => "",
+            };
+            let opened = device.clone();
+            list = list.child(
+                h_flex()
+                    .id(SharedString::from(format!("device-{}", device.id)))
+                    .h(ROW + px(2.))
+                    .px_1()
+                    .gap_1p5()
+                    .rounded(theme.radius)
+                    .map(|el| match device.browsable {
+                        true => el
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme.foreground.opacity(0.06)))
+                            .on_click(cx.listener(move |this, _, window, cx| this.open_device(&opened, window, cx))),
+                        false => el.text_color(theme.muted_foreground),
+                    })
+                    .child(Icon::new(icon).small().text_color(theme.muted_foreground))
+                    .child(div().flex_none().max_w(relative(0.7)).truncate().child(device.name.clone()))
+                    .child(div().flex_1().min_w_0().truncate().text_xs().text_color(theme.muted_foreground).child(detail)),
+            );
+            let Some(folders) = self.sidebar.device_folders.get(&device.id) else {
+                continue;
+            };
+            // The deepest of its folders the active panel is in.
+            let inside = here.as_ref().and_then(|here| {
+                let holding = folders.iter().filter(|(path, _)| here.starts_with(path));
+                holding.max_by_key(|(path, _)| path.components().count()).map(|(path, _)| path.clone())
+            });
+            for (ix, (path, name)) in folders.iter().enumerate() {
+                let theme = cx.theme();
+                let selected = inside.as_ref() == Some(path);
+                let icon = icons::material().icon(name, true, !theme.mode.is_dark());
+                let path = path.clone();
+                list = list.child(
+                    h_flex()
+                        .id(SharedString::from(format!("device-{}-{ix}", device.id)))
+                        .h(ROW)
+                        .pl(px(26.))
+                        .pr_1()
+                        .gap_1()
+                        .rounded(theme.radius)
+                        .cursor_pointer()
+                        .when(selected, |el| el.bg(self.colors.cursor))
+                        .when(!selected, |el| el.hover(|style| style.bg(theme.foreground.opacity(0.06))))
+                        .child(img(format!("material/{icon}")).size(px(16.)).flex_none())
+                        .child(div().flex_1().min_w_0().truncate().child(name.clone()))
+                        .on_click(cx.listener(move |this, _, window, cx| this.open_folder(path.clone(), window, cx))),
+                );
+            }
+        }
+        v_flex().size_full().child(header("Devices", cx)).child(list)
     }
 
     fn render_favourites(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {

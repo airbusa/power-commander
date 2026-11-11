@@ -8,6 +8,7 @@ pub mod command;
 pub mod compare;
 pub mod connections;
 pub mod convert;
+pub mod devices;
 pub mod edit;
 pub mod ftp;
 pub mod html;
