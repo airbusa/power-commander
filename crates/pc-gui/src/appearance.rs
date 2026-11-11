@@ -8,8 +8,10 @@ pub struct PanelColors {
     /// The active panel's cursor: its fill and its dotted frame.
     pub cursor: Hsla,
     pub cursor_frame: Hsla,
-    /// The sorted column's title and the active panel's path: the accent, softly.
-    pub soft_accent: Hsla,
+    pub alternate_row: Hsla,
+    pub header_border: Hsla,
+    /// The sorted column's title and the active panel's path.
+    pub sorted_header: Hsla,
     /// Marked files' names.
     pub marked: Hsla,
 }
@@ -21,6 +23,7 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         true => ThemeMode::Dark,
         false => ThemeMode::Light,
     };
+    let list = palette.list();
     KitTheme::change(mode, None, cx);
     KitTheme::update(cx, |kit| {
         if let Some(font) = &palette.font {
@@ -35,7 +38,7 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         kit.primary = color(palette.selection);
         kit.primary_foreground = color(palette.selection_text);
         // The inactive panel's path.
-        kit.muted = color(palette.header);
+        kit.muted = color(list.header);
         kit.muted_foreground = color(palette.dim);
         kit.popover = color(palette.window);
         kit.popover_foreground = color(palette.text);
@@ -43,17 +46,18 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         kit.accent_foreground = color(palette.selection_text);
         kit.list_active = color(palette.selection);
         // Column titles.
-        kit.list_head = color(palette.header);
+        kit.list_head = color(list.header);
         kit.tab_bar = color(palette.window);
         kit.tab_active = color(palette.view);
         kit.tab_foreground = color(palette.dim);
         kit.tab_active_foreground = color(palette.text);
     });
-    let faint = color(palette.selection).opacity(0.3);
     PanelColors {
-        cursor: faint,
+        cursor: color(list.selected_row),
         cursor_frame: color(palette.text),
-        soft_accent: color(palette.header).blend(faint),
+        alternate_row: color(list.alternate_row),
+        header_border: color(list.header_border),
+        sorted_header: color(list.sorted_header),
         marked: color(palette.marked),
     }
 }

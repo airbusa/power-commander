@@ -983,12 +983,12 @@ impl Commander {
         let panel = side.tabs.current();
         let active = ix == self.active;
         let (title_bg, title_fg) = if active {
-            (self.colors.soft_accent, theme.foreground)
+            (self.colors.sorted_header, theme.foreground)
         } else {
             (theme.muted, theme.muted_foreground)
         };
         let sort = panel.sort();
-        let soft_accent = self.colors.soft_accent;
+        let colors = self.colors;
         let title = |label: &'static str, key: SortKey, right: bool| {
             let sorted = sort.key == key;
             let arrow = match sort.descending {
@@ -1001,9 +1001,9 @@ impl Commander {
                 .px_1()
                 .gap_1()
                 .cursor_pointer()
-                .border_color(theme.border)
+                .border_color(colors.header_border)
                 .when(key != SortKey::Attributes, |el| el.border_r_1())
-                .when(sorted, |el| el.bg(soft_accent))
+                .when(sorted, |el| el.bg(colors.sorted_header))
                 .on_click(cx.listener(move |this, _, _, cx| this.sort_by_column(ix, key, cx)))
                 .child(
                     div()
@@ -1040,7 +1040,7 @@ impl Commander {
             .bg(theme.list_head)
             .border_x_1()
             .border_b_1()
-            .border_color(theme.border)
+            .border_color(colors.header_border)
             .on_drag_move(
                 cx.listener(move |this, event: &DragMoveEvent<ColumnDrag>, _, cx| {
                     let drag = event.drag(cx);
@@ -1238,6 +1238,7 @@ impl Commander {
             .px_1()
             .border_1()
             .border_color(gpui_kit::transparent_black())
+            .when(row % 2 == 1, |el| el.bg(self.colors.alternate_row))
             .when(cursor, |el| {
                 el.bg(self.colors.cursor).border_dashed().border_color(self.colors.cursor_frame)
             })

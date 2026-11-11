@@ -21,8 +21,6 @@ pub struct Palette {
     pub window: u32,
     /// The file lists, the viewer's and editor's pages.
     pub view: u32,
-    /// Column titles, the inactive panel's path.
-    pub header: u32,
     pub text: u32,
     /// Less important text.
     pub dim: u32,
@@ -34,6 +32,37 @@ pub struct Palette {
     pub marked: u32,
     /// The UI font's family, where the desktop names one.
     pub font: Option<String>,
+}
+
+/// The file lists' colours, from the look's background, text and accent.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ListColors {
+    pub row: u32,
+    /// Every other row, for the eye to follow a line.
+    pub alternate_row: u32,
+    /// Column titles; the inactive panel's path.
+    pub header: u32,
+    pub header_border: u32,
+    /// The sorted column's title; the active panel's path.
+    pub sorted_header: u32,
+    /// The cursor's row.
+    pub selected_row: u32,
+}
+
+impl Palette {
+    pub fn list(&self) -> ListColors {
+        let share = |dark: f32, light: f32| if self.dark { dark } else { light };
+        let (background, text, accent) = (self.view, self.text, self.selection);
+        let header = mix(background, text, share(0.08, 0.06));
+        ListColors {
+            row: background,
+            alternate_row: mix(background, text, share(0.05, 0.03)),
+            header,
+            header_border: mix(background, text, share(0.20, 0.16)),
+            sorted_header: mix(header, accent, share(0.18, 0.12)),
+            selected_row: mix(background, accent, share(0.30, 0.22)),
+        }
+    }
 }
 
 /// The look of this platform and desktop.
@@ -99,7 +128,6 @@ fn kde(kdeglobals: &str) -> Option<Palette> {
         dark: luminance(window) < 0.5,
         window,
         view: color("Colors:View", "BackgroundNormal")?,
-        header: color("Colors:Header", "BackgroundNormal").unwrap_or(window),
         text,
         dim: color("Colors:View", "ForegroundInactive").unwrap_or(text),
         // Breeze draws frames as a fifth of the text over the window.
@@ -118,7 +146,6 @@ fn breeze(dark: bool) -> Palette {
             dark,
             window: 0x202326,
             view: 0x141618,
-            header: 0x292c30,
             text: 0xfcfcfc,
             dim: 0xa1a9b1,
             border: mix(0x202326, 0xfcfcfc, 0.2),
@@ -131,7 +158,6 @@ fn breeze(dark: bool) -> Palette {
             dark,
             window: 0xeff0f1,
             view: 0xffffff,
-            header: 0xdee0e2,
             text: 0x232629,
             dim: 0x707d8a,
             border: mix(0xeff0f1, 0x232629, 0.2),
@@ -150,7 +176,6 @@ fn adwaita(dark: bool) -> Palette {
             dark,
             window: 0x222226,
             view: 0x1d1d20,
-            header: 0x2e2e32,
             text: 0xffffff,
             dim: 0x9a9a9e,
             border: 0x3a3a3f,
@@ -163,7 +188,6 @@ fn adwaita(dark: bool) -> Palette {
             dark,
             window: 0xfafafb,
             view: 0xffffff,
-            header: 0xebebed,
             text: 0x2e2e33,
             dim: 0x6e6e73,
             border: 0xdcdcde,
@@ -183,7 +207,6 @@ fn windows(dark: bool) -> Palette {
             dark,
             window: 0x202020,
             view: 0x1c1c1c,
-            header: 0x2b2b2b,
             text: 0xffffff,
             dim: 0xc5c5c5,
             border: 0x3d3d3d,
@@ -196,7 +219,6 @@ fn windows(dark: bool) -> Palette {
             dark,
             window: 0xf3f3f3,
             view: 0xffffff,
-            header: 0xf9f9f9,
             text: 0x1a1a1a,
             dim: 0x5d5d5d,
             border: 0xe5e5e5,
@@ -216,7 +238,6 @@ fn mac(dark: bool) -> Palette {
             dark,
             window: 0x323232,
             view: 0x1e1e1e,
-            header: 0x2a2a2a,
             text: 0xe6e6e6,
             dim: 0x989898,
             border: 0x3d3d3d,
@@ -229,7 +250,6 @@ fn mac(dark: bool) -> Palette {
             dark,
             window: 0xececec,
             view: 0xffffff,
-            header: 0xf5f5f5,
             text: 0x262626,
             dim: 0x808080,
             border: 0xd8d8d8,
@@ -245,7 +265,7 @@ fn mac(dark: bool) -> Palette {
 fn mix(from: u32, to: u32, share: f32) -> u32 {
     let channel = |shift: u32| {
         let (a, b) = ((from >> shift & 0xff) as f32, (to >> shift & 0xff) as f32);
-        ((a + (b - a) * share) as u32) << shift
+        ((a + (b - a) * share.clamp(0., 1.)).round() as u32) << shift
     };
     channel(16) | channel(8) | channel(0)
 }
@@ -270,7 +290,7 @@ mod tests {
     fn reads_kde_schemes() {
         let scheme = kde(BREEZE_DARK).unwrap();
         assert!(scheme.dark);
-        assert_eq!((scheme.window, scheme.view, scheme.header), (0x202326, 0x141618, 0x292c30));
+        assert_eq!((scheme.window, scheme.view), (0x202326, 0x141618));
         assert_eq!((scheme.selection, scheme.marked), (0x3daee9, 0xda4453));
         assert_eq!(scheme.font.as_deref(), Some("Segoe UI"));
         assert_eq!(kde_or_breeze(Some(BREEZE_DARK), true), scheme);
@@ -280,6 +300,9 @@ mod tests {
         assert_eq!(light.font.as_deref(), Some("Segoe UI"));
         assert_eq!(kde_or_breeze(None, false), breeze(false));
         assert!(kde("[General]\nfont=x\n").is_none(), "no colours");
-        assert_eq!(mix(0x000000, 0xffffff, 0.5), 0x7f7f7f);
+        assert_eq!(mix(0x000000, 0xffffff, 0.5), 0x808080);
+        let list = scheme.list();
+        assert_eq!((list.header, list.selected_row), (0x27282a, 0x204457));
+        assert_eq!(list.sorted_header, mix(0x27282a, 0x3daee9, 0.18));
     }
 }
