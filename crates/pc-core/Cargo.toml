@@ -45,3 +45,7 @@ ring = "0.17"
 [target.'cfg(target_os = "linux")'.dependencies]
 khronos-egl = { version = "6", features = ["dynamic"] }
 glow = "0.17"
+
+# The file manager's own properties dialog (FileManager1); the keyring builds it already.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+zbus = "5"

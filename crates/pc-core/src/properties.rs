@@ -30,6 +30,49 @@ pub struct Properties {
 }
 
 /// A server's entry has what its listing tells; this computer's, more.
+/// The system's own properties dialog for files of this computer: the
+/// file manager's (Dolphin, Nautilus) by its D-Bus interface on Linux,
+/// Finder's on macOS. Blocks until it is asked; elsewhere, unsupported.
+pub fn show_in_system(paths: &[std::path::PathBuf]) -> io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    {
+        let uris: Vec<String> = paths.iter().map(|p| crate::clipboard::file_uri(p)).collect();
+        let bus = zbus::blocking::Connection::session().map_err(io::Error::other)?;
+        let name = "org.freedesktop.FileManager1";
+        let path = "/org/freedesktop/FileManager1";
+        let call = (uris, "");
+        bus.call_method(Some(name), path, Some(name), "ShowItemProperties", &call)
+            .map_err(io::Error::other)?;
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // The paths come as arguments: no quoting inside the script.
+        let script = [
+            "on run argv",
+            "tell application \"Finder\"",
+            "activate",
+            "repeat with p in argv",
+            "open information window of (POSIX file (p as text) as alias)",
+            "end repeat",
+            "end tell",
+            "end run",
+        ];
+        let mut osascript = std::process::Command::new("osascript");
+        for line in script {
+            osascript.arg("-e").arg(line);
+        }
+        let done = osascript.args(paths).output()?;
+        if !done.status.success() {
+            let why = String::from_utf8_lossy(&done.stderr).trim().to_owned();
+            return Err(io::Error::other(why));
+        }
+        return Ok(());
+    }
+    #[allow(unreachable_code)]
+    Err(io::Error::new(io::ErrorKind::Unsupported, "no system properties dialog here yet"))
+}
+
 pub fn of(fs: &dyn Fs, local: bool, path: &Path) -> io::Result<Properties> {
     if !local {
         let meta = fs.metadata(path)?;

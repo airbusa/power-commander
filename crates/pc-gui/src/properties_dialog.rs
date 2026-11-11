@@ -17,7 +17,32 @@ use pc_core::{grouped, human_size, local_time};
 use crate::Commander;
 
 impl Commander {
+    /// This computer's files in the system's own dialog, as other file
+    /// managers show them; ours for a server's, or when that fails.
     pub(crate) fn show_properties(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.panels[self.active].tabs.current();
+        if panel.remote().is_none() && !panel.in_archive() {
+            let folder = panel.folder().to_owned();
+            let paths: Vec<std::path::PathBuf> = match panel.chosen().as_slice() {
+                [] => vec![folder],
+                chosen => chosen.iter().map(|e| folder.join(&e.name)).collect(),
+            };
+            cx.spawn_in(window, async move |this, cx| {
+                let shown = cx
+                    .background_executor()
+                    .spawn(async move { properties::show_in_system(&paths) })
+                    .await;
+                if shown.is_err() {
+                    let _ = this.update_in(cx, |this, window, cx| this.own_properties(window, cx));
+                }
+            })
+            .detach();
+            return;
+        }
+        self.own_properties(window, cx);
+    }
+
+    fn own_properties(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let panel = self.panels[self.active].tabs.current();
         if panel.in_archive() {
             let text = "The archive's listing shows what it knows of its files.";

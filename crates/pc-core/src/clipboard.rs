@@ -10,6 +10,25 @@ pub fn text_of(paths: &[PathBuf]) -> String {
     lines.join("\n")
 }
 
+/// A path as a `file://` address, other bytes than letters, digits and
+/// `-._~/` written `%XX`.
+pub fn file_uri(path: &std::path::Path) -> String {
+    #[cfg(unix)]
+    let bytes = std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str()).to_vec();
+    #[cfg(not(unix))]
+    let bytes = path.to_string_lossy().replace('\\', "/").into_bytes();
+    let mut uri = String::from("file://");
+    for byte in bytes {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                uri.push(byte as char)
+            }
+            _ => uri.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    uri
+}
+
 /// The files a text names, a line each, as `file://` addresses or
 /// absolute paths, all of them there; none for any other text.
 pub fn paths_in(text: &str) -> Option<Vec<PathBuf>> {
@@ -63,7 +82,10 @@ mod tests {
         let uri = format!("file://{}\r\n", dir.display()).replace(' ', "%20") + "a%20b";
         assert_eq!(paths_in(&uri.replace("\r\na%20b", "/a%20b")), Some(vec![folder]));
         let encoded = format!("file://{}/%C3%A9.txt", dir.display());
-        assert_eq!(paths_in(&encoded), Some(vec![file]));
+        assert_eq!(paths_in(&encoded), Some(vec![file.clone()]));
+        let uri = file_uri(&dir.join("a b"));
+        assert!(uri.ends_with("/a%20b"), "{uri}");
+        assert_eq!(paths_in(&file_uri(&file)), Some(vec![file]));
         assert_eq!(paths_in("just some words"), None);
         assert_eq!(paths_in("/no/such/file"), None);
         assert_eq!(paths_in(""), None);
