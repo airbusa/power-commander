@@ -1,14 +1,17 @@
 //! Quick View (Total Commander's Ctrl+Q): the panel opposite the active one
 //! shows what the active one's cursor is on, as the viewer does; a folder,
-//! or `..`, shows the space it occupies. Tab takes the keys to the viewer.
+//! or `..`, shows the space it occupies. An archive's file is taken out
+//! first, once the cursor rests on it. Tab takes the keys to the viewer.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use gpui_kit::component::{ActiveTheme, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use pc_core::origin::Origin;
 use pc_core::space::{self, Space};
 use pc_core::vfs::Local;
 use pc_core::{grouped, human_size};
@@ -22,6 +25,23 @@ pub(crate) struct QuickView {
     shown: Option<(PathBuf, bool)>,
     viewer: Option<viewer::Quick>,
     folder: Option<Folder>,
+    /// Shown instead of the viewer: an archive's file being taken out, or why not.
+    note: Option<String>,
+    /// Taking the archive's file out; dropped, it is not shown.
+    taking: Option<Task<()>>,
+    /// The folder the shown archive file was taken out to, removed once it goes.
+    copy: Option<PathBuf>,
+}
+
+/// Larger files of archives are not taken out to look at in passing: F3 does.
+const TAKEN_OUT_MAX: u64 = 256 << 20;
+
+impl Drop for QuickView {
+    fn drop(&mut self) {
+        if let Some(copy) = self.copy.take() {
+            let _ = std::fs::remove_dir_all(copy);
+        }
+    }
 }
 
 /// A folder being counted: none until done.
@@ -40,7 +60,7 @@ impl Drop for Folder {
 impl QuickView {
     /// The viewer, while a file is shown.
     fn file_viewer(&self) -> Option<&viewer::Quick> {
-        self.viewer.as_ref().filter(|_| matches!(self.shown, Some((_, false))))
+        self.viewer.as_ref().filter(|_| matches!(self.shown, Some((_, false))) && self.note.is_none())
     }
 }
 
@@ -51,7 +71,15 @@ impl Commander {
                 window.focus(&self.focus, cx);
                 None
             }
-            None => Some(QuickView { side: 1 - self.active, shown: None, viewer: None, folder: None }),
+            None => Some(QuickView {
+                side: 1 - self.active,
+                shown: None,
+                viewer: None,
+                folder: None,
+                note: None,
+                taking: None,
+                copy: None,
+            }),
         };
         self.reload_menus(cx);
         cx.notify();
@@ -85,13 +113,26 @@ impl Commander {
             return;
         };
         quick.side = 1 - active;
-        let wanted = self.panels[active].tabs.current().quick_view();
+        let panel = self.panels[active].tabs.current();
+        let wanted = panel.quick_view();
         if wanted == quick.shown {
             return;
         }
+        let archived = panel.in_archive().then(|| panel.origin().zip(panel.current_entry().map(|entry| entry.size))).flatten();
         quick.shown = wanted.clone();
-        quick.folder = None;
+        (quick.folder, quick.note, quick.taking) = (None, None, None);
+        if let Some(copy) = quick.copy.take() {
+            let _ = std::fs::remove_dir_all(copy);
+        }
         match wanted {
+            Some((_, false)) if let Some((_, size)) = archived.as_ref().filter(|(_, size)| *size > TAKEN_OUT_MAX) => {
+                quick.note = Some(format!("{} is too large to take out of the archive here: F3 views it.", pc_core::human_size(*size)));
+            }
+            Some((_, false)) if let Some((origin, _)) = archived => {
+                quick.note = Some("Taking it out of the archive…".into());
+                quick.taking = Some(take_out(origin, window, cx));
+            }
+            Some((_, true)) if panel.in_archive() => quick.note = Some("Inside archives, Quick View shows files.".into()),
             Some((path, false)) => match &quick.viewer {
                 Some(viewer) => viewer.show(path, window, cx),
                 None => quick.viewer = Some(viewer::Quick::new(path, self.settings.viewer.clone(), window, cx)),
@@ -108,13 +149,12 @@ impl Commander {
     pub(crate) fn render_quick_view(&self, quick_focused: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let quick = self.quick.as_ref()?;
         let theme = cx.theme();
-        let (title, body) = match (&quick.shown, quick.file_viewer(), &quick.folder) {
-            (Some((path, false)), Some(viewer), _) => {
-                let name = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
-                (name, viewer.view().into_any_element())
-            }
-            (Some((path, true)), _, Some(folder)) => (path.display().to_string(), folder_text(path, folder.space, cx)),
-            _ => (String::new(), note("Quick View shows the files of this computer.", cx)),
+        let name = |path: &Path| path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
+        let (title, body) = match (&quick.shown, quick.file_viewer(), &quick.folder, &quick.note) {
+            (Some((path, _)), _, _, Some(text)) => (name(path), note(text.clone(), cx)),
+            (Some((path, false)), Some(viewer), _, _) => (name(path), viewer.view().into_any_element()),
+            (Some((path, true)), _, Some(folder), _) => (path.display().to_string(), folder_text(path, folder.space, cx)),
+            _ => (String::new(), note("Quick View shows the files of this computer and of archives.".into(), cx)),
         };
         let (title_bg, title_fg, stripe) = match quick_focused {
             true => (self.colors.active_path, theme.foreground, theme.primary),
@@ -196,6 +236,33 @@ fn folder_text(path: &std::path::Path, space: Option<Space>, cx: &App) -> AnyEle
     text.children(lines.into_iter().map(|line| div().when(line.is_empty(), |el| el.h_2()).child(line))).into_any_element()
 }
 
-fn note(text: &'static str, cx: &App) -> AnyElement {
+/// Takes the archive's file out once the cursor has rested on it, then shows it.
+fn take_out(origin: Origin, window: &mut Window, cx: &mut Context<Commander>) -> Task<()> {
+    cx.spawn_in(window, async move |this, cx| {
+        // Passing over files takes none out.
+        cx.background_executor().timer(Duration::from_millis(200)).await;
+        let file = cx.background_executor().spawn(async move { origin.view() }).await;
+        let _ = this.update_in(cx, |this, window, cx| {
+            let settings = this.settings.viewer.clone();
+            let Some(quick) = &mut this.quick else {
+                return;
+            };
+            match file {
+                Ok(file) => {
+                    quick.copy = file.parent().map(Path::to_owned);
+                    quick.note = None;
+                    match &quick.viewer {
+                        Some(viewer) => viewer.show(file, window, cx),
+                        None => quick.viewer = Some(viewer::Quick::new(file, settings, window, cx)),
+                    }
+                }
+                Err(err) => quick.note = Some(err.to_string()),
+            }
+            cx.notify();
+        });
+    })
+}
+
+fn note(text: String, cx: &App) -> AnyElement {
     div().p_3().text_color(cx.theme().muted_foreground).child(text).into_any_element()
 }

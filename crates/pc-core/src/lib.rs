@@ -625,15 +625,16 @@ impl Panel {
     }
 
     /// Quick View's subject: the file or folder at the cursor, this folder on
-    /// `..`, and whether it is a folder. None on a server or in an archive.
+    /// `..`, and whether it is a folder; inside an archive, its path there.
+    /// None on a server.
     pub fn quick_view(&self) -> Option<(PathBuf, bool)> {
-        if self.remote.is_some() || self.archive.is_some() {
+        if self.remote.is_some() && self.archive.is_none() {
             return None;
         }
         let entry = self.current_entry()?;
         Some(match entry.is_parent() {
-            true => (self.path.clone(), true),
-            false => (self.path.join(&entry.name), entry.is_dir),
+            true => (self.path(), true),
+            false => (self.path().join(&entry.name), entry.is_dir),
         })
     }
 
