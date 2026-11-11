@@ -1425,10 +1425,16 @@ impl Commander {
                 el.bg(self.colors.cursor).border_dashed().border_color(self.colors.cursor_frame)
             })
             .when(marked, |el| el.text_color(self.colors.marked))
+            // On press, as Total Commander: the panel turns active with the cursor already here.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.active = ix;
+                    this.panels[ix].tabs.current_mut().set_cursor(row);
+                    cx.notify();
+                }),
+            )
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                this.active = ix;
-                this.panels[ix].tabs.current_mut().set_cursor(row);
-                cx.notify();
                 if event.click_count() == 2 {
                     this.enter(window, cx);
                 }
