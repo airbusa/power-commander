@@ -23,20 +23,18 @@ pub fn bind_keys(cx: &mut App) {
 
 /// Refuses files over `limit_mb`; ones editing could change by accident
 /// open to a warning, as VS Code's, and as text only on request.
-pub fn open(path: PathBuf, limit_mb: u64, upload: Option<Upload>, cx: &mut App) -> io::Result<()> {
+pub fn open(
+    path: PathBuf,
+    limit_mb: u64,
+    upload: Option<Upload>,
+    bounds: WindowBounds,
+    cx: &mut App,
+) -> io::Result<()> {
     let (text, unfit) = match edit::load_text(&path, limit_mb)? {
         edit::Loaded::Text(text) => (text, None),
         edit::Loaded::Unfit { why, anyway } => (String::new(), Some((why, anyway))),
     };
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(1000.), px(700.)), cx)),
-        titlebar: Some(TitlebarOptions {
-            title: Some(title(&path, false).into()),
-            ..Default::default()
-        }),
-        app_id: Some("powercommander".into()),
-        ..Default::default()
-    };
+    let options = crate::over_main_window(title(&path, false), bounds, cx);
     gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| TextEditor::new(path, text, unfit, upload, window, cx))
     })

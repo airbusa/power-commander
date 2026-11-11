@@ -147,21 +147,7 @@ pub fn open(
 ) -> io::Result<()> {
     let mut shown = Shown::new(files, at, settings, Img::extensions(), true, true);
     let text = shown.start()?;
-    let options = WindowOptions {
-        window_bounds: Some(bounds),
-        // Wayland lets no app place its windows; as the main window's child,
-        // the compositor centres it over the main window.
-        kind: match cx.compositor_name() {
-            "Wayland" => WindowKind::Floating,
-            _ => WindowKind::Normal,
-        },
-        titlebar: Some(TitlebarOptions {
-            title: Some(title(shown.path()).into()),
-            ..Default::default()
-        }),
-        app_id: Some("powercommander".into()),
-        ..Default::default()
-    };
+    let options = crate::over_main_window(title(shown.path()), bounds, cx);
     gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| Viewer::new(shown, text, window, cx))
     })

@@ -438,7 +438,7 @@ impl Commander {
                     viewer::open(files, at, settings.viewer, bounds, cx)
                 }
                 (remote::Open::Edit | remote::Open::External, upload) => {
-                    editor::open(file, settings.editor.limit_mb, upload, cx)
+                    editor::open(file, settings.editor.limit_mb, upload, bounds, cx)
                 }
             });
             if let Err(err) = opened {
@@ -1474,6 +1474,25 @@ impl Render for Commander {
             .children(self.render_transfers(cx))
             .child(self.render_command_line(cx))
             .child(self.render_button_bar(cx))
+    }
+}
+
+/// The viewer's and editor's windows: where the main one is. Wayland lets
+/// no app place its windows; as the main window's child, the compositor
+/// centres it over the main window.
+pub(crate) fn over_main_window(title: String, bounds: WindowBounds, cx: &App) -> WindowOptions {
+    WindowOptions {
+        window_bounds: Some(bounds),
+        kind: match cx.compositor_name() {
+            "Wayland" => WindowKind::Floating,
+            _ => WindowKind::Normal,
+        },
+        titlebar: Some(TitlebarOptions {
+            title: Some(title.into()),
+            ..Default::default()
+        }),
+        app_id: Some("powercommander".into()),
+        ..Default::default()
     }
 }
 
