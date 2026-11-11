@@ -20,6 +20,7 @@ mod occupied;
 mod pack_dialog;
 mod pdf_view;
 mod properties_dialog;
+mod quick_view;
 mod remote;
 mod rename_dialog;
 mod settings_dialog;
@@ -240,6 +241,9 @@ struct Commander {
     /// Ctrl+C's or Ctrl+X's files.
     file_clip: Option<drag_drop::FileClip>,
     sidebar: sidebar::Sidebar,
+    quick: Option<quick_view::QuickView>,
+    /// Quick View's viewer has the keys: no panel shows a cursor.
+    quick_keys: bool,
 }
 
 struct Side {
@@ -356,6 +360,8 @@ impl Commander {
             saved_selection: Vec::new(),
             file_clip: None,
             sidebar,
+            quick: None,
+            quick_keys: false,
         }
     }
 
@@ -396,7 +402,9 @@ impl Commander {
     }
 
     fn reload_menus(&self, cx: &mut Context<Self>) {
-        menus::set(self.settings.appearance, &|command| self.sidebar.shows(command), cx);
+        let quick = self.quick.is_some();
+        let checked = |command| self.sidebar.shows(command) || (command == Command::QuickViewPanel && quick);
+        menus::set(self.settings.appearance, &checked, cx);
         self.menu_bar.update(cx, |bar, cx| bar.reload(cx));
     }
 
@@ -1006,11 +1014,19 @@ impl Commander {
         .detach();
     }
 
+    /// A panel, or Quick View where it covers it.
+    fn render_side(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        match self.quick.as_ref().is_some_and(|quick| quick.side == ix) {
+            true => self.render_quick_view(self.quick_keys, cx).expect("Quick View is on"),
+            false => self.render_panel(ix, cx).into_any_element(),
+        }
+    }
+
     fn render_panel(&self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let side = &self.panels[ix];
         let panel = side.tabs.current();
-        let active = ix == self.active;
+        let active = ix == self.active && !self.quick_keys;
         let (title_bg, title_fg, stripe) = if active {
             (self.colors.active_path, theme.foreground, theme.primary)
         } else {
@@ -1164,8 +1180,9 @@ impl Commander {
             // A click anywhere in it makes it the active one, as Total Commander's.
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
+                cx.listener(move |this, _, window, cx| {
                     this.active = ix;
+                    window.focus(&this.focus, cx);
                     cx.notify();
                 }),
             )
@@ -1290,7 +1307,7 @@ impl Commander {
         let entry = &panel.entries()[row];
         let light = !theme.mode.is_dark();
         let icon = icons::material().icon(&entry.display_name(), entry.is_dir, light);
-        let cursor = row == panel.cursor() && ix == self.active;
+        let cursor = row == panel.cursor() && ix == self.active && !self.quick_keys;
         let (name, extension) = entry.name_and_extension();
         let [name_width, ext, size, date, attr] = self.columns.map(px);
         let marked = panel.is_marked(entry);
@@ -1375,7 +1392,9 @@ impl Commander {
 }
 
 impl Render for Commander {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_quick_view(window, cx);
+        self.quick_keys = self.quick_focused(window, cx);
         // Keeps panel keys out of the menu bar.
         // Typing a path, the panels' keys rest.
         let panels = h_flex()
@@ -1385,9 +1404,11 @@ impl Render for Commander {
             .flex_1()
             .min_h_0()
             .p_1()
-            .on_action(cx.listener(|this, _: &SwitchPanel, _, cx| {
-                this.active = 1 - this.active;
-                cx.notify();
+            .on_action(cx.listener(|this, _: &SwitchPanel, window, cx| {
+                if !this.tab_quick_view(window, cx) {
+                    this.active = 1 - this.active;
+                    cx.notify();
+                }
             }))
             .on_action(cx.listener(|this, _: &Up, _, cx| this.move_cursor(-1, cx)))
             .on_action(cx.listener(|this, _: &Down, _, cx| this.move_cursor(1, cx)))
@@ -1442,6 +1463,7 @@ impl Render for Commander {
                         connections_dialog::open(cx.entity().downgrade(), side, window, cx)
                     }
                     Command::Disconnect => this.disconnect(window, cx),
+                    Command::QuickViewPanel => this.toggle_quick_view(window, cx),
                     Command::SidebarTree => this.toggle_sidebar(SidebarTab::Tree, window, cx),
                     Command::SidebarFavourites => {
                         this.toggle_sidebar(SidebarTab::Favourites, window, cx)
@@ -1513,7 +1535,7 @@ impl Render for Commander {
                     .flex_none()
                     .w(relative(self.split))
                     .pr(px(2.))
-                    .child(self.render_panel(0, cx)),
+                    .child(self.render_side(0, cx)),
             )
             .child(
                 div()
@@ -1521,7 +1543,7 @@ impl Render for Commander {
                     .min_w_0()
                     .flex_1()
                     .pl(px(2.))
-                    .child(self.render_panel(1, cx)),
+                    .child(self.render_side(1, cx)),
             )
             .child(
                 div()

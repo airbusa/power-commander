@@ -61,9 +61,10 @@ pub struct MediaView {
 }
 
 impl MediaView {
-    pub fn new(path: PathBuf, cx: &mut Context<Self>) -> Self {
+    /// `paused`: Quick View's, which shows what the cursor passes.
+    pub fn new(path: PathBuf, paused: bool, cx: &mut Context<Self>) -> Self {
         let (sent, mut received) = futures::channel::mpsc::unbounded::<()>();
-        let player = Player::open(&path, move || {
+        let player = Player::open(&path, paused, move || {
             let _ = sent.unbounded_send(());
         });
         let frames = cx.spawn(async move |this, cx| {

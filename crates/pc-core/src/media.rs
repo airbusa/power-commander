@@ -66,8 +66,8 @@ pub struct Player {
 }
 
 impl Player {
-    /// Starts playing; `notify`, called on other threads, says a frame or the state changed.
-    pub fn open(path: &Path, notify: impl Fn() + Send + Sync + 'static) -> Result<Player, String> {
+    /// Starts playing, or `paused`; `notify`, called on other threads, says a frame or the state changed.
+    pub fn open(path: &Path, paused: bool, notify: impl Fn() + Send + Sync + 'static) -> Result<Player, String> {
         let mpv = library()?;
         // SAFETY: a plain constructor; null when it fails.
         let handle = Raw(unsafe { (mpv.create)() });
@@ -97,6 +97,7 @@ impl Player {
             ("gpu-hwdec-interop", if nvidia() { "auto" } else { "vaapi" }),
             ("input-default-bindings", "no"),
             ("terminal", "no"),
+            ("pause", if paused { "yes" } else { "no" }),
         ] {
             let (name, value) = (text(name)?, text(value)?);
             // SAFETY: valid strings, a live handle.
@@ -751,7 +752,7 @@ mod tests {
             .unwrap();
         assert!(made.success());
         let (sent, frames) = mpsc::channel();
-        let player = Player::open(&file, move || {
+        let player = Player::open(&file, false, move || {
             let _ = sent.send(());
         })
         .unwrap();

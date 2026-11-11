@@ -598,6 +598,19 @@ impl Panel {
         self.entries.get(self.cursor)
     }
 
+    /// Quick View's subject: the file or folder at the cursor, this folder on
+    /// `..`, and whether it is a folder. None on a server or in an archive.
+    pub fn quick_view(&self) -> Option<(PathBuf, bool)> {
+        if self.remote.is_some() || self.archive.is_some() {
+            return None;
+        }
+        let entry = self.current_entry()?;
+        Some(match entry.is_parent() {
+            true => (self.path.clone(), true),
+            false => (self.path.join(&entry.name), entry.is_dir),
+        })
+    }
+
     pub fn is_marked(&self, entry: &Entry) -> bool {
         self.marked.contains(&entry.name)
     }

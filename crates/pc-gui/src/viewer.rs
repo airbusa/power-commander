@@ -11,14 +11,17 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarHandle};
 use gpui_kit::component::text::TextView;
 use gpui_kit::component::{ActiveTheme, WindowExt, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::codepage;
 use pc_core::settings::ViewerSettings;
+use pc_core::menu::Command;
 use pc_core::viewer::{
-    COPY_LIMIT, Font, MARKDOWN_LIMIT, Mode, Query, Row, Searches, Shown, TextFile, search_url,
+    COPY_LIMIT, Font, Layout, MARKDOWN_LIMIT, Mode, Query, Row, Searches, Shown, TextFile, search_url,
 };
 
 use crate::find_dialog;
+use crate::menus::Run;
 use crate::minimap::{self, Minimap};
 use crate::media_view::MediaView;
 use crate::pdf_view::PdfView;
@@ -149,7 +152,7 @@ pub fn open(
     let text = shown.start()?;
     let options = crate::over_main_window(title(shown.path()), bounds, cx);
     gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| Viewer::new(shown, text, window, cx))
+        cx.new(|cx| Viewer::new(shown, text, false, window, cx))
     })
     .map(drop)
     .map_err(|err| io::Error::other(err.to_string()))
@@ -157,6 +160,47 @@ pub fn open(
 
 fn title(path: &Path) -> String {
     format!("{} — Power Commander", path.display())
+}
+
+/// Quick View: the viewer in a panel, showing what the other panel's cursor
+/// is on; no menu bar, no status bar, media paused.
+pub(crate) struct Quick(Entity<Viewer>);
+
+impl Quick {
+    pub fn new(path: PathBuf, settings: ViewerSettings, window: &mut Window, cx: &mut App) -> Self {
+        let mut shown = Shown::new(vec![path], 0, settings, Img::extensions(), true, true);
+        let started = shown.start();
+        let viewer = cx.new(|cx| {
+            let empty = || TextFile::text(String::new(), Layout::Lines { width: 1 });
+            let (text, problem) = match started {
+                Ok(text) => (text, None),
+                Err(err) => (empty(), Some(err)),
+            };
+            let mut viewer = Viewer::new(shown, text, true, window, cx);
+            if let Some(err) = problem {
+                viewer.failed(err, window, cx);
+            }
+            viewer
+        });
+        Quick(viewer)
+    }
+
+    /// Shows `path` instead, as the viewer starts on a file.
+    pub fn show(&self, path: PathBuf, window: &mut Window, cx: &mut App) {
+        self.0.update(cx, |viewer, cx| {
+            let settings = viewer.shown.settings.clone();
+            viewer.shown = Shown::new(vec![path], 0, settings, Img::extensions(), true, true);
+            viewer.restart(window, cx);
+        });
+    }
+
+    pub fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.0.read(cx).focus.clone()
+    }
+
+    pub fn view(&self) -> Entity<impl Render> {
+        self.0.clone()
+    }
 }
 
 /// The searches, shared by the viewers.
@@ -174,6 +218,10 @@ fn searches(cx: &mut App) -> &mut Searches {
 
 struct Viewer {
     shown: Shown,
+    /// Quick View's: inside a panel.
+    quick: bool,
+    /// Why Quick View shows nothing: it says so in place of the file.
+    problem: Option<SharedString>,
     menu_bar: Entity<AppMenuBar>,
     /// Video or sound being played.
     media: Option<Entity<MediaView>>,
@@ -410,12 +458,16 @@ impl ScrollbarHandle for ViewHandle {
 }
 
 impl Viewer {
-    fn new(shown: Shown, text: TextFile, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(shown: Shown, text: TextFile, quick: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
-        window.focus(&focus, cx);
+        if !quick {
+            window.focus(&focus, cx);
+        }
         let mut viewer = Self {
+            quick,
+            problem: None,
             menu_bar: menu_bar(cx.entity().downgrade(), cx),
-            media: media_view(&shown, None, cx),
+            media: media_view(&shown, None, quick, cx),
             size: file_size(&shown, &text),
             markdown: markdown(&shown, &text),
             pdf: pdf_view(&shown, cx),
@@ -482,8 +534,9 @@ impl Viewer {
         self.markdown = markdown(&self.shown, &text);
         self.pdf = pdf_view(&self.shown, cx);
         self.convert(cx);
-        self.media = media_view(&self.shown, self.media.take(), cx);
+        self.media = media_view(&self.shown, self.media.take(), self.quick, cx);
         self.text = Arc::new(text);
+        self.problem = None;
         self.selection = (0, 0);
         self.stop_finding();
         if !keep_top {
@@ -491,13 +544,21 @@ impl Viewer {
             (view.top, view.x) = (0, px(0.));
         }
         self._poll = Self::poll(cx);
-        window.set_window_title(&title(self.shown.path()));
+        if !self.quick {
+            window.set_window_title(&title(self.shown.path()));
+        }
         cx.notify();
     }
 
     fn failed(&mut self, err: io::Error, window: &mut Window, cx: &mut Context<Self>) {
         let text = format!("{}: {err}", self.shown.path().display());
-        window.push_notification(Notification::error(text), cx);
+        match self.quick {
+            true => {
+                self.media = None;
+                self.problem = Some(format!("Cannot show it: {err}").into());
+            }
+            false => window.push_notification(Notification::error(text), cx),
+        }
         cx.notify();
     }
 
@@ -1198,6 +1259,13 @@ impl Render for Viewer {
             },
             _ => self.render_rows(window, cx),
         };
+        let content = match &self.problem {
+            Some(problem) => {
+                let text = div().p_4().text_color(cx.theme().muted_foreground).child(problem.clone());
+                text.into_any_element()
+            }
+            None => content,
+        };
         // The PDF view has its own, of page thumbnails.
         let minimap = match self.shown.mode {
             Mode::Picture | Mode::Pdf => None,
@@ -1212,7 +1280,24 @@ impl Render for Viewer {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .on_action(cx.listener(|_, _: &Close, window, _| window.remove_window()))
+            .when(!self.quick, |el| {
+                el.on_action(cx.listener(|_, _: &Close, window, _| window.remove_window()))
+                    .on_action(cx.listener(|_, _: &ToggleFullScreen, window, _| {
+                        window.toggle_fullscreen()
+                    }))
+            })
+            // Keys the viewer leaves would act on the panel's file: only these go on.
+            .when(self.quick, |el| {
+                el.on_action(|Run(command): &Run, _, cx| {
+                    let general = [Command::QuickViewPanel, Command::Quit, Command::Settings, Command::Shortcuts];
+                    let sidebar = [Command::SidebarTree, Command::SidebarFavourites];
+                    if general.contains(command) || sidebar.contains(command) {
+                        cx.propagate();
+                    }
+                })
+                .on_action(|_: &crate::Open, _, _| {})
+                .on_action(|_: &crate::Parent, _, _| {})
+            })
             .on_action(cx.listener(|this, _: &ShowText, w, cx| this.set_mode(Mode::Text, w, cx)))
             .on_action(
                 cx.listener(|this, _: &ShowBinary, w, cx| this.set_mode(Mode::Binary, w, cx)),
@@ -1271,9 +1356,6 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &PlayPause, _, cx| {
                 this.player(cx).inspect(|player| player.toggle_pause());
             }))
-            .on_action(cx.listener(|_, _: &ToggleFullScreen, window, _| {
-                window.toggle_fullscreen()
-            }))
             .on_action(cx.listener(|this, _: &Left, _, cx| {
                 this.player(cx).inspect(|player| player.seek_by(-5.));
             }))
@@ -1325,13 +1407,15 @@ impl Render for Viewer {
                 Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_to_end(true, cx)),
                 None => this.scroll(|v| v.top = v.max_top(), cx),
             }))
-            .child(
-                div()
-                    .px_1()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(self.menu_bar.clone()),
-            )
+            .when(!self.quick, |el| {
+                el.child(
+                    div()
+                        .px_1()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(self.menu_bar.clone()),
+                )
+            })
             .child(
                 h_flex()
                     .flex_1()
@@ -1339,13 +1423,9 @@ impl Render for Viewer {
                     .child(div().flex_1().min_w_0().h_full().relative().child(content))
                     .children(minimap),
             )
-            .child(status_bar(
-                self.shown.path(),
-                self.size,
-                status,
-                self.shown.describe(),
-                cx,
-            ))
+            .when(!self.quick, |el| {
+                el.child(status_bar(self.shown.path(), self.size, status, self.shown.describe(), cx))
+            })
     }
 }
 
@@ -1353,6 +1433,7 @@ impl Render for Viewer {
 fn media_view(
     shown: &Shown,
     playing: Option<Entity<MediaView>>,
+    paused: bool,
     cx: &mut App,
 ) -> Option<Entity<MediaView>> {
     if shown.mode != Mode::Picture || !shown.media {
@@ -1360,7 +1441,7 @@ fn media_view(
     }
     let playing = playing.filter(|view| view.read(cx).path() == shown.path());
     let path = shown.path().to_owned();
-    Some(playing.unwrap_or_else(|| cx.new(|cx| MediaView::new(path, cx))))
+    Some(playing.unwrap_or_else(|| cx.new(|cx| MediaView::new(path, paused, cx))))
 }
 
 fn pdf_view(shown: &Shown, cx: &mut App) -> Option<Entity<PdfView>> {

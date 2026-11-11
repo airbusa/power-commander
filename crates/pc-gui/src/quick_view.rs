@@ -1,0 +1,201 @@
+//! Quick View (Total Commander's Ctrl+Q): the panel opposite the active one
+//! shows what the active one's cursor is on, as the viewer does; a folder,
+//! or `..`, shows the space it occupies. Tab takes the keys to the viewer.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use gpui_kit::component::{ActiveTheme, v_flex};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
+use pc_core::space::{self, Space};
+use pc_core::vfs::Local;
+use pc_core::{grouped, human_size};
+
+use crate::{Commander, PATH_HEIGHT, viewer};
+
+pub(crate) struct QuickView {
+    /// The panel it covers; the other one's cursor chooses what it shows.
+    pub(crate) side: usize,
+    /// The file or folder shown, and whether it is a folder.
+    shown: Option<(PathBuf, bool)>,
+    viewer: Option<viewer::Quick>,
+    folder: Option<Folder>,
+}
+
+/// A folder being counted: none until done.
+struct Folder {
+    space: Option<Space>,
+    stop: Arc<AtomicBool>,
+    _count: Task<()>,
+}
+
+impl Drop for Folder {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+impl QuickView {
+    /// The viewer, while a file is shown.
+    fn file_viewer(&self) -> Option<&viewer::Quick> {
+        self.viewer.as_ref().filter(|_| matches!(self.shown, Some((_, false))))
+    }
+}
+
+impl Commander {
+    pub(crate) fn toggle_quick_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.quick = match self.quick.take() {
+            Some(_) => {
+                window.focus(&self.focus, cx);
+                None
+            }
+            None => Some(QuickView { side: 1 - self.active, shown: None, viewer: None, folder: None }),
+        };
+        self.reload_menus(cx);
+        cx.notify();
+    }
+
+    /// Whether the keys go to Quick View's viewer.
+    pub(crate) fn quick_focused(&self, window: &Window, cx: &App) -> bool {
+        let viewer = self.quick.as_ref().and_then(QuickView::file_viewer);
+        viewer.is_some_and(|viewer| viewer.focus_handle(cx).contains_focused(window, cx))
+    }
+
+    /// Tab: between the panel and the viewer. False: no Quick View, the panels switch.
+    pub(crate) fn tab_quick_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(quick) = &self.quick else {
+            return false;
+        };
+        if let Some(viewer) = quick.file_viewer() {
+            match self.quick_focused(window, cx) {
+                true => window.focus(&self.focus, cx),
+                false => window.focus(&viewer.focus_handle(cx), cx),
+            }
+            cx.notify();
+        }
+        true
+    }
+
+    /// Shows what the cursor is on, once it moved; opposite the active panel.
+    pub(crate) fn sync_quick_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let active = self.active;
+        let Some(quick) = &mut self.quick else {
+            return;
+        };
+        quick.side = 1 - active;
+        let wanted = self.panels[active].tabs.current().quick_view();
+        if wanted == quick.shown {
+            return;
+        }
+        quick.shown = wanted.clone();
+        quick.folder = None;
+        match wanted {
+            Some((path, false)) => match &quick.viewer {
+                Some(viewer) => viewer.show(path, window, cx),
+                None => quick.viewer = Some(viewer::Quick::new(path, self.settings.viewer.clone(), window, cx)),
+            },
+            // Video or sound must not go on unseen.
+            Some((path, true)) => {
+                quick.viewer = None;
+                quick.folder = Some(count(path, cx));
+            }
+            None => quick.viewer = None,
+        }
+    }
+
+    pub(crate) fn render_quick_view(&self, quick_focused: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let quick = self.quick.as_ref()?;
+        let theme = cx.theme();
+        let (title, body) = match (&quick.shown, quick.file_viewer(), &quick.folder) {
+            (Some((path, false)), Some(viewer), _) => {
+                let name = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
+                (name, viewer.view().into_any_element())
+            }
+            (Some((path, true)), _, Some(folder)) => (path.display().to_string(), folder_text(path, folder.space, cx)),
+            _ => (String::new(), note("Quick View shows the files of this computer.", cx)),
+        };
+        let (title_bg, title_fg, stripe) = match quick_focused {
+            true => (self.colors.active_path, theme.foreground, theme.primary),
+            false => (self.colors.inactive_path, theme.muted_foreground, self.colors.inactive_path),
+        };
+        let header = div()
+            .h(PATH_HEIGHT)
+            .flex()
+            .items_center()
+            .px_2()
+            .border_l(px(3.))
+            .border_color(stripe)
+            .bg(title_bg)
+            .text_color(title_fg)
+            .child(div().flex_1().min_w_0().truncate().child(title));
+        let element = v_flex()
+            .size_full()
+            .min_w_0()
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.background)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    if let Some(viewer) = this.quick.as_ref().and_then(QuickView::file_viewer) {
+                        window.focus(&viewer.focus_handle(cx), cx);
+                        cx.notify();
+                    }
+                }),
+            )
+            .child(header)
+            .child(div().flex_1().min_h_0().relative().child(body));
+        Some(element.into_any_element())
+    }
+}
+
+/// Counts in the background; dropping it stops the count.
+fn count(path: PathBuf, cx: &mut Context<Commander>) -> Folder {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopping = stop.clone();
+    let counting = cx.background_executor().spawn(async move {
+        let mut space = Space::default();
+        space::measure(&Local, &path, &mut space, &stopping, &mut |_| {}).map(|()| space)
+    });
+    let count = cx.spawn(async move |this, cx| {
+        let counted = counting.await;
+        let _ = this.update(cx, |this, cx| {
+            let folder = this.quick.as_mut().and_then(|quick| quick.folder.as_mut());
+            if let (Ok(space), Some(folder)) = (counted, folder) {
+                folder.space = Some(space);
+                cx.notify();
+            }
+        });
+    });
+    Folder { space: None, stop, _count: count }
+}
+
+/// As Total Commander's: the folder, then what is in it.
+fn folder_text(path: &std::path::Path, space: Option<Space>, cx: &App) -> AnyElement {
+    let lines = match space {
+        None => vec!["Counting…".to_owned()],
+        Some(space) => {
+            // The folder itself counts as one.
+            let folders = space.dirs.saturating_sub(1);
+            let mut lines = vec![
+                "Total space occupied:".to_owned(),
+                format!("{} bytes in {} file(s), {} folder(s)", grouped(space.bytes), grouped(space.files), grouped(folders)),
+                format!("(= {})", human_size(space.bytes)),
+            ];
+            if space.unreadable > 0 {
+                lines.push(String::new());
+                lines.push(format!("{} could not be read.", grouped(space.unreadable)));
+            }
+            lines
+        }
+    };
+    let text = v_flex().p_3().gap_1().text_color(cx.theme().foreground);
+    let text = text.child(div().pb_2().child(path.display().to_string()));
+    text.children(lines.into_iter().map(|line| div().when(line.is_empty(), |el| el.h_2()).child(line))).into_any_element()
+}
+
+fn note(text: &'static str, cx: &App) -> AnyElement {
+    div().p_3().text_color(cx.theme().muted_foreground).child(text).into_any_element()
+}
