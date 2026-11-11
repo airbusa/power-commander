@@ -10,7 +10,8 @@ use gpui_kit::component::menu::{AppMenuBar, ContextMenuExt, MenuBuilder, PopupMe
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarHandle};
 use gpui_kit::component::text::TextView;
-use gpui_kit::component::{ActiveTheme, WindowExt, h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::{ActiveTheme, Disableable, IconName, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::codepage;
@@ -925,6 +926,33 @@ impl Viewer {
         }
     }
 
+    /// − 100% +: the percentage goes back to 100%.
+    fn render_zoom(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let (smallest, largest) = (ZOOMS[0], ZOOMS[ZOOMS.len() - 1]);
+        let step = |id: &'static str, icon: IconName, tip: &'static str, steps: i32, at_end: bool| {
+            Button::new(id)
+                .ghost()
+                .xsmall()
+                .icon(icon)
+                .tooltip(tip)
+                .disabled(at_end)
+                .on_click(cx.listener(move |this, _, _, cx| this.zoom_by(steps, cx)))
+        };
+        h_flex()
+            .gap_0p5()
+            .child(step("zoom-out", IconName::Minus, "Zoom out (Ctrl+-)", -1, self.zoom <= smallest))
+            .child(
+                Button::new("zoom-reset")
+                    .ghost()
+                    .xsmall()
+                    .min_w(px(44.))
+                    .label(format!("{:.0}%", self.zoom * 100.))
+                    .tooltip("Back to 100% (Ctrl+0)")
+                    .on_click(cx.listener(|this, _, _, cx| this.zoom_by(0, cx))),
+            )
+            .child(step("zoom-in", IconName::Plus, "Zoom in (Ctrl++)", 1, self.zoom >= largest))
+    }
+
     /// Ctrl and the wheel zoom; caught before the views scroll with it.
     fn wheel_zoom(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let viewer = cx.entity().downgrade();
@@ -1539,11 +1567,10 @@ impl Render for Viewer {
                     .children(minimap),
             )
             .when(!self.quick, |el| {
-                let shown = match self.zoom == 1. {
-                    true => self.shown.describe(),
-                    false => format!("{} · {:.0}%", self.shown.describe(), self.zoom * 100.),
-                };
-                el.child(status_bar(self.shown.path(), self.size, status, shown, cx))
+                // Video and sound do not zoom.
+                let zooms = self.media.is_none();
+                let zoom = zooms.then(|| self.render_zoom(cx));
+                el.child(status_bar(self.shown.path(), self.size, status, self.shown.describe(), cx).children(zoom))
             })
     }
 }
@@ -1580,7 +1607,7 @@ fn file_size(shown: &Shown, text: &TextFile) -> u64 {
     std::fs::metadata(shown.path()).map_or(text.len(), |meta| meta.len())
 }
 
-fn status_bar(path: &Path, len: u64, status: String, shown: String, cx: &App) -> impl IntoElement {
+fn status_bar(path: &Path, len: u64, status: String, shown: String, cx: &App) -> Div {
     let theme = cx.theme();
     h_flex()
         .px_2()

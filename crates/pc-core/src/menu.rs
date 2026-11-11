@@ -58,7 +58,6 @@ pub enum Command {
     // Show
     Brief,
     Full,
-    Comments,
     /// Shows or hides the sidebar's tab.
     #[serde(alias = "Tree")]
     SidebarTree,
@@ -216,7 +215,6 @@ pub const MENUS: &[Menu] = &[
         items: &[
             cmd("Brief", Brief),
             cmd("Full", Full),
-            cmd("Comments", Comments),
             Item::Submenu {
                 label: "Custom Columns Mode",
                 items: &[],
@@ -306,7 +304,6 @@ pub const OTHER: &[Item] = &[
 const FULL_NAMES: &[(Command, &str)] = &[
     (Brief, "Brief View"),
     (Full, "Full View"),
-    (Comments, "Comments View"),
     (SidebarTree, "Sidebar: Folders"),
     (SidebarFavourites, "Sidebar: Favourites"),
     (AllFiles, "Show All Files"),

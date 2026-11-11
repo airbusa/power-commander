@@ -96,7 +96,6 @@ const POWER_COMMANDER: Table = &[
     (SidebarFavourites, "ctrl-shift-f9", ""),
     (Brief, "alt-shift-b", ""),
     (Full, "alt-shift-d", ""),
-    (Comments, "ctrl-shift-f2", ""),
     (ThumbnailView, "ctrl-shift-f1", ""),
     (QuickViewPanel, "alt-shift-q", ""),
     (DuplicateTab, "secondary-t", ""),
@@ -156,7 +155,6 @@ const TOTAL_COMMANDER: Table = &[
     (Disconnect, "ctrl-shift-f", ""),
     (Brief, "ctrl-f1", ""),
     (Full, "ctrl-f2", ""),
-    (Comments, "ctrl-shift-f2", ""),
     (SidebarTree, "ctrl-shift-f8", ""),
     (ThumbnailView, "ctrl-shift-f1", ""),
     (QuickViewPanel, "ctrl-q", ""),
@@ -305,7 +303,18 @@ const FORKLIFT: Table = &[
 #[serde(default)]
 pub struct KeySettings {
     pub preset: Preset,
+    #[serde(deserialize_with = "known_commands")]
     pub changed: BTreeMap<Command, [String; 2]>,
+}
+
+/// Keys of commands since removed are left out, rather than the settings.
+fn known_commands<'de, D: serde::Deserializer<'de>>(keys: D) -> Result<BTreeMap<Command, [String; 2]>, D::Error> {
+    let named = BTreeMap::<String, [String; 2]>::deserialize(keys)?;
+    let known = named.into_iter().filter_map(|(name, keys)| {
+        let name = serde::de::value::StrDeserializer::<serde::de::value::Error>::new(&name);
+        Some((Command::deserialize(name).ok()?, keys))
+    });
+    Ok(known.collect())
 }
 
 impl KeySettings {
@@ -590,6 +599,13 @@ mod tests {
                 assert!(!numpad.contains(&last), "{key}: not on every keyboard");
             }
         }
+    }
+
+    #[test]
+    fn reads_keys_of_gone_and_renamed_commands() {
+        let saved = r#"{"preset":"PowerCommander","changed":{"Comments":["ctrl-k",""],"Tree":["f9",""]}}"#;
+        let keys: KeySettings = serde_json::from_str(saved).unwrap();
+        assert_eq!(keys.changed.keys().collect::<Vec<_>>(), [&SidebarTree]);
     }
 
     #[test]
