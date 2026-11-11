@@ -1,4 +1,4 @@
-//! Text files for the editor: refused when editing could change them by accident.
+//! Text files for the editor: binary or other text shown only on request, as editing could change them by accident.
 
 use std::ffi::OsString;
 use std::fs;
@@ -6,8 +6,16 @@ use std::io;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
+/// What the editor gets.
+#[derive(Debug, PartialEq)]
+pub enum Loaded {
+    Text(String),
+    /// Editing it as text would change it: why, and the text shown anyway on request.
+    Unfit { why: &'static str, anyway: String },
+}
+
 /// Up to `limit_mb`, as Settings' Edit/View page says.
-pub fn load_text(path: &Path, limit_mb: u64) -> io::Result<String> {
+pub fn load_text(path: &Path, limit_mb: u64) -> io::Result<Loaded> {
     let refuse = |why: &str| Err(io::Error::new(io::ErrorKind::InvalidData, why));
     if fs::metadata(path)?.len() > limit_mb << 20 {
         let why = format!(
@@ -17,9 +25,29 @@ pub fn load_text(path: &Path, limit_mb: u64) -> io::Result<String> {
     }
     let bytes = fs::read(path)?;
     if bytes.contains(&0) {
-        return refuse("a binary file; F3 views it");
+        let anyway = as_text_anyway(&bytes);
+        return Ok(Loaded::Unfit { why: "it is binary", anyway });
     }
-    String::from_utf8(bytes).or_else(|_| refuse("not UTF-8 text; saving would change it"))
+    Ok(match String::from_utf8(bytes) {
+        Ok(text) => Loaded::Text(text),
+        Err(err) => Loaded::Unfit {
+            why: "it is not UTF-8 text",
+            anyway: as_text_anyway(err.as_bytes()),
+        },
+    })
+}
+
+/// Bytes as text anyway, as VS Code shows them: what is not UTF-8 as `�`,
+/// control characters as their symbols (`␀`).
+pub fn as_text_anyway(bytes: &[u8]) -> String {
+    let shown = String::from_utf8_lossy(bytes);
+    let symbol = |c: char| match c {
+        '\t' | '\n' | '\r' => c,
+        '\0'..='\x1f' => char::from_u32(0x2400 + c as u32).unwrap_or(c),
+        '\x7f' => '\u{2421}',
+        c => c,
+    };
+    shown.chars().map(symbol).collect()
 }
 
 /// Written beside the file and renamed over it, with its permissions; a
@@ -170,17 +198,25 @@ mod tests {
         fs::write(&file, "one\r\ntwo").unwrap();
         assert_eq!(
             load_text(&file, 32).unwrap(),
-            "one\r\ntwo",
+            Loaded::Text("one\r\ntwo".into()),
             "line ends kept"
         );
         save_text(&file, "three\r\n").unwrap();
         assert_eq!(fs::read_to_string(&file).unwrap(), "three\r\n");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1, "no temporary left");
 
-        fs::write(dir.join("bin"), b"a\0b").unwrap();
-        assert!(load_text(&dir.join("bin"), 32).is_err());
+        fs::write(dir.join("bin"), b"a\0b\x7f\tc").unwrap();
+        let binary = Loaded::Unfit {
+            why: "it is binary",
+            anyway: "a\u{2400}b\u{2421}\tc".into(),
+        };
+        assert_eq!(load_text(&dir.join("bin"), 32).unwrap(), binary);
         fs::write(dir.join("latin1"), b"caf\xe9").unwrap();
-        assert!(load_text(&dir.join("latin1"), 32).is_err());
+        let latin = Loaded::Unfit {
+            why: "it is not UTF-8 text",
+            anyway: "caf\u{fffd}".into(),
+        };
+        assert_eq!(load_text(&dir.join("latin1"), 32).unwrap(), latin);
         assert!(load_text(&file, 0).is_err(), "over the limit");
         fs::remove_dir_all(&dir).unwrap();
     }

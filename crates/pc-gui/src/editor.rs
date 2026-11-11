@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, RopeExt};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::{ActiveTheme, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -21,9 +21,13 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("secondary-s", Save, Some(CONTEXT))]);
 }
 
-/// Refuses files over `limit_mb`, and ones editing could change by accident.
+/// Refuses files over `limit_mb`; ones editing could change by accident
+/// open to a warning, as VS Code's, and as text only on request.
 pub fn open(path: PathBuf, limit_mb: u64, upload: Option<Upload>, cx: &mut App) -> io::Result<()> {
-    let text = edit::load_text(&path, limit_mb)?;
+    let (text, unfit) = match edit::load_text(&path, limit_mb)? {
+        edit::Loaded::Text(text) => (text, None),
+        edit::Loaded::Unfit { why, anyway } => (String::new(), Some((why, anyway))),
+    };
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(size(px(1000.), px(700.)), cx)),
         titlebar: Some(TitlebarOptions {
@@ -34,7 +38,7 @@ pub fn open(path: PathBuf, limit_mb: u64, upload: Option<Upload>, cx: &mut App) 
         ..Default::default()
     };
     gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| TextEditor::new(path, text, upload, window, cx))
+        cx.new(|cx| TextEditor::new(path, text, unfit, upload, window, cx))
     })
     .map(drop)
     .map_err(|err| io::Error::other(err.to_string()))
@@ -50,6 +54,10 @@ struct TextEditor {
     upload: Option<Upload>,
     editor: Entity<EditorState>,
     edited: bool,
+    /// Not to edit as text: why, and the text shown on request.
+    unfit: Option<(&'static str, String)>,
+    /// Shown anyway: the first save asks, as it changes what is not text.
+    forced: bool,
     minimap: Entity<Minimap>,
     _changes: Subscription,
 }
@@ -112,6 +120,7 @@ impl TextEditor {
     fn new(
         path: PathBuf,
         text: String,
+        unfit: Option<(&'static str, String)>,
         upload: Option<Upload>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -146,12 +155,33 @@ impl TextEditor {
             upload,
             editor,
             edited: false,
+            unfit,
+            forced: false,
             minimap: cx.new(|_| Minimap::new(map)),
             _changes: changes,
         }
     }
 
+    fn open_anyway(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, text)) = self.unfit.take() else {
+            return;
+        };
+        self.forced = true;
+        self.editor.update(cx, |editor, cx| {
+            editor.set_value(text, window, cx);
+            editor.focus(window, cx);
+        });
+        cx.notify();
+    }
+
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.unfit.is_some() {
+            return false;
+        }
+        if self.forced {
+            self.confirm_save(window, cx);
+            return false;
+        }
         let text = self.editor.read(cx).value();
         match edit::save_text(&self.path, &text) {
             Ok(()) => {
@@ -183,6 +213,43 @@ impl TextEditor {
                 false
             }
         }
+    }
+
+    /// Saving what was shown anyway writes the text as shown.
+    fn confirm_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let this = cx.weak_entity();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let save = this.clone();
+            let buttons = h_flex()
+                .gap_2()
+                .justify_end()
+                .child(
+                    Button::new("editor-save-anyway")
+                        .danger()
+                        .label("Save anyway")
+                        .on_click(move |_, window, cx| {
+                            window.close_dialog(cx);
+                            let _ = save.update(cx, |this, cx| {
+                                this.forced = false;
+                                this.save(window, cx)
+                            });
+                        }),
+                )
+                .child(
+                    Button::new("editor-save-cancel")
+                        .outline()
+                        .label("Cancel")
+                        .on_click(|_, window, cx| window.close_dialog(cx)),
+                );
+            dialog
+                .title("Save it as text?")
+                .overlay_closable(false)
+                .child(
+                    "The file was not text: saving writes it as shown, \
+                     so whatever was not text changes for good.",
+                )
+                .footer(buttons)
+        });
     }
 
     /// Unsaved changes ask first.
@@ -243,15 +310,37 @@ impl Render for TextEditor {
             .on_action(cx.listener(|this, _: &Save, window, cx| {
                 this.save(window, cx);
             }))
-            .child(
-                h_flex()
+            .child(match self.unfit {
+                Some((why, _)) => v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .items_center()
+                    .justify_center()
+                    .gap_3()
+                    .child(
+                        Icon::new(IconName::TriangleAlert)
+                            .size(px(40.))
+                            .text_color(theme.warning),
+                    )
+                    .child(format!("The file is not shown in the editor because {why}."))
+                    .child(
+                        Button::new("editor-open-anyway")
+                            .primary()
+                            .label("Open Anyway")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_anyway(window, cx)
+                            })),
+                    )
+                    .into_any_element(),
+                None => h_flex()
                     .flex_1()
                     .min_h_0()
                     .child(Editor::new(&self.editor).bordered(false).flex_1().h_full())
                     .when(crate::minimap_shown(cx), |el| {
                         el.child(self.minimap.clone())
-                    }),
-            )
+                    })
+                    .into_any_element(),
+            })
             .child(
                 h_flex()
                     .px_2()
