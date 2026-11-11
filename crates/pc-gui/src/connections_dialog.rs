@@ -39,6 +39,7 @@ pub fn open(commander: WeakEntity<Commander>, side: usize, window: &mut Window, 
             saved,
             hosts,
             address: address.clone(),
+            scroll: ScrollHandle::new(),
         }
     });
     window.open_dialog(cx, move |dialog, _, _| {
@@ -69,6 +70,7 @@ struct ConnectionsDialog {
     hosts: Vec<String>,
     selected: Option<Pick>,
     address: Entity<InputState>,
+    scroll: ScrollHandle,
 }
 
 impl ConnectionsDialog {
@@ -96,6 +98,26 @@ impl ConnectionsDialog {
                 window.push_notification(Notification::error(format!("Not an address: {text}")), cx)
             }
         }
+    }
+
+    /// ↑ and ↓ go through the servers while the address is typed; Enter
+    /// with no address connects the selected.
+    fn step(&mut self, by: isize, cx: &mut Context<Self>) {
+        let saved = (0..self.saved.len()).map(Pick::Saved);
+        let picks: Vec<Pick> = saved.chain((0..self.hosts.len()).map(Pick::Host)).collect();
+        let at = self.selected.and_then(|pick| picks.iter().position(|p| *p == pick));
+        let Some(&pick) = picks.get(at.map_or(0, |at| at.saturating_add_signed(by).min(picks.len() - 1))) else {
+            return;
+        };
+        self.selected = Some(pick);
+        // The list's children: each part's heading, then its rows.
+        let child = match pick {
+            Pick::Saved(ix) => 1 + ix,
+            Pick::Host(ix) if self.saved.is_empty() => 1 + ix,
+            Pick::Host(ix) => 2 + self.saved.len() + ix,
+        };
+        self.scroll.scroll_to_item(child);
+        cx.notify();
     }
 
     fn connect_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -248,6 +270,19 @@ impl Render for ConnectionsDialog {
             .w_full()
             .gap_3()
             .text_sm()
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                let by = match event.keystroke.key.as_str() {
+                    "up" => -1,
+                    "down" => 1,
+                    "pageup" => -8,
+                    "pagedown" => 8,
+                    _ => return,
+                };
+                if !event.keystroke.modifiers.modified() {
+                    this.step(by, cx);
+                    cx.stop_propagation();
+                }
+            }))
             .child(
                 h_flex()
                     .gap_2()
@@ -271,6 +306,7 @@ impl Render for ConnectionsDialog {
                             .flex_1()
                             .h(px(300.))
                             .overflow_y_scroll()
+                            .track_scroll(&self.scroll)
                             .border_1()
                             .border_color(border)
                             .when(!saved.is_empty(), |el| {
