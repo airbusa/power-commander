@@ -1,4 +1,4 @@
-//! Net > Connect to Server: an address typed, a saved server, or a host of
+//! Connect to Server: an address typed, a saved server, or a host of
 //! `~/.ssh/config`. Passwords go to the system keyring only.
 
 use std::rc::Rc;
@@ -143,6 +143,10 @@ impl ConnectionsDialog {
             let note = Notification::error(format!("Could not save the connections: {err}"));
             window.push_notification(note, cx);
         }
+        let _ = self.commander.update(cx, |commander, cx| {
+            commander.sidebar.reload_servers();
+            cx.notify()
+        });
         cx.notify();
     }
 
@@ -180,15 +184,7 @@ impl ConnectionsDialog {
 
     fn delete(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         let gone = self.saved.remove(ix);
-        let key = remote::keyring_key(&gone.address());
-        // Another saved one may log in with that password.
-        if !self
-            .saved
-            .iter()
-            .any(|kept| remote::keyring_key(&kept.address()) == key)
-        {
-            std::thread::spawn(move || secrets::forget(&key));
-        }
+        connections::forget_password(&self.saved, &gone);
         self.selected = (!self.saved.is_empty()).then(|| Pick::Saved(ix.min(self.saved.len() - 1)));
         self.save(window, cx);
     }
@@ -378,7 +374,7 @@ impl Render for ConnectionsDialog {
 type Saved = Rc<dyn Fn(Connection, &mut Window, &mut App)>;
 
 /// A saved server's details; the password goes to the keyring.
-fn open_edit(
+pub(crate) fn open_edit(
     connection: Connection,
     window: &mut Window,
     cx: &mut App,
@@ -420,7 +416,7 @@ fn open_edit(
     window.open_dialog(cx, move |dialog, _, _| {
         let enter = view.clone();
         dialog
-            .title("Server")
+            .title("Favourite")
             .width(px(520.))
             .overlay_closable(false)
             .child(view.clone())

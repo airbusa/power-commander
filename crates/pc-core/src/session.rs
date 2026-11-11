@@ -16,6 +16,9 @@ pub struct Session {
     pub columns: Vec<f32>,
     /// The left panel's share of the width.
     pub split: f32,
+    /// The sidebar's tab; none while it is hidden.
+    pub sidebar: Option<crate::sidebar::SidebarTab>,
+    pub sidebar_width: f32,
 }
 
 #[derive(Default, Serialize, Deserialize)]

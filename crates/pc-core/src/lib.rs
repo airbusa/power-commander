@@ -25,6 +25,7 @@ pub mod rename;
 pub mod secrets;
 pub mod session;
 pub mod settings;
+pub mod sidebar;
 pub mod sftp;
 pub mod space;
 pub mod split;

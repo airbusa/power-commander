@@ -35,6 +35,9 @@ pub(crate) struct WindowState {
     touch_selection_overlay: Entity<WindowTouchSelectionOverlay>,
     sheet_size: Option<DefiniteLength>,
     pending_focus_restore: Option<WeakFocusHandle>,
+    // PowerCommander patch: the window lets the desktop through where its
+    // content paints nothing, so the root paints no background.
+    pub(crate) see_through: bool,
 }
 
 #[derive(Clone)]
@@ -85,6 +88,7 @@ impl WindowState {
             touch_selection_overlay: cx.new(|cx| WindowTouchSelectionOverlay::new(window, cx)),
             sheet_size: None,
             pending_focus_restore: None,
+            see_through: false,
         }
     }
 
@@ -446,12 +450,15 @@ impl gpui_base::RootPlugin for WindowState {
 
     fn style(&self, surface: &mut gpui::Stateful<gpui::Div>, _window: &mut Window, cx: &mut App) {
         use gpui::Refineable as _;
-        surface.style().refine(
-            &gpui::StyleRefinement::default()
-                .font_family(cx.theme().font_family.clone())
-                .bg(cx.theme().tokens.background)
-                .text_color(cx.theme().foreground),
-        );
+        let style = gpui::StyleRefinement::default()
+            .font_family(cx.theme().font_family.clone())
+            .text_color(cx.theme().foreground);
+        // PowerCommander patch: see `see_through`.
+        let style = match self.see_through {
+            true => style,
+            false => style.bg(cx.theme().tokens.background),
+        };
+        surface.style().refine(&style);
     }
 
     fn decorate(

@@ -52,7 +52,8 @@ impl Commander {
         .detach();
         let server = address.host.clone();
         let text = format!("Connecting to {server}...");
-        window.push_notification(Notification::info(text), cx);
+        let note = Notification::info(text).id1::<Connecting>(server.clone()).autohide(false);
+        window.push_notification(note, cx);
         // A thread of its own: it may wait long on the user.
         let (done, connected) = oneshot::channel();
         std::thread::spawn(move || {
@@ -69,24 +70,27 @@ impl Commander {
             let connected = connected
                 .await
                 .unwrap_or_else(|_| Err(std::io::Error::other("stopped")));
-            let _ = this.update_in(cx, |this, window, cx| match connected {
-                Ok((sftp, start)) => this.navigate_on(
-                    side,
-                    true,
-                    move |panel| panel.go_remote(sftp, start),
-                    window,
-                    cx,
-                ),
-                Err(err) => {
-                    let text = format!("{server}: {err}");
-                    window.push_notification(Notification::error(text).autohide(false), cx);
+            let _ = this.update_in(cx, |this, window, cx| {
+                window.remove_notification1::<Connecting>(server.clone(), cx);
+                match connected {
+                    Ok((sftp, start)) => this.navigate_on(
+                        side,
+                        true,
+                        move |panel| panel.go_remote(sftp, start),
+                        window,
+                        cx,
+                    ),
+                    Err(err) => {
+                        let text = format!("{server}: {err}");
+                        window.push_notification(Notification::error(text).autohide(false), cx);
+                    }
                 }
             });
         })
         .detach();
     }
 
-    /// Net > Disconnect: the active panel goes home.
+    /// Disconnect: the active panel goes home.
     pub(crate) fn disconnect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.panels[self.active].tabs.current().remote().is_none() {
             return;
@@ -101,6 +105,9 @@ impl Commander {
         );
     }
 }
+
+/// The "Connecting to…" note, gone once connected or failed.
+struct Connecting;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Open {

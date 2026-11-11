@@ -100,8 +100,7 @@ pub fn system(dark: bool) -> Palette {
     if cfg!(target_os = "macos") {
         return mac(dark);
     }
-    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-    match desktop.split(':').any(|name| name == "KDE") {
+    match on_kde() {
         true => {
             let globals = dirs::config_dir().map(|dir| dir.join("kdeglobals"));
             let text = globals.and_then(|file| std::fs::read_to_string(file).ok());
@@ -109,6 +108,18 @@ pub fn system(dark: bool) -> Palette {
         }
         false => adwaita(dark),
     }
+}
+
+fn on_kde() -> bool {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    desktop.split(':').any(|name| name == "KDE")
+}
+
+/// How much of the window colour the sidebar paints over the system's own
+/// material behind it: macOS's blur, Windows 11's Mica. None: solid, as on
+/// Linux, where only the compositor could blur what is behind.
+pub fn sidebar_tint() -> Option<f32> {
+    cfg!(any(target_os = "macos", windows)).then_some(0.)
 }
 
 /// The user's KDE colour scheme when it is as dark as asked; else Breeze,

@@ -14,6 +14,8 @@ pub struct PanelColors {
     pub inactive_path: Hsla,
     /// The menu bar.
     pub bar: Hsla,
+    /// The sidebar, under its tint.
+    pub window: Hsla,
     /// Marked files' names.
     pub marked: Hsla,
 }
@@ -33,6 +35,9 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
             kit.font_family = font.clone().into();
         }
         kit.scrollbar_mode = ScrollbarMode::Always;
+        // A focused field's border takes the accent, as Breeze's; the ring
+        // around it was cut off by the dialogs.
+        kit.focus_ring = false;
         let kit = &mut kit.colors;
         kit.background = color(palette.view);
         kit.foreground = color(palette.text);
@@ -65,6 +70,7 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         active_path: color(list.active_path),
         inactive_path: color(list.inactive_path),
         bar: color(palette.bar),
+        window: color(palette.window),
         marked: color(palette.marked),
     }
 }

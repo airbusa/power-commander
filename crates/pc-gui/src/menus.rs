@@ -52,12 +52,13 @@ pub fn init(cx: &mut App) {
 }
 
 /// Call `AppMenuBar::reload` after.
-pub fn set(chosen: Appearance, cx: &mut App) {
+/// The menu bar; `checked` commands show a check mark.
+pub fn set(chosen: Appearance, checked: &dyn Fn(Command) -> bool, cx: &mut App) {
     let menus = MENUS
         .iter()
         .map(|menu| {
             Menu::new(menu.label)
-                .items(items(menu.items, chosen))
+                .items(items(menu.items, chosen, checked))
                 .owned()
         })
         .collect();
@@ -65,14 +66,16 @@ pub fn set(chosen: Appearance, cx: &mut App) {
     GlobalState::global_mut(cx).set_app_menus(menus);
 }
 
-fn items(list: &[Item], chosen: Appearance) -> Vec<MenuItem> {
+fn items(list: &[Item], chosen: Appearance, checked: &dyn Fn(Command) -> bool) -> Vec<MenuItem> {
     list.iter()
         .filter_map(|item| match *item {
             Item::Separator => Some(MenuItem::separator()),
             Item::Submenu { label, items: sub } => Some(MenuItem::submenu(
-                Menu::new(label).items(items(sub, chosen)),
+                Menu::new(label).items(items(sub, chosen, checked)),
             )),
-            Item::Command { label, command, .. } => Some(MenuItem::action(label, Run(command))),
+            Item::Command { label, command, .. } => {
+                Some(MenuItem::action(label, Run(command)).checked(checked(command)))
+            }
             Item::Appearance { label } => {
                 let each = [
                     ("As the system", Appearance::System),

@@ -11,6 +11,10 @@ use std::rc::Rc;
 
 /// Extension trait for [`Window`] to add dialog, sheet .. functionality.
 pub trait WindowExt: Sized {
+    /// PowerCommander patch: the root paints no background, for a window
+    /// whose desktop shows through where its content paints none.
+    fn set_see_through(&mut self, see_through: bool, cx: &mut App);
+
     /// Opens a Sheet at right placement.
     ///
     /// The builder follows the same rendering contract as
@@ -139,6 +143,13 @@ pub trait WindowExt: Sized {
 }
 
 impl WindowExt for Window {
+    fn set_see_through(&mut self, see_through: bool, cx: &mut App) {
+        WindowState::update(self, cx, |root, _, cx| {
+            root.see_through = see_through;
+            cx.notify();
+        })
+    }
+
     #[inline]
     fn open_sheet<F>(&mut self, cx: &mut App, build: F)
     where

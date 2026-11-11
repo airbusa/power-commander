@@ -4,8 +4,8 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 
-use crate::remote::{Address, Scheme};
-use crate::settings;
+use crate::remote::{self, Address, Scheme};
+use crate::{secrets, settings};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -62,6 +62,14 @@ impl Connections {
 
     pub fn save(&self) -> io::Result<()> {
         settings::write_json("connections.json", self)
+    }
+}
+
+/// After `gone` left the saved: its password too, unless another logs in with it.
+pub fn forget_password(saved: &[Connection], gone: &Connection) {
+    let key = remote::keyring_key(&gone.address());
+    if !saved.iter().any(|kept| remote::keyring_key(&kept.address()) == key) {
+        std::thread::spawn(move || secrets::forget(&key));
     }
 }
 

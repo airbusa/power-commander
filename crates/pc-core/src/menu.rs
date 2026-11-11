@@ -59,7 +59,10 @@ pub enum Command {
     Brief,
     Full,
     Comments,
-    Tree,
+    /// Shows or hides the sidebar's tab.
+    #[serde(alias = "Tree")]
+    SidebarTree,
+    SidebarFavourites,
     ThumbnailView,
     QuickViewPanel,
     VerticalArrangement,
@@ -209,13 +212,6 @@ pub const MENUS: &[Menu] = &[
         ],
     },
     Menu {
-        label: "Net",
-        items: &[
-            cmd("Connect to Server...", ConnectToServer),
-            cmd("Disconnect", Disconnect),
-        ],
-    },
-    Menu {
         label: "Show",
         items: &[
             cmd("Brief", Brief),
@@ -229,10 +225,9 @@ pub const MENUS: &[Menu] = &[
                 label: "Custom View Modes",
                 items: &[],
             },
-            cmd("Tree", Tree),
             Item::Submenu {
-                label: "Separate Tree",
-                items: &[],
+                label: "Sidebar",
+                items: &[cmd("Folders", SidebarTree), cmd("Favourites", SidebarFavourites)],
             },
             cmd("Thumbnail View", ThumbnailView),
             cmd("Quick View Panel", QuickViewPanel),
@@ -303,6 +298,8 @@ pub const OTHER: &[Item] = &[
     cmd("Copy to clipboard", CopyToClipboard),
     cmd("Cut to clipboard", CutToClipboard),
     cmd("Paste from clipboard", PasteFromClipboard),
+    cmd("Connect to server", ConnectToServer),
+    cmd("Disconnect", Disconnect),
 ];
 
 /// Names for where the menu gives no context.
@@ -310,7 +307,8 @@ const FULL_NAMES: &[(Command, &str)] = &[
     (Brief, "Brief View"),
     (Full, "Full View"),
     (Comments, "Comments View"),
-    (Tree, "Tree View"),
+    (SidebarTree, "Sidebar: Folders"),
+    (SidebarFavourites, "Sidebar: Favourites"),
     (AllFiles, "Show All Files"),
     (Programs, "Show Programs"),
     (AllWithExtension, "Show *.*"),

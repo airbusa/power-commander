@@ -263,6 +263,7 @@ impl Commander {
                 side.scroll_to_cursor();
             }
         }
+        self.sidebar.refresh(self.settings.show_hidden);
         cx.notify();
     }
 

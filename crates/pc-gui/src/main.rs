@@ -23,6 +23,7 @@ mod properties_dialog;
 mod remote;
 mod rename_dialog;
 mod settings_dialog;
+mod sidebar;
 mod transfer;
 mod viewer;
 
@@ -44,6 +45,7 @@ use pc_core::menu::{BUTTON_BAR, Command, Item, TAB_MENU};
 use pc_core::remote::Address;
 use pc_core::session::Session;
 use pc_core::settings::{self, Settings};
+use pc_core::sidebar::SidebarTab;
 use pc_core::theme::{self, Appearance};
 use pc_core::{Panel, Sort, SortKey, Tabs, Typed, archive, edit, icons, ops, origin};
 
@@ -70,6 +72,9 @@ actions!(
 
 include!(concat!(env!("OUT_DIR"), "/material_icons.rs"));
 
+// Lucide icons beyond GPUI Kit's own set.
+gpui_kit::assets::icon_assets!(ExtraIcons, [Server]);
+
 /// GPUI Kit's icons, the file icons as `material/<name>.svg`, the player's as `media/`.
 struct AppAssets;
 
@@ -78,6 +83,9 @@ impl AssetSource for AppAssets {
         if let Some(name) = path.strip_prefix("media/") {
             let found = media_view::ICONS.iter().find(|(icon, _)| *icon == name);
             return Ok(found.map(|(_, svg)| Cow::Borrowed(*svg)));
+        }
+        if let Some(bytes) = ExtraIcons.load(path)? {
+            return Ok(Some(bytes));
         }
         let Some(name) = path.strip_prefix("material/") else {
             return gpui_kit::assets::Assets.load(path);
@@ -231,6 +239,7 @@ struct Commander {
     saved_selection: Vec<std::ffi::OsString>,
     /// Ctrl+C's or Ctrl+X's files.
     file_clip: Option<drag_drop::FileClip>,
+    sidebar: sidebar::Sidebar,
 }
 
 struct Side {
@@ -267,7 +276,8 @@ impl Commander {
         }
         let colors = appearance::apply(&palette(&settings, window), cx);
         menus::bind(&settings.keys, None, cx);
-        menus::set(settings.appearance, cx);
+        let sidebar = sidebar::Sidebar::new(session.sidebar, session.sidebar_width, settings.show_hidden);
+        menus::set(settings.appearance, &|command| sidebar.shows(command), cx);
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             if this.settings.appearance == Appearance::System {
                 this.colors = appearance::apply(&palette(&this.settings, window), cx);
@@ -317,6 +327,8 @@ impl Commander {
         });
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        // The window's root, which paints its background, comes after this.
+        cx.defer_in(window, |this, window, cx| this.set_backdrop(window, cx));
         Self {
             panels: [side(0), side(1)],
             active: session.active.min(1),
@@ -342,6 +354,7 @@ impl Commander {
             transfers: transfer::Transfers::default(),
             saved_selection: Vec::new(),
             file_clip: None,
+            sidebar,
         }
     }
 
@@ -351,6 +364,7 @@ impl Commander {
                 side.tabs.set_filter(settings.filter());
                 side.scroll_to_cursor();
             }
+            self.sidebar.refresh(settings.show_hidden);
         }
         if settings.viewer.minimap != self.settings.viewer.minimap {
             cx.set_global(ShowMinimap(settings.viewer.minimap));
@@ -376,9 +390,13 @@ impl Commander {
         self.settings.appearance = chosen;
         self.save_settings(window, cx);
         self.colors = appearance::apply(&palette(&self.settings, window), cx);
-        menus::set(chosen, cx);
-        self.menu_bar.update(cx, |bar, cx| bar.reload(cx));
+        self.reload_menus(cx);
         cx.notify();
+    }
+
+    fn reload_menus(&self, cx: &mut Context<Self>) {
+        menus::set(self.settings.appearance, &|command| self.sidebar.shows(command), cx);
+        self.menu_bar.update(cx, |bar, cx| bar.reload(cx));
     }
 
     fn move_cursor(&mut self, rows: isize, cx: &mut Context<Self>) {
@@ -587,6 +605,7 @@ impl Commander {
             side.tabs.reload_folder(folder);
             side.scroll_to_cursor();
         }
+        self.sidebar.refresh(self.settings.show_hidden);
         cx.notify();
     }
 
@@ -793,6 +812,8 @@ impl Commander {
             active: self.active,
             columns: self.columns.to_vec(),
             split: self.split,
+            sidebar: self.sidebar.tab,
+            sidebar_width: self.sidebar.width,
         }
     }
 
@@ -1232,8 +1253,21 @@ impl Commander {
                     .on_click(
                         cx.listener(move |this, _, window, cx| this.edit_path(ix, window, cx)),
                     )
-                    .truncate()
-                    .child(panel.location())
+                    .child(div().flex_1().min_w_0().truncate().child(panel.location()))
+                    .when(panel.remote().is_some(), |el| {
+                        el.child(
+                            Button::new(("disconnect", ix))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Close)
+                                .tooltip("Disconnect")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.active = ix;
+                                    this.disconnect(window, cx);
+                                })),
+                        )
+                    })
                     .into_any_element(),
             })
             .child(column_titles)
@@ -1407,6 +1441,10 @@ impl Render for Commander {
                         connections_dialog::open(cx.entity().downgrade(), side, window, cx)
                     }
                     Command::Disconnect => this.disconnect(window, cx),
+                    Command::SidebarTree => this.toggle_sidebar(SidebarTab::Tree, window, cx),
+                    Command::SidebarFavourites => {
+                        this.toggle_sidebar(SidebarTab::Favourites, window, cx)
+                    }
                     Command::OperationQueue => {
                         transfer::open_queue(this.transfers.queue.clone(), window, cx)
                     }
@@ -1498,9 +1536,18 @@ impl Render for Commander {
                     .hover(|style| style.bg(cx.theme().list_active))
                     .on_drag(SplitDrag, |_, _, _, cx| cx.new(|_| EmptyView)),
             );
+        let main = v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .bg(cx.theme().background)
+            .child(panels)
+            .children(self.render_transfers(cx))
+            .child(self.render_command_line(cx))
+            .child(self.render_button_bar(cx));
+        // The sidebar may let the desktop through: everything else paints its own background.
         v_flex()
             .size_full()
-            .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .text_sm()
             .child(
@@ -1510,10 +1557,18 @@ impl Render for Commander {
                     .border_color(cx.theme().border)
                     .child(self.menu_bar.clone()),
             )
-            .child(panels)
-            .children(self.render_transfers(cx))
-            .child(self.render_command_line(cx))
-            .child(self.render_button_bar(cx))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .on_drag_move(cx.listener(
+                        |this, event: &DragMoveEvent<sidebar::SidebarDrag>, _, cx| {
+                            this.drag_sidebar(event.bounds, event.event.position.x, cx)
+                        },
+                    ))
+                    .children(self.render_sidebar(cx))
+                    .child(main),
+            )
     }
 }
 

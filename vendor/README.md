@@ -21,7 +21,7 @@ a notice, and every change is marked `WDS patch`.
 | `src/menu/menu_item.rs` | PowerCommander patch: menu items are rounded, and the highlighted one is framed in the theme's `ring` colour, as KDE's Breeze menus |
 | `src/menu/popup_menu.rs` | PowerCommander patch: every menu and submenu may be as tall as the window minus 16 px (upstream: menus of over 20 items scroll within half the window, at most 450 px); only a menu taller than that scrolls, by wheel and keys, and no menu shows a scrollbar; `scrollable()` has no effect |
 | `src/tree.rs` | `Tree::context_menu` builders get the menu's `Context<PopupMenu>` instead of `Context<TreeState>`, so tree menus can have submenus; the row renderer's `selected` is not overridden, so the app can show several selected rows |
-| `src/root.rs` | notifications paint above dialogs (deferred, priority 90) |
+| `src/root.rs`, `src/window_ext.rs` | notifications paint above dialogs (deferred, priority 90); PowerCommander patch: `WindowExt::set_see_through` stops the root painting the window's background, for a window the system's blur or Mica shows through |
 | `src/styled.rs` | PowerCommander patch: a popup's hairline ring is the theme's `border` colour (upstream: the foreground at 10%), as KDE frames menus |
 | `src/tab/tab_bar.rs` | the segmented tab bar's indicator uses the theme's `tab_active` colour instead of the background, so the app can tint the active tab |
 | `src/tab/tab.rs` | PowerCommander patch: the selected tab of the `Tab` variant has a 2 px line of the theme's `primary` colour on top, as KDE's Breeze tabs |
