@@ -388,6 +388,14 @@ impl App {
             }
             return;
         }
+        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+            for ix in 0..2 {
+                if let Some(tab) = self.places.tabs[ix].iter().position(|r| r.contains(at)) {
+                    self.active = ix;
+                    return self.sides[ix].tabs.select(tab);
+                }
+            }
+        }
         let side = (0..2).find(|&ix| self.places.rows[ix].contains(at));
         match (mouse.kind, side) {
             (MouseEventKind::ScrollUp, Some(ix)) => {
@@ -703,6 +711,32 @@ mod tests {
             matches!(app.foreground.take(), Some(Foreground::Shell(line, at)) if line == "l" && at == root),
             "for the shell"
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn changes_tabs_by_keys_and_clicks() {
+        let root = std::env::temp_dir().join(format!("pc-tui-tabs-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let folders = [root.clone(), root.clone()].into_iter();
+        let mut app = App::new(Settings::default(), &Session::default(), folders);
+        app.key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        assert_eq!(app.sides[0].tabs.active(), 1, "a second tab");
+        let alt_shift = KeyModifiers::ALT | KeyModifiers::SHIFT;
+        app.key(KeyEvent::new(KeyCode::Left, alt_shift));
+        assert_eq!(app.sides[0].tabs.active(), 0, "Alt+Shift+Left");
+        app.key(KeyEvent::new(KeyCode::Right, alt_shift));
+        assert_eq!(app.sides[0].tabs.active(), 1, "Alt+Shift+Right");
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        let first = app.places.tabs[0][0];
+        app.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: first.x + 1,
+            row: first.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.sides[0].tabs.active(), 0, "a click on the first tab");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

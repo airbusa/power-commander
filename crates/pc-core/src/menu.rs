@@ -337,6 +337,9 @@ pub const OTHER_KEYS: &[Item] = &[
     cmd("Delete permanently", "shift-delete", DeletePermanently),
     cmd("Next tab", "ctrl-tab", NextTab),
     cmd("Previous tab", "ctrl-shift-tab", PreviousTab),
+    // Terminals take Ctrl+Tab; Konsole passes these.
+    cmd("Next tab", "alt-shift-right", NextTab),
+    cmd("Previous tab", "alt-shift-left", PreviousTab),
 ];
 
 pub fn key_bindings() -> Vec<(&'static str, Command)> {

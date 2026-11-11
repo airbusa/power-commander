@@ -38,6 +38,8 @@ const KEYS: [&str; 10] = [
 pub struct Places {
     /// Each side's file rows.
     pub rows: [Rect; 2],
+    /// Each side's tab labels.
+    pub tabs: [Vec<Rect>; 2],
     pub keys: Rect,
 }
 
@@ -104,10 +106,11 @@ fn panel(buf: &mut Buffer, area: Rect, app: &mut App, ix: usize) -> Rect {
     buf.set_string(area.x + 2, area.y, title, title_style);
 
     let mut y = inner.y;
-    if tabs_shown {
-        tab_strip(buf, Rect::new(inner.x, y, inner.width, 1), app, ix);
-        y += 1;
-    }
+    app.places.tabs[ix] = match tabs_shown {
+        true => tab_strip(buf, Rect::new(inner.x, y, inner.width, 1), app, ix),
+        false => Vec::new(),
+    };
+    y += tabs_shown as u16;
     let columns = Columns::new(inner.width);
     columns.header(buf, inner.x, y);
     y += 1;
@@ -148,9 +151,11 @@ fn panel(buf: &mut Buffer, area: Rect, app: &mut App, ix: usize) -> Rect {
     rows
 }
 
-fn tab_strip(buf: &mut Buffer, area: Rect, app: &App, ix: usize) {
+/// Gives where each label is.
+fn tab_strip(buf: &mut Buffer, area: Rect, app: &App, ix: usize) -> Vec<Rect> {
     let tabs = &app.sides[ix].tabs;
     let mut x = area.x;
+    let mut labels = Vec::new();
     for (n, panel) in tabs.panels().iter().enumerate() {
         let current = n == tabs.active();
         let style = match current {
@@ -165,8 +170,10 @@ fn tab_strip(buf: &mut Buffer, area: Rect, app: &App, ix: usize) {
         }
         let label = fit(&label, room.min(label.width()));
         buf.set_string(x, area.y, &label, style);
+        labels.push(Rect::new(x, area.y, label.width() as u16, 1));
         x += label.width() as u16;
     }
+    labels
 }
 
 fn entry_style(panel: &Panel, entry: &Entry, cursor: bool) -> Style {
