@@ -42,11 +42,12 @@ pub struct ListColors {
     pub row: u32,
     /// Every other row, for the eye to follow a line.
     pub alternate_row: u32,
-    /// Column titles; the inactive panel's path.
+    /// Column titles and the button bar.
     pub header: u32,
     pub header_border: u32,
-    /// The sorted column's title; the active panel's path.
-    pub sorted_header: u32,
+    /// The paths above the panels.
+    pub active_path: u32,
+    pub inactive_path: u32,
     /// The cursor's row.
     pub selected_row: u32,
 }
@@ -61,7 +62,8 @@ impl Palette {
             alternate_row: mix(background, text, share(0.05, 0.03)),
             header,
             header_border: mix(background, text, share(0.20, 0.16)),
-            sorted_header: mix(header, accent, share(0.18, 0.12)),
+            active_path: mix(background, accent, share(0.14, 0.10)),
+            inactive_path: mix(background, text, share(0.04, 0.02)),
             selected_row: mix(background, accent, share(0.30, 0.22)),
         }
     }
@@ -338,7 +340,7 @@ mod tests {
         assert_eq!(mix(0x000000, 0xffffff, 0.5), 0x808080);
         let list = scheme.list();
         assert_eq!((list.header, list.selected_row), (0x27282a, 0x204457));
-        assert_eq!(list.sorted_header, mix(0x27282a, 0x3daee9, 0.18));
+        assert_eq!(list.active_path, mix(0x141618, 0x3daee9, 0.14));
         assert_eq!(scheme.bar, 0x292c30);
         // As a screenshot of Krusader's menu has them.
         let menu = scheme.menu();

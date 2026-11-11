@@ -10,9 +10,9 @@ pub struct PanelColors {
     pub cursor_frame: Hsla,
     pub alternate_row: Hsla,
     pub header_border: Hsla,
-    /// The sorted column's title and the active panel's path.
-    pub sorted_header: Hsla,
-    /// The menu bar and the button bar.
+    pub active_path: Hsla,
+    pub inactive_path: Hsla,
+    /// The menu bar.
     pub bar: Hsla,
     /// Marked files' names.
     pub marked: Hsla,
@@ -40,7 +40,7 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         // Dialogs' main buttons, the active tab's line.
         kit.primary = color(palette.selection);
         kit.primary_foreground = color(palette.selection_text);
-        // The inactive panel's path.
+        // Quiet fills, such as group titles.
         kit.muted = color(list.header);
         kit.muted_foreground = color(palette.dim);
         // Menus and popups; `ring` frames the highlighted item, and focus.
@@ -50,7 +50,7 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         kit.accent_foreground = color(palette.text);
         kit.ring = color(menu.hover_frame);
         kit.list_active = color(palette.selection);
-        // Column titles.
+        // Column titles and the button bar.
         kit.list_head = color(list.header);
         kit.tab_bar = color(palette.window);
         kit.tab_active = color(palette.view);
@@ -62,7 +62,8 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         cursor_frame: color(palette.text),
         alternate_row: color(list.alternate_row),
         header_border: color(list.header_border),
-        sorted_header: color(list.sorted_header),
+        active_path: color(list.active_path),
+        inactive_path: color(list.inactive_path),
         bar: color(palette.bar),
         marked: color(palette.marked),
     }

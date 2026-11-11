@@ -12,7 +12,7 @@ pub struct Session {
     pub sides: Vec<SideState>,
     /// The side the keys go to.
     pub active: usize,
-    /// Widths of the Ext, Size, Date and Attr columns.
+    /// Widths of the Name, Ext, Size, Date and Attr columns; Name 0 fills the rest.
     pub columns: Vec<f32>,
     /// The left panel's share of the width.
     pub split: f32,

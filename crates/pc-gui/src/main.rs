@@ -95,8 +95,8 @@ const CONTEXT: &str = "Commander";
 const ROW: Pixels = px(22.);
 /// The path title's height, typing a path or not.
 const PATH_HEIGHT: Pixels = px(30.);
-/// Ext, Size, Date and Attr; Name takes the rest.
-const COLUMN_WIDTHS: [f32; 4] = [56., 100., 132., 92.];
+/// Name, Ext, Size, Date and Attr; Name 0 takes the rest, until resized.
+const COLUMN_WIDTHS: [f32; 5] = [0., 56., 100., 132., 92.];
 const COLUMN_MIN: f32 = 24.;
 /// Row and header padding plus border, left of Name and right of Attr.
 const ROW_INSET: Pixels = px(5.);
@@ -221,7 +221,7 @@ struct Commander {
     _appearance: Subscription,
     command: Entity<InputState>,
     /// Widths of Ext, Size, Date and Attr, both panels'.
-    columns: [f32; 4],
+    columns: [f32; 5],
     /// The left panel's share of the width.
     split: f32,
     _quit: Subscription,
@@ -320,7 +320,11 @@ impl Commander {
         Self {
             panels: [side(0), side(1)],
             active: session.active.min(1),
-            columns: <[f32; 4]>::try_from(session.columns.as_slice()).unwrap_or(COLUMN_WIDTHS),
+            columns: match session.columns[..] {
+                [name, ext, size, date, attr] => [name, ext, size, date, attr],
+                [ext, size, date, attr] => [0., ext, size, date, attr],
+                _ => COLUMN_WIDTHS,
+            },
             split: match session.split {
                 split if (0.15..=0.85).contains(&split) => split,
                 _ => 0.5,
@@ -766,9 +770,9 @@ impl Commander {
             _ => None,
         });
         h_flex()
-            .bg(self.colors.bar)
+            .bg(cx.theme().list_head)
             .border_t_1()
-            .border_color(cx.theme().border)
+            .border_color(self.colors.header_border)
             .children(buttons.map(|(label, keys, command)| {
                 let key = keys_dialog::shown(&keys);
                 Button::new(label)
@@ -985,13 +989,14 @@ impl Commander {
         let side = &self.panels[ix];
         let panel = side.tabs.current();
         let active = ix == self.active;
-        let (title_bg, title_fg) = if active {
-            (self.colors.sorted_header, theme.foreground)
+        let (title_bg, title_fg, stripe) = if active {
+            (self.colors.active_path, theme.foreground, theme.primary)
         } else {
-            (theme.muted, theme.muted_foreground)
+            (self.colors.inactive_path, theme.muted_foreground, self.colors.inactive_path)
         };
         let sort = panel.sort();
         let colors = self.colors;
+        let accent = theme.primary;
         let title = |label: &'static str, key: SortKey, right: bool| {
             let sorted = sort.key == key;
             let arrow = match sort.descending {
@@ -1004,9 +1009,8 @@ impl Commander {
                 .px_1()
                 .gap_1()
                 .cursor_pointer()
+                .border_r_1()
                 .border_color(colors.header_border)
-                .when(key != SortKey::Attributes, |el| el.border_r_1())
-                .when(sorted, |el| el.bg(colors.sorted_header))
                 .on_click(cx.listener(move |this, _, _, cx| this.sort_by_column(ix, key, cx)))
                 .child(
                     div()
@@ -1016,27 +1020,40 @@ impl Commander {
                         .when(right, |el| el.text_right())
                         .child(label),
                 )
-                .when(sorted, |el| el.child(Icon::new(arrow).small()))
+                .when(sorted, |el| el.child(Icon::new(arrow).small().text_color(accent)))
         };
-        let [ext, size, date, attr] = self.columns.map(px);
-        // A column's left edge, as far from the right as the columns right of it.
-        let handles = (0..4).map(|column| {
-            let right: f32 = self.columns[column..].iter().sum();
-            div()
-                .id(("resize", ix * 4 + column))
+        let [name, ext, size, date, attr] = self.columns.map(px);
+        let filling = self.columns[0] == 0.;
+        let (scrolled, wide) = {
+            let scroll = &side.scroll.0.borrow().base_handle;
+            (scroll.offset().x, scroll.max_offset().x > px(0.))
+        };
+        // A column's right edge: while Name fills, as far from the right as the
+        // columns right of it; otherwise past the columns left of it.
+        let handles = (0..5).map(|column| {
+            let handle = div()
+                .id(("resize", ix * 5 + column))
                 .absolute()
                 .top_0()
                 .bottom_0()
-                .right(ROW_INSET + SCROLLBAR + px(right - 3.))
                 .w(px(6.))
                 .occlude()
                 .cursor(CursorStyle::ResizeColumn)
                 .on_drag(ColumnDrag { panel: ix, column }, |_, _, _, cx| {
                     cx.new(|_| EmptyView)
-                })
+                });
+            match filling {
+                true => {
+                    let right: f32 = self.columns[column + 1..].iter().sum();
+                    handle.right(px(right - 3.))
+                }
+                false => {
+                    let left: f32 = self.columns[..=column].iter().sum();
+                    handle.left(scrolled + px(left - 3.))
+                }
+            }
         });
         let column_titles = h_flex()
-            .relative()
             .h(ROW + px(4.))
             .pl_1()
             .pr(px(4.) + SCROLLBAR)
@@ -1051,23 +1068,40 @@ impl Commander {
                         return;
                     }
                     let column = drag.column;
-                    let right: f32 = this.columns[column + 1..].iter().sum();
-                    let edge = event.bounds.right() - ROW_INSET - SCROLLBAR - px(right);
-                    let width = f32::from(edge - event.event.position.x);
-                    this.columns[column] = width.clamp(COLUMN_MIN, 600.);
+                    let scrolled = this.panels[ix].scroll.0.borrow().base_handle.offset().x;
+                    let widths = &mut this.columns;
+                    // Name stops filling, so the others keep their widths from now on.
+                    if widths[0] == 0. {
+                        let inside = event.bounds.size.width - ROW_INSET - ROW_INSET - SCROLLBAR;
+                        widths[0] = (f32::from(inside) - widths[1..].iter().sum::<f32>()).max(COLUMN_MIN);
+                    }
+                    let left = event.bounds.left() + ROW_INSET + scrolled;
+                    let left = left + px(widths[..column].iter().sum());
+                    let width = f32::from(event.event.position.x - left);
+                    widths[column] = width.clamp(COLUMN_MIN, 2000.);
                     cx.notify();
                 }),
             )
-            .child(title("Name", SortKey::Name, false).flex_1().min_w_0())
-            .child(title("Ext", SortKey::Extension, false).w(ext).flex_none())
-            .child(title("Size", SortKey::Size, true).w(size).flex_none())
-            .child(title("Date", SortKey::Modified, false).w(date).flex_none())
             .child(
-                title("Attr", SortKey::Attributes, false)
-                    .w(attr)
-                    .flex_none(),
-            )
-            .children(handles);
+                div()
+                    .relative()
+                    .size_full()
+                    .overflow_hidden()
+                    .child(
+                        h_flex()
+                            .size_full()
+                            .ml(scrolled)
+                            .child(title("Name", SortKey::Name, false).map(|el| match filling {
+                                true => el.flex_1().min_w_0(),
+                                false => el.w(name).flex_none(),
+                            }))
+                            .child(title("Ext", SortKey::Extension, false).w(ext).flex_none())
+                            .child(title("Size", SortKey::Size, true).w(size).flex_none())
+                            .child(title("Date", SortKey::Modified, false).w(date).flex_none())
+                            .child(title("Attr", SortKey::Attributes, false).w(attr).flex_none()),
+                    )
+                    .children(handles),
+            );
         let editing = self
             .path_edit
             .as_ref()
@@ -1082,13 +1116,22 @@ impl Commander {
         )
         .track_scroll(&side.scroll)
         .size_full()
-        .pr(SCROLLBAR);
+        .pr(SCROLLBAR)
+        // Columns wider than the panel scroll sideways, under a scrollbar of their own.
+        .when(!filling, |list| {
+            list.with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
+        })
+        .when(wide, |list| list.pb(SCROLLBAR));
+        // The list paints its rows over its padding too; these keep it under the scrollbars clear.
+        let gutter = || div().absolute().right_0().bottom_0().bg(theme.background);
         let rows = div()
             .relative()
             .flex_1()
             .min_h_0()
             .child(rows)
-            .child(div().absolute().inset_0().child(Scrollbar::vertical(&side.scroll)));
+            .when(!filling, |el| el.child(gutter().top_0().w(SCROLLBAR)))
+            .when(wide, |el| el.child(gutter().left_0().h(SCROLLBAR)))
+            .child(div().absolute().inset_0().child(Scrollbar::new(&side.scroll)));
         let tab_list = self.tab_list.as_ref().filter(|(side, ..)| *side == ix);
         let ring = theme.ring;
         v_flex()
@@ -1181,6 +1224,8 @@ impl Commander {
                     .flex()
                     .items_center()
                     .px_2()
+                    .border_l(px(3.))
+                    .border_color(stripe)
                     .bg(title_bg)
                     .text_color(title_fg)
                     .cursor_text()
@@ -1212,7 +1257,7 @@ impl Commander {
         let icon = icons::material().icon(&entry.display_name(), entry.is_dir, light);
         let cursor = row == panel.cursor() && ix == self.active;
         let (name, extension) = entry.name_and_extension();
-        let [ext, size, date, attr] = self.columns.map(px);
+        let [name_width, ext, size, date, attr] = self.columns.map(px);
         let marked = panel.is_marked(entry);
         let (labels, payloads) = (cx.entity(), cx.entity());
         let target = cx.theme().accent.opacity(0.35);
@@ -1256,8 +1301,10 @@ impl Commander {
             }))
             .child(
                 h_flex()
-                    .flex_1()
-                    .min_w_0()
+                    .map(|el| match name_width > px(0.) {
+                        true => el.w(name_width).flex_none(),
+                        false => el.flex_1().min_w_0(),
+                    })
                     .px_1()
                     .gap_1()
                     .child(img(format!("material/{icon}")).size(px(16.)).flex_none())
