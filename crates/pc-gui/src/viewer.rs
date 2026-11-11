@@ -199,6 +199,9 @@ struct Viewer {
     markdown: Option<SharedString>,
     /// The PDF mode's pages.
     pdf: Option<Entity<PdfView>>,
+    /// An office document being converted for them: the tool, or why it failed.
+    converting: Option<Result<&'static str, String>>,
+    _converting: Option<Task<()>>,
     fit: bool,
     only_larger: bool,
     /// Anchor and head, as file offsets: what Copy copies.
@@ -424,12 +427,14 @@ impl Viewer {
     fn new(shown: Shown, text: TextFile, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        Self {
+        let mut viewer = Self {
             menu_bar: menu_bar(cx.entity().downgrade(), cx),
             media: media_view(&shown, None, cx),
             size: file_size(&shown, &text),
             markdown: markdown(&shown, &text),
             pdf: pdf_view(&shown, cx),
+            converting: None,
+            _converting: None,
             shown,
             text: Arc::new(text),
             fit: true,
@@ -449,7 +454,9 @@ impl Viewer {
             view: ViewHandle::default(),
             focus,
             _poll: Self::poll(cx),
-        }
+        };
+        viewer.convert(cx);
+        viewer
     }
 
     /// Shows the rows as the background index finds them.
@@ -488,6 +495,7 @@ impl Viewer {
         self.size = file_size(&self.shown, &text);
         self.markdown = markdown(&self.shown, &text);
         self.pdf = pdf_view(&self.shown, cx);
+        self.convert(cx);
         self.media = media_view(&self.shown, self.media.take(), cx);
         self.text = Arc::new(text);
         self.selection = (0, 0);
@@ -809,6 +817,37 @@ impl Viewer {
             },
             cx,
         );
+    }
+
+    /// An office document's PDF, made in the background for the PDF mode.
+    fn convert(&mut self, cx: &mut Context<Self>) {
+        let (Some(converter), Mode::Pdf) = (self.shown.office.clone(), self.shown.mode) else {
+            (self.converting, self._converting) = (None, None);
+            return;
+        };
+        let path = self.shown.path().to_owned();
+        self.converting = Some(Ok(converter.name));
+        self._converting = Some(cx.spawn(async move |this, cx| {
+            let file = path.clone();
+            let converted = cx
+                .background_executor()
+                .spawn(async move { pc_core::convert::to_pdf(&converter, &file) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                // Another file or mode since: not for it.
+                if this.shown.path() != path || this.shown.mode != Mode::Pdf {
+                    return;
+                }
+                match converted {
+                    Ok(pdf) => {
+                        this.pdf = Some(cx.new(|cx| PdfView::new(pdf, cx)));
+                        this.converting = None;
+                    }
+                    Err(err) => this.converting = Some(Err(err.to_string())),
+                }
+                cx.notify();
+            });
+        }));
     }
 
     /// The player, when video or sound is shown.
@@ -1159,9 +1198,17 @@ impl Render for Viewer {
                 None => (self.render_picture(), String::new()),
             },
             Mode::Markdown => (self.render_markdown(), String::new()),
-            Mode::Pdf => match &self.pdf {
-                Some(pdf) => (pdf.clone().into_any_element(), pdf.read(cx).status()),
-                None => (div().into_any_element(), String::new()),
+            Mode::Pdf => match (&self.pdf, &self.converting) {
+                (Some(pdf), _) => (pdf.clone().into_any_element(), pdf.read(cx).status()),
+                (None, Some(Ok(tool))) => {
+                    let text = format!("Converting with {tool}…");
+                    (div().p_4().child(text).into_any_element(), String::new())
+                }
+                (None, Some(Err(err))) => {
+                    let text = format!("{err}. 1 shows the file as text.");
+                    (div().p_4().child(text).into_any_element(), String::new())
+                }
+                (None, None) => (div().into_any_element(), String::new()),
             },
             _ => self.render_rows(window, cx),
         };
@@ -1332,7 +1379,9 @@ fn media_view(
 
 fn pdf_view(shown: &Shown, cx: &mut App) -> Option<Entity<PdfView>> {
     let path = shown.path().to_owned();
-    (shown.mode == Mode::Pdf).then(|| cx.new(|cx| PdfView::new(path, cx)))
+    // An office document's comes once converted.
+    let pdf = shown.mode == Mode::Pdf && shown.office.is_none();
+    pdf.then(|| cx.new(|cx| PdfView::new(path, cx)))
 }
 
 fn markdown(shown: &Shown, text: &TextFile) -> Option<SharedString> {

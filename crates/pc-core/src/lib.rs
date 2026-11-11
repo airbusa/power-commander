@@ -7,6 +7,7 @@ pub mod codepage;
 pub mod command;
 pub mod compare;
 pub mod connections;
+pub mod convert;
 pub mod edit;
 pub mod ftp;
 pub mod html;

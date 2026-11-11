@@ -861,11 +861,13 @@ pub struct Shown {
     pub pdf: bool,
     /// Video or sound, and the front end plays it: Image/Multimedia plays it.
     pub media: bool,
+    /// An office document shown as PDF, converted by this.
+    pub office: Option<crate::convert::Converter>,
     /// Extensions of the pictures the viewer can show.
     pictures: &'static [&'static str],
     /// The viewer renders Markdown; else it is text.
     markdown: bool,
-    /// The front end plays video and sound.
+    /// The front end plays video and sound, and shows office documents.
     plays: bool,
 }
 
@@ -895,6 +897,7 @@ impl Shown {
             picture: false,
             pdf: false,
             media: false,
+            office: None,
             pictures,
             markdown,
             plays,
@@ -917,9 +920,14 @@ impl Shown {
             && matches!(extension, "md" | "markdown")
             && std::fs::metadata(path)?.len() <= MARKDOWN_LIMIT;
         let detected = detect(path)?;
+        let office = match self.plays && crate::pdf::available() {
+            true => crate::convert::converter_for(path),
+            false => None,
+        };
+        self.pdf = extension == "pdf" && crate::pdf::available() || office.is_some();
         self.picture = picture;
         self.media = media;
-        self.pdf = extension == "pdf" && crate::pdf::available();
+        self.office = office;
         self.big_endian = detected == Detected::Utf16 { big_endian: true };
         self.page = None;
         self.mode = match self.settings.start {
@@ -983,7 +991,9 @@ impl Shown {
             }
             Mode::Utf8 | Mode::Markdown => TextFile::open(path, lines, Decoding::Utf8)?,
             // A PDF's text is what its pages say, not its bytes.
-            Mode::Text if self.pdf => TextFile::text(crate::pdf::text(path)?, lines),
+            Mode::Text if self.pdf && self.office.is_none() => {
+                TextFile::text(crate::pdf::text(path)?, lines)
+            }
             Mode::Text | Mode::Picture | Mode::Html | Mode::Pdf => {
                 TextFile::open(path, lines, plain)?
             }
@@ -1003,7 +1013,10 @@ impl Shown {
             Mode::Unicode => "UTF-16".into(),
             Mode::Utf8 => "UTF-8".into(),
             Mode::Markdown => "Markdown".into(),
-            Mode::Pdf => "PDF".into(),
+            Mode::Pdf => match &self.office {
+                Some(converter) => format!("PDF by {}", converter.name),
+                None => "PDF".into(),
+            },
         }
     }
 
