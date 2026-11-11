@@ -52,9 +52,14 @@ impl Scheme {
         }
     }
 
-    /// Not ours: the desktop mounts it as a folder, and asks for passwords itself.
+    /// Not ours: the desktop mounts it as a folder.
     pub fn mounted(self) -> bool {
         matches!(self, Scheme::Smb | Scheme::Webdav | Scheme::Webdavs | Scheme::Nfs)
+    }
+
+    /// Whether it logs in with a user and password; NFS trusts the computer.
+    pub fn logs_in(self) -> bool {
+        self != Scheme::Nfs
     }
 }
 

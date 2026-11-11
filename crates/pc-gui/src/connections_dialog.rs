@@ -478,7 +478,7 @@ impl EditConnection {
             path: some(path),
         };
         let password = self.password.read(cx).value().to_string();
-        if !self.scheme.mounted() && (!password.is_empty() || self.forget) {
+        if self.scheme.logs_in() && (!password.is_empty() || self.forget) {
             let key = remote::keyring_key(&connection.address());
             let forget = self.forget;
             std::thread::spawn(move || match forget {
@@ -511,7 +511,6 @@ impl Render for EditConnection {
                 }))
         };
         let (ours, desktops) = (row(0, cx), row(1, cx));
-        let mounted = self.scheme.mounted();
         let [name, rest @ ..] = &self.fields;
         v_flex()
             .w_full()
@@ -531,7 +530,7 @@ impl Render for EditConnection {
                     .zip(rest)
                     .map(|(label, input)| field(label, input)),
             )
-            .when(!mounted, |el| {
+            .when(self.scheme.logs_in(), |el| {
                 el.child(field("Password", &self.password)).child(
                     h_flex().gap_3().child(div().w(px(96.)).flex_none()).child(
                         Checkbox::new("connection-forget")
@@ -543,10 +542,6 @@ impl Render for EditConnection {
                             })),
                     ),
                 )
-            })
-            .when(mounted, |el| {
-                let note = "The desktop mounts it as a folder, and asks for the password and keeps it.";
-                el.child(h_flex().gap_3().child(div().w(px(96.)).flex_none()).child(div().flex_1().min_w_0().text_color(cx.theme().muted_foreground).child(note)))
             })
             .child(
                 h_flex()

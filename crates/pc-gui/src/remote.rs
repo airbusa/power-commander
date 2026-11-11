@@ -12,13 +12,14 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::{WindowExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::edit;
 use pc_core::origin::{self, Upload};
 use pc_core::remote::{self, Address, Ask, Prompt, Reply};
-use pc_core::{mounts, secrets};
+use pc_core::mounts::{self, Login};
+use pc_core::secrets;
 
 use crate::Commander;
 
@@ -97,25 +98,51 @@ impl Commander {
     /// The desktop mounts `url` (kio-fuse, gvfs) in the background; `side`
     /// shows the folder, read in the background too: it is on the network.
     pub(crate) fn mount_url(&mut self, side: usize, url: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.mount_as(side, url, None, false, window, cx);
+    }
+
+    /// As `login`; else with the password the keyring keeps for the
+    /// address's user, else as a guest. Refused, it asks for a login.
+    fn mount_as(&mut self, side: usize, url: String, login: Option<Login>, remember: bool, window: &mut Window, cx: &mut Context<Self>) {
         let note = Notification::info(format!("Connecting to {url}...")).id1::<Connecting>(url.clone()).autohide(false);
         window.push_notification(note, cx);
+        let address = Address::parse(&url).filter(|address| address.scheme.mounted() && address.scheme.logs_in());
         let mounting = {
-            let url = url.clone();
-            cx.background_executor().spawn(async move { mounts::mount(&url) })
+            let (url, address, login) = (url.clone(), address.clone(), login.clone());
+            cx.background_executor().spawn(async move {
+                let kept = |address: Address| {
+                    let password = secrets::password(&remote::keyring_key(&address))?;
+                    Some(Login { user: address.user?, password })
+                };
+                let login = login.or_else(|| kept(address.clone()?));
+                let mounted = mounts::mount(&url, login.as_ref());
+                if let (true, Ok(_), Some(mut address), Some(login)) = (remember, &mounted, address, &login) {
+                    address.user = Some(login.user.clone());
+                    // shortcut: a keyring that cannot keep it means asking again next time.
+                    let _ = secrets::remember(&remote::keyring_key(&address), &login.password);
+                }
+                mounted.map_err(|err| (err, login.map(|login| login.user)))
+            })
         };
         cx.spawn_in(window, async move |this, cx| {
             let mounted = mounting.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 window.remove_notification1::<Connecting>(url.clone(), cx);
-                match mounted {
-                    Ok(path) => {
+                match (mounted, address) {
+                    (Ok(path), _) => {
                         let go = move |panel: &mut pc_core::Panel| match panel.remote() {
                             Some(_) => panel.disconnect(path),
                             None => panel.go_to_folder(path),
                         };
                         this.navigate_on(side, true, go, window, cx);
                     }
-                    Err(err) => {
+                    // Why is not told apart: kio-fuse says it in the desktop's language.
+                    (Err((err, user)), Some(address)) => {
+                        let user = user.or(address.user).unwrap_or_default();
+                        let text = format!("{url}: {err}");
+                        ask_login(cx.entity(), side, url, user, text, window, cx);
+                    }
+                    (Err((err, _)), None) => {
                         let text = format!("{url}: {err}");
                         window.push_notification(Notification::error(text).autohide(false), cx);
                     }
@@ -143,6 +170,96 @@ impl Commander {
 
 /// The "Connecting to…" note, gone once connected or failed.
 struct Connecting;
+
+/// A share's user and password, after `why` it would not open.
+fn ask_login(commander: Entity<Commander>, side: usize, url: String, user: String, why: String, window: &mut Window, cx: &mut App) {
+    let user = cx.new(|cx| InputState::new(window, cx).default_value(user));
+    let password = cx.new(|cx| InputState::new(window, cx).masked(true));
+    let focus = match user.read(cx).value().is_empty() {
+        true => user.clone(),
+        false => password.clone(),
+    };
+    let view = cx.new(|_| LoginDialog { why, commander, side, url, user, password, remember: false });
+    window.open_dialog(cx, move |dialog, _, _| {
+        let enter = view.clone();
+        dialog
+            .title("Log in")
+            .width(px(520.))
+            .overlay_closable(false)
+            .child(view.clone())
+            .on_ok(move |_, window, cx| {
+                enter.update(cx, |this, cx| this.finish(window, cx));
+                false
+            })
+    });
+    focus.update(cx, |input, cx| input.focus(window, cx));
+}
+
+struct LoginDialog {
+    why: String,
+    commander: Entity<Commander>,
+    side: usize,
+    url: String,
+    user: Entity<InputState>,
+    password: Entity<InputState>,
+    remember: bool,
+}
+
+impl LoginDialog {
+    fn finish(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let user = self.user.read(cx).value().trim().to_string();
+        let password = self.password.read(cx).value().to_string();
+        let (side, url, remember) = (self.side, self.url.clone(), self.remember);
+        window.close_dialog(cx);
+        self.commander.update(cx, |commander, cx| {
+            commander.mount_as(side, url, Some(Login { user, password }), remember, window, cx);
+        });
+    }
+}
+
+impl Render for LoginDialog {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let field = |label: &'static str, input: &Entity<InputState>| {
+            h_flex().gap_3().child(div().w(px(80.)).flex_none().child(label)).child(div().flex_1().child(Input::new(input)))
+        };
+        let why = div().whitespace_normal().text_color(cx.theme().muted_foreground).child(self.why.clone());
+        v_flex()
+            .w_full()
+            .gap_3()
+            .text_sm()
+            .child(why)
+            .child(field("User", &self.user))
+            .child(field("Password", &self.password))
+            .child(
+                Checkbox::new("login-remember")
+                    .label("Remember it in the system keyring")
+                    .checked(self.remember)
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.remember = *checked;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .justify_end()
+                    .child(
+                        Button::new("login-ok")
+                            .primary()
+                            .label("OK")
+                            .min_w(px(80.))
+                            .on_click(cx.listener(|this, _, window, cx| this.finish(window, cx))),
+                    )
+                    .child(
+                        Button::new("login-cancel")
+                            .outline()
+                            .label("Cancel")
+                            .min_w(px(80.))
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    ),
+            )
+    }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Open {

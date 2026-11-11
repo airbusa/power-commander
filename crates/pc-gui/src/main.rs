@@ -784,7 +784,7 @@ impl Commander {
     }
 
     fn render_command_line(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let folder = self.panels[self.active].tabs.current().folder();
+        let location = self.panels[self.active].tabs.current().location();
         h_flex()
             .key_context("CommandLine")
             .on_action(
@@ -799,7 +799,7 @@ impl Commander {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis_start()
-                    .child(format!("{}>", folder.display())),
+                    .child(format!("{location}>")),
             )
             .child(
                 div()
