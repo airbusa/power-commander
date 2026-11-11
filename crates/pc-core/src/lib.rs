@@ -89,6 +89,18 @@ pub enum SortKey {
     Unsorted,
 }
 
+/// How a panel lays its entries out, as Total Commander's Show menu.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum View {
+    /// A row each, with its columns.
+    #[default]
+    Full,
+    /// Names only, in columns side by side.
+    Brief,
+    /// Pictures' thumbnails, others' icons, in a grid.
+    Thumbnails,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Sort {
     pub key: SortKey,
@@ -222,6 +234,7 @@ pub struct Panel {
     name: Option<String>,
     filter: Filter,
     sort: Sort,
+    view: View,
 }
 
 #[derive(Clone)]
@@ -246,6 +259,7 @@ impl Panel {
             name: None,
             filter,
             sort: Sort::default(),
+            view: View::Full,
         };
         panel.reload()?;
         Ok(panel)
@@ -278,6 +292,7 @@ impl Panel {
         })?;
         panel.locked = state.locked;
         panel.name = state.name.clone();
+        panel.view = state.view;
         Ok(panel)
     }
 
@@ -288,6 +303,7 @@ impl Panel {
             locked: self.locked,
             name: self.name.clone(),
             url: self.remote.as_ref().map(|remote| remote.url()),
+            view: self.view,
         }
     }
 
@@ -482,6 +498,14 @@ impl Panel {
     // Read first: a failed move leaves the panel as it was.
     pub fn sort(&self) -> Sort {
         self.sort
+    }
+
+    pub fn view(&self) -> View {
+        self.view
+    }
+
+    pub fn set_view(&mut self, view: View) {
+        self.view = view;
     }
 
     /// The cursor stays on its entry.

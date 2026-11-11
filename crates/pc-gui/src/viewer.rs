@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -68,9 +68,17 @@ actions!(
         SelectAll,
         Find,
         FindNext,
-        FindPrevious
+        FindPrevious,
+        ZoomIn,
+        ZoomOut,
+        ZoomReset
     ]
 );
+
+/// Zoom's steps, as browsers have them.
+const ZOOMS: [f32; 17] = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1., 1.1, 1.25, 1.5, 1.75, 2., 2.5, 3., 4., 5.];
+/// A touchpad's scrolling makes a zoom step every this much.
+const WHEEL_STEP: Pixels = px(40.);
 
 /// A code page of the Encoding menu; none goes by the font.
 #[derive(Action, Clone, PartialEq)]
@@ -136,6 +144,14 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("f7", Find, keys),
         KeyBinding::new("f5", FindNext, keys),
         KeyBinding::new("shift-f5", FindPrevious, keys),
+        // + is Shift and = on most keyboards; the keypad's too.
+        KeyBinding::new("secondary-=", ZoomIn, keys),
+        KeyBinding::new("secondary-+", ZoomIn, keys),
+        KeyBinding::new("secondary-shift-=", ZoomIn, keys),
+        KeyBinding::new("secondary-add", ZoomIn, keys),
+        KeyBinding::new("secondary--", ZoomOut, keys),
+        KeyBinding::new("secondary-subtract", ZoomOut, keys),
+        KeyBinding::new("secondary-0", ZoomReset, keys),
     ]);
 }
 
@@ -222,6 +238,14 @@ struct Viewer {
     quick: bool,
     /// Why Quick View shows nothing: it says so in place of the file.
     problem: Option<SharedString>,
+    /// Text, pictures, PDF and Markdown show this times as large; pictures
+    /// and PDF pages as they fit.
+    zoom: f32,
+    /// A touchpad's scrolling with Ctrl, toward the next zoom step.
+    wheel: Pixels,
+    /// The picture's view, measured; a zoomed picture pans in it.
+    picture_area: Rc<Cell<Size<Pixels>>>,
+    picture_scroll: ScrollHandle,
     menu_bar: Entity<AppMenuBar>,
     /// Video or sound being played.
     media: Option<Entity<MediaView>>,
@@ -466,6 +490,10 @@ impl Viewer {
         let mut viewer = Self {
             quick,
             problem: None,
+            zoom: 1.,
+            wheel: px(0.),
+            picture_area: Rc::default(),
+            picture_scroll: ScrollHandle::new(),
             menu_bar: menu_bar(cx.entity().downgrade(), cx),
             media: media_view(&shown, None, quick, cx),
             size: file_size(&shown, &text),
@@ -533,6 +561,7 @@ impl Viewer {
         self.size = file_size(&self.shown, &text);
         self.markdown = markdown(&self.shown, &text);
         self.pdf = pdf_view(&self.shown, cx);
+        self.zoom_pdf(cx);
         self.convert(cx);
         self.media = media_view(&self.shown, self.media.take(), self.quick, cx);
         self.text = Arc::new(text);
@@ -867,6 +896,64 @@ impl Viewer {
     }
 
     /// An office document's PDF, made in the background for the PDF mode.
+    /// The next step of `ZOOMS` up (`steps` > 0) or down, or 100% for 0.
+    fn zoom_by(&mut self, steps: i32, cx: &mut Context<Self>) {
+        let zoom = match steps {
+            0 => 1.,
+            _ if steps > 0 => ZOOMS.iter().copied().find(|&zoom| zoom > self.zoom + 0.001).unwrap_or(self.zoom),
+            _ => ZOOMS.iter().copied().rev().find(|&zoom| zoom < self.zoom - 0.001).unwrap_or(self.zoom),
+        };
+        if zoom == self.zoom {
+            return;
+        }
+        // The picture's middle stays in the middle.
+        let area = self.picture_area.get();
+        let (before, offset) = (self.zoom, self.picture_scroll.offset());
+        let keep = |offset: Pixels, side: Pixels| -((-offset + side / 2.) * (zoom / before) - side / 2.);
+        self.picture_scroll.set_offset(point(keep(offset.x, area.width), keep(offset.y, area.height)));
+        self.zoom = zoom;
+        // Zooming a picture shows it as it fits, enlarged.
+        self.fit = true;
+        self.zoom_pdf(cx);
+        cx.notify();
+    }
+
+    fn zoom_pdf(&self, cx: &mut Context<Self>) {
+        let zoom = self.zoom;
+        if let Some(pdf) = &self.pdf {
+            pdf.update(cx, |pdf, cx| pdf.set_zoom(zoom, cx));
+        }
+    }
+
+    /// Ctrl and the wheel zoom; caught before the views scroll with it.
+    fn wheel_zoom(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let viewer = cx.entity().downgrade();
+        let listen = move |bounds: Bounds<Pixels>, _: (), window: &mut Window, _: &mut App| {
+            window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _, cx| {
+                if phase != DispatchPhase::Capture || !event.modifiers.secondary() || !bounds.contains(&event.position) {
+                    return;
+                }
+                cx.stop_propagation();
+                let _ = viewer.update(cx, |viewer, cx| {
+                    let steps = match event.delta {
+                        // Up zooms in.
+                        ScrollDelta::Lines(lines) => lines.y.signum() as i32,
+                        ScrollDelta::Pixels(pixels) => {
+                            viewer.wheel += pixels.y;
+                            let steps = (viewer.wheel / WHEEL_STEP) as i32;
+                            viewer.wheel -= WHEEL_STEP * steps as f32;
+                            steps
+                        }
+                    };
+                    for _ in 0..steps.unsigned_abs() {
+                        viewer.zoom_by(steps.signum(), cx);
+                    }
+                });
+            });
+        };
+        canvas(|_, _, _| {}, listen).absolute().top_0().left_0().size_full()
+    }
+
     fn convert(&mut self, cx: &mut Context<Self>) {
         let (Some(converter), Mode::Pdf) = (self.shown.office.clone(), self.shown.mode) else {
             (self.converting, self._converting) = (None, None);
@@ -888,6 +975,7 @@ impl Viewer {
                 match converted {
                     Ok(pdf) => {
                         this.pdf = Some(cx.new(|cx| PdfView::new(pdf, cx)));
+                        this.zoom_pdf(cx);
                         this.converting = None;
                     }
                     Err(err) => this.converting = Some(Err(err.to_string())),
@@ -1035,8 +1123,8 @@ impl Viewer {
         let theme = cx.theme();
         let (rows, scanned, done) = self.text.indexed();
         let (family, font_size) = match self.shown.font {
-            Font::Variable => (theme.font_family.clone(), theme.font_size),
-            Font::Ansi | Font::Ascii => (theme.mono_font_family.clone(), theme.mono_font_size),
+            Font::Variable => (theme.font_family.clone(), theme.font_size * self.zoom),
+            Font::Ansi | Font::Ascii => (theme.mono_font_family.clone(), theme.mono_font_size * self.zoom),
         };
         let text_system = window.text_system();
         let font_id = text_system.resolve_font(&font(family.clone()));
@@ -1048,7 +1136,7 @@ impl Viewer {
                     + text_system.descent(font_id, font_size);
                 px(f32::from(glyphs).ceil())
             }
-            false => ROW,
+            false => (ROW * self.zoom).round(),
         };
         self.view.0.borrow_mut().row_height = Some(row);
         let top = {
@@ -1182,7 +1270,7 @@ impl Viewer {
         (rows.into_any_element(), status)
     }
 
-    fn render_markdown(&self) -> AnyElement {
+    fn render_markdown(&self, cx: &App) -> AnyElement {
         let source = self.markdown.clone().unwrap_or_else(|| {
             let limit = MARKDOWN_LIMIT >> 20;
             format!("*Over {limit} MB: 1 shows it as text.*").into()
@@ -1198,7 +1286,7 @@ impl Viewer {
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.markdown_scroll)
-                    .child(v_flex().px_4().py_2().child(view)),
+                    .child(v_flex().px_4().py_2().text_size(cx.theme().font_size * self.zoom).child(view)),
             )
             .child(
                 div()
@@ -1209,12 +1297,13 @@ impl Viewer {
             .into_any_element()
     }
 
-    fn render_picture(&self) -> AnyElement {
+    fn render_picture(&self, cx: &mut Context<Self>) -> AnyElement {
         let fit = match (self.fit, self.only_larger) {
             (true, false) => ObjectFit::Contain,
             (true, true) => ObjectFit::ScaleDown,
             (false, _) => ObjectFit::None,
         };
+        let zoomed = self.fit && self.zoom != 1.;
         let picture = img(self.shown.path().to_owned())
             .size_full()
             // Else the picture's aspect ratio makes it as tall as wide allows.
@@ -1228,11 +1317,26 @@ impl Viewer {
                     .child("This picture cannot be shown; 1 shows it as text.")
                     .into_any_element()
             });
+        // Zoomed, it fits a box that much larger, which pans.
+        let area = self.picture_area.get();
+        let picture = match zoomed {
+            false => picture.into_any_element(),
+            true => div()
+                .id("picture-pan")
+                .size_full()
+                .flex()
+                .overflow_scroll()
+                .track_scroll(&self.picture_scroll)
+                .child(div().flex_none().m_auto().w(area.width * self.zoom).h(area.height * self.zoom).child(picture))
+                .into_any_element(),
+        };
         v_flex()
             .absolute()
             .inset_0()
             .p_2()
+            .child(crate::views::measure(self.picture_area.clone(), cx.entity_id()))
             .child(picture)
+            .when(zoomed, |el| el.child(div().absolute().inset_0().child(Scrollbar::new(&self.picture_scroll))))
             .into_any_element()
     }
 }
@@ -1242,9 +1346,9 @@ impl Render for Viewer {
         let (content, status) = match self.shown.mode {
             Mode::Picture => match &self.media {
                 Some(media) => (media.clone().into_any_element(), String::new()),
-                None => (self.render_picture(), String::new()),
+                None => (self.render_picture(cx), String::new()),
             },
-            Mode::Markdown => (self.render_markdown(), String::new()),
+            Mode::Markdown => (self.render_markdown(cx), String::new()),
             Mode::Pdf => match (&self.pdf, &self.converting) {
                 (Some(pdf), _) => (pdf.clone().into_any_element(), pdf.read(cx).status()),
                 (None, Some(Ok(tool))) => {
@@ -1328,6 +1432,9 @@ impl Render for Viewer {
                 this.set_font(this.shown.font, *page, w, cx)
             }))
             .on_action(cx.listener(|this, _: &ToggleWrap, w, cx| this.toggle_wrap(w, cx)))
+            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.zoom_by(1, cx)))
+            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.zoom_by(-1, cx)))
+            .on_action(cx.listener(|this, _: &ZoomReset, _, cx| this.zoom_by(0, cx)))
             .on_action(cx.listener(|this, _: &FitImage, _, cx| {
                 this.fit = !this.fit;
                 cx.notify()
@@ -1420,11 +1527,23 @@ impl Render for Viewer {
                 h_flex()
                     .flex_1()
                     .min_h_0()
-                    .child(div().flex_1().min_w_0().h_full().relative().child(content))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .relative()
+                            .child(content)
+                            .child(self.wheel_zoom(cx)),
+                    )
                     .children(minimap),
             )
             .when(!self.quick, |el| {
-                el.child(status_bar(self.shown.path(), self.size, status, self.shown.describe(), cx))
+                let shown = match self.zoom == 1. {
+                    true => self.shown.describe(),
+                    false => format!("{} · {:.0}%", self.shown.describe(), self.zoom * 100.),
+                };
+                el.child(status_bar(self.shown.path(), self.size, status, shown, cx))
             })
     }
 }

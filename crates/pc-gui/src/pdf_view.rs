@@ -37,8 +37,11 @@ pub struct PdfView {
     sizes: Rc<Vec<PageSize>>,
     list: ListState,
     pages: Rc<RefCell<Pages>>,
-    /// The width pages are shown at, from the last layout.
+    /// The width pages fit, from the last layout.
     width: Rc<Cell<Pixels>>,
+    /// Pages are this times as wide as they fit; wider ones pan sideways.
+    zoom: f32,
+    pan: ScrollHandle,
     strip: Rc<Cell<Bounds<Pixels>>>,
     error: Option<String>,
 }
@@ -69,6 +72,8 @@ impl PdfView {
             list: ListState::new(0, ListAlignment::Top, px(800.)),
             pages: Rc::default(),
             width: Rc::new(Cell::new(px(800.))),
+            zoom: 1.,
+            pan: ScrollHandle::new(),
             strip: Rc::default(),
             error: None,
         }
@@ -84,6 +89,13 @@ impl PdfView {
                 self.list.logical_scroll_top().item_ix + 1
             ),
         }
+    }
+
+    pub fn set_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
+        self.zoom = zoom;
+        // The pages' heights changed with their width.
+        self.list.remeasure();
+        cx.notify();
     }
 
     pub fn scroll_by(&mut self, distance: Pixels, cx: &mut Context<Self>) {
@@ -116,7 +128,7 @@ impl PdfView {
 
     /// A page's height in the list, its gap below included.
     fn main_height(&self, page: usize) -> f32 {
-        f32::from(self.width.get()) * self.ratio(page) + f32::from(GAP)
+        f32::from(self.width.get()) * self.zoom * self.ratio(page) + f32::from(GAP)
     }
 
     fn thumb_height(&self, page: usize) -> f32 {
@@ -314,7 +326,7 @@ impl Render for PdfView {
                 .child(format!("This PDF cannot be shown: {error}"))
                 .into_any_element();
         }
-        let (sizes, pages, width) = (self.sizes.clone(), self.pages.clone(), self.width.clone());
+        let (sizes, pages, width, zoom) = (self.sizes.clone(), self.pages.clone(), self.width.clone(), self.zoom);
         let (view, path, scale) = (
             cx.entity().downgrade(),
             self.path.clone(),
@@ -323,7 +335,7 @@ impl Render for PdfView {
         let paper = theme.muted;
         let list = list(self.list.clone(), move |ix, _, cx| {
             let size = sizes[ix];
-            let shown = width.get();
+            let shown = width.get() * zoom;
             let height = shown * (size.height / size.width.max(1.));
             let pixels = (f32::from(shown) * scale).round().max(1.) as u32;
             let image = pages.borrow().images.get(&ix).cloned();
@@ -349,13 +361,14 @@ impl Render for PdfView {
         })
         .size_full();
         let width = self.width.clone();
+        // Zoomed past the view, the pages are wider than it: they pan sideways.
+        let wide = (self.width.get() * self.zoom + GAP * 2.).max(self.width.get() + GAP * 2.);
         let pages = div()
             .flex_1()
             .min_w_0()
             .h_full()
             .relative()
             .bg(paper)
-            .pt(GAP)
             .child(
                 canvas(
                     move |bounds, _, _| width.set((bounds.size.width - GAP * 2.).max(px(100.))),
@@ -364,8 +377,18 @@ impl Render for PdfView {
                 .absolute()
                 .size_full(),
             )
-            .child(list)
-            .child(div().absolute().inset_0().child(Scrollbar::new(&self.list)));
+            .child(
+                div()
+                    .id("pdf-pan")
+                    .size_full()
+                    .overflow_x_scroll()
+                    // The wheel scrolls the pages; only a sideways one pans.
+                    .restrict_scroll_to_axis()
+                    .track_scroll(&self.pan)
+                    .child(div().h_full().w(wide).pt(GAP).child(list)),
+            )
+            .child(div().absolute().inset_0().child(Scrollbar::vertical(&self.list)))
+            .child(div().absolute().inset_0().child(Scrollbar::horizontal(&self.pan)));
         let strip = (crate::minimap_shown(cx) && !self.sizes.is_empty())
             .then(|| self.render_strip(window, cx));
         h_flex()

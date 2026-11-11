@@ -27,8 +27,11 @@ mod settings_dialog;
 mod sidebar;
 mod transfer;
 mod viewer;
+mod views;
 
 use std::borrow::Cow;
+use std::cell::Cell;
+use std::rc::Rc;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -48,7 +51,7 @@ use pc_core::session::Session;
 use pc_core::settings::{self, Settings};
 use pc_core::sidebar::SidebarTab;
 use pc_core::theme::{self, Appearance};
-use pc_core::{Panel, Sort, SortKey, Tabs, Typed, archive, edit, icons, ops, origin};
+use pc_core::{Panel, Sort, SortKey, Tabs, Typed, View, archive, edit, icons, ops, origin};
 
 use crate::appearance::PanelColors;
 use crate::drag_drop::{DragLabel, Dragged};
@@ -67,7 +70,9 @@ actions!(
         Open,
         Parent,
         FocusPanels,
-        CancelPathEdit
+        CancelPathEdit,
+        Left,
+        Right
     ]
 );
 
@@ -131,6 +136,8 @@ fn main() {
             KeyBinding::new("tab", SwitchPanel, keys),
             KeyBinding::new("up", Up, keys),
             KeyBinding::new("down", Down, keys),
+            KeyBinding::new("left", Left, keys),
+            KeyBinding::new("right", Right, keys),
             KeyBinding::new("pageup", PageUp, keys),
             KeyBinding::new("pagedown", PageDown, keys),
             KeyBinding::new("home", Home, keys),
@@ -242,6 +249,9 @@ struct Commander {
     file_clip: Option<drag_drop::FileClip>,
     sidebar: sidebar::Sidebar,
     quick: Option<quick_view::QuickView>,
+    thumbnails: views::Thumbnails,
+    /// The panels one above the other.
+    vertical: bool,
     /// Quick View's viewer has the keys: no panel shows a cursor.
     quick_keys: bool,
 }
@@ -249,13 +259,10 @@ struct Commander {
 struct Side {
     tabs: Tabs,
     scroll: UniformListScrollHandle,
-}
-
-impl Side {
-    fn scroll_to_cursor(&self) {
-        let cursor = self.tabs.current().cursor();
-        self.scroll.scroll_to_item(cursor, ScrollStrategy::Nearest);
-    }
+    /// Brief's columns scroll sideways.
+    brief: ScrollHandle,
+    /// The entries' area at the last frame: Brief's and Thumbnails' layout.
+    area: Rc<Cell<Size<Pixels>>>,
 }
 
 impl Commander {
@@ -300,6 +307,8 @@ impl Commander {
                 None => Tabs::new(fallback()),
             },
             scroll: UniformListScrollHandle::new(),
+            brief: ScrollHandle::new(),
+            area: Rc::default(),
         };
         // Closing the window drops this view before the app quits, so both save.
         let quit = cx.on_app_quit(|this, _| {
@@ -362,6 +371,8 @@ impl Commander {
             sidebar,
             quick: None,
             quick_keys: false,
+            thumbnails: views::Thumbnails::default(),
+            vertical: session.vertical,
         }
     }
 
@@ -823,6 +834,7 @@ impl Commander {
             split: self.split,
             sidebar: self.sidebar.tab,
             sidebar_width: self.sidebar.width,
+            vertical: self.vertical,
         }
     }
 
@@ -911,15 +923,14 @@ impl Commander {
     }
 
     fn page(&self) -> isize {
-        let height = self.panels[self.active]
-            .scroll
-            .0
-            .borrow()
-            .base_handle
-            .bounds()
-            .size
-            .height;
-        ((height / ROW) as isize - 1).max(1)
+        self.panels[self.active].page_step()
+    }
+
+    fn set_view(&mut self, view: View, cx: &mut Context<Self>) {
+        let side = &mut self.panels[self.active];
+        side.tabs.current_mut().set_view(view);
+        side.scroll_to_cursor();
+        cx.notify();
     }
 
     /// On a server, in the background.
@@ -1162,14 +1173,21 @@ impl Commander {
         .when(wide, |list| list.pb(SCROLLBAR));
         // The list paints its rows over its padding too; these keep it under the scrollbars clear.
         let gutter = || div().absolute().right_0().bottom_0().bg(theme.background);
-        let rows = div()
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .child(rows)
-            .when(!filling, |el| el.child(gutter().top_0().w(SCROLLBAR)))
-            .when(wide, |el| el.child(gutter().left_0().h(SCROLLBAR)))
-            .child(div().absolute().inset_0().child(Scrollbar::new(&side.scroll)));
+        let rows = match panel.view() {
+            View::Full => div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .child(views::measure(side.area.clone(), cx.entity_id()))
+                .child(rows)
+                .when(!filling, |el| el.child(gutter().top_0().w(SCROLLBAR)))
+                .when(wide, |el| el.child(gutter().left_0().h(SCROLLBAR)))
+                .child(div().absolute().inset_0().child(Scrollbar::new(&side.scroll)))
+                .into_any_element(),
+            View::Brief => self.render_brief(ix, cx),
+            View::Thumbnails => self.render_thumbnails(ix, cx),
+        };
+        let theme = cx.theme();
         let tab_list = self.tab_list.as_ref().filter(|(side, ..)| *side == ix);
         let ring = theme.ring;
         v_flex()
@@ -1297,7 +1315,14 @@ impl Commander {
                     .border_color(theme.border)
                     .text_color(theme.muted_foreground)
                     .truncate()
-                    .child(panel.status_text()),
+                    .child(match panel.view() {
+                        // Names only: the line tells the rest, as Total Commander's.
+                        View::Brief => panel.current_entry().map_or_else(String::new, |entry| {
+                            let size = panel.size_text(entry);
+                            format!("{}   {size}   {}   {}", entry.display_name(), entry.modified_text(), entry.attributes)
+                        }),
+                        View::Full | View::Thumbnails => panel.status_text(),
+                    }),
             )
     }
 
@@ -1307,50 +1332,15 @@ impl Commander {
         let entry = &panel.entries()[row];
         let light = !theme.mode.is_dark();
         let icon = icons::material().icon(&entry.display_name(), entry.is_dir, light);
-        let cursor = row == panel.cursor() && ix == self.active && !self.quick_keys;
         let (name, extension) = entry.name_and_extension();
         let [name_width, ext, size, date, attr] = self.columns.map(px);
-        let marked = panel.is_marked(entry);
-        let (labels, payloads) = (cx.entity(), cx.entity());
-        let target = cx.theme().accent.opacity(0.35);
-        h_flex()
-            .id(("row", row))
-            .on_drag(Dragged { side: ix, row }, move |dragged, grab, _, cx| {
-                let text = labels.read(cx).drag_label(*dragged);
-                cx.new(|_| DragLabel { text, grab })
-            })
-            .external_drag_payload(move |dragged: &Dragged, _, cx| {
-                payloads.read(cx).drag_payload(*dragged)
-            })
-            // A folder takes what is dropped onto it.
-            .when(entry.is_dir, |el| {
-                el.drag_over::<Dragged>(move |style, _, _, _| style.bg(target))
-                    .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(target))
-                    .on_drop(cx.listener(move |this, dragged: &Dragged, window, cx| {
-                        this.drop_files(*dragged, ix, Some(row), window, cx)
-                    }))
-                    .on_drop(cx.listener(move |this, paths: &ExternalPaths, window, cx| {
-                        this.drop_paths(paths, ix, Some(row), window, cx)
-                    }))
-            })
+        self.entry_base(ix, row, true, cx)
+            .flex()
+            .flex_row()
+            .items_center()
             .w_full()
             .h(ROW)
             .px_1()
-            .border_1()
-            .border_color(gpui_kit::transparent_black())
-            .when(row % 2 == 1, |el| el.bg(self.colors.alternate_row))
-            .when(cursor, |el| {
-                el.bg(self.colors.cursor).border_dashed().border_color(self.colors.cursor_frame)
-            })
-            .when(marked, |el| el.text_color(self.colors.marked))
-            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                this.active = ix;
-                this.panels[ix].tabs.current_mut().set_cursor(row);
-                cx.notify();
-                if event.click_count() == 2 {
-                    this.enter(window, cx);
-                }
-            }))
             .child(
                 h_flex()
                     .map(|el| match name_width > px(0.) {
@@ -1389,15 +1379,65 @@ impl Commander {
                     .child(entry.attributes.clone()),
             )
     }
+
+    /// An entry as every view has it: clicked, dragged, dropped onto; the
+    /// cursor's frame, marked names' colour; `striped` every other one.
+    fn entry_base(&self, ix: usize, row: usize, striped: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+        let panel = self.panels[ix].tabs.current();
+        let entry = &panel.entries()[row];
+        let cursor = row == panel.cursor() && ix == self.active && !self.quick_keys;
+        let marked = panel.is_marked(entry);
+        let (labels, payloads) = (cx.entity(), cx.entity());
+        let target = cx.theme().accent.opacity(0.35);
+        div()
+            .id(("row", row))
+            .on_drag(Dragged { side: ix, row }, move |dragged, grab, _, cx| {
+                let text = labels.read(cx).drag_label(*dragged);
+                cx.new(|_| DragLabel { text, grab })
+            })
+            .external_drag_payload(move |dragged: &Dragged, _, cx| {
+                payloads.read(cx).drag_payload(*dragged)
+            })
+            // A folder takes what is dropped onto it.
+            .when(entry.is_dir, |el| {
+                el.drag_over::<Dragged>(move |style, _, _, _| style.bg(target))
+                    .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(target))
+                    .on_drop(cx.listener(move |this, dragged: &Dragged, window, cx| {
+                        this.drop_files(*dragged, ix, Some(row), window, cx)
+                    }))
+                    .on_drop(cx.listener(move |this, paths: &ExternalPaths, window, cx| {
+                        this.drop_paths(paths, ix, Some(row), window, cx)
+                    }))
+            })
+            .border_1()
+            .border_color(gpui_kit::transparent_black())
+            .when(striped && row % 2 == 1, |el| el.bg(self.colors.alternate_row))
+            .when(cursor, |el| {
+                el.bg(self.colors.cursor).border_dashed().border_color(self.colors.cursor_frame)
+            })
+            .when(marked, |el| el.text_color(self.colors.marked))
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                this.active = ix;
+                this.panels[ix].tabs.current_mut().set_cursor(row);
+                cx.notify();
+                if event.click_count() == 2 {
+                    this.enter(window, cx);
+                }
+            }))
+    }
 }
 
 impl Render for Commander {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_quick_view(window, cx);
         self.quick_keys = self.quick_focused(window, cx);
+        self.trim_thumbnails(window);
+        let vertical = self.vertical;
         // Keeps panel keys out of the menu bar.
         // Typing a path, the panels' keys rest.
-        let panels = h_flex()
+        let panels = div()
+            .flex()
+            .map(|el| if vertical { el.flex_col() } else { el.flex_row() })
             .when(self.path_edit.is_none(), |el| el.key_context(CONTEXT))
             .track_focus(&self.focus)
             .relative()
@@ -1410,8 +1450,22 @@ impl Render for Commander {
                     cx.notify();
                 }
             }))
-            .on_action(cx.listener(|this, _: &Up, _, cx| this.move_cursor(-1, cx)))
-            .on_action(cx.listener(|this, _: &Down, _, cx| this.move_cursor(1, cx)))
+            .on_action(cx.listener(|this, _: &Up, _, cx| {
+                this.move_cursor(-this.panels[this.active].vertical_step(), cx)
+            }))
+            .on_action(cx.listener(|this, _: &Down, _, cx| {
+                this.move_cursor(this.panels[this.active].vertical_step(), cx)
+            }))
+            .on_action(cx.listener(|this, _: &Left, _, cx| {
+                if let Some(step) = this.panels[this.active].sideways_step() {
+                    this.move_cursor(-step, cx)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Right, _, cx| {
+                if let Some(step) = this.panels[this.active].sideways_step() {
+                    this.move_cursor(step, cx)
+                }
+            }))
             .on_action(cx.listener(|this, _: &PageUp, _, cx| this.move_cursor(-this.page(), cx)))
             .on_action(cx.listener(|this, _: &PageDown, _, cx| this.move_cursor(this.page(), cx)))
             .on_action(cx.listener(|this, _: &Home, _, cx| this.move_cursor(isize::MIN, cx)))
@@ -1464,6 +1518,13 @@ impl Render for Commander {
                     }
                     Command::Disconnect => this.disconnect(window, cx),
                     Command::QuickViewPanel => this.toggle_quick_view(window, cx),
+                    Command::Brief => this.set_view(View::Brief, cx),
+                    Command::Full => this.set_view(View::Full, cx),
+                    Command::ThumbnailView => this.set_view(View::Thumbnails, cx),
+                    Command::VerticalArrangement => {
+                        this.vertical = !this.vertical;
+                        cx.notify()
+                    }
                     Command::SidebarTree => this.toggle_sidebar(SidebarTab::Tree, window, cx),
                     Command::SidebarFavourites => {
                         this.toggle_sidebar(SidebarTab::Favourites, window, cx)
@@ -1519,8 +1580,11 @@ impl Render for Commander {
             }))
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<SplitDrag>, _, cx| {
-                    let bounds = event.bounds;
-                    let share = (event.event.position.x - bounds.left()) / bounds.size.width;
+                    let (bounds, at) = (event.bounds, event.event.position);
+                    let share = match this.vertical {
+                        true => (at.y - bounds.top()) / bounds.size.height,
+                        false => (at.x - bounds.left()) / bounds.size.width,
+                    };
                     this.split = match (share - 0.5).abs() < SPLIT_MAGNET {
                         true => 0.5,
                         false => share.clamp(0.15, 0.85),
@@ -1530,32 +1594,36 @@ impl Render for Commander {
             )
             .child(
                 div()
-                    .h_full()
                     .min_w_0()
+                    .min_h_0()
                     .flex_none()
-                    .w(relative(self.split))
-                    .pr(px(2.))
+                    .map(|el| match vertical {
+                        true => el.w_full().h(relative(self.split)).pb(px(2.)),
+                        false => el.h_full().w(relative(self.split)).pr(px(2.)),
+                    })
                     .child(self.render_side(0, cx)),
             )
             .child(
                 div()
-                    .h_full()
                     .min_w_0()
+                    .min_h_0()
                     .flex_1()
-                    .pl(px(2.))
+                    .map(|el| match vertical {
+                        true => el.w_full().pt(px(2.)),
+                        false => el.h_full().pl(px(2.)),
+                    })
                     .child(self.render_side(1, cx)),
             )
             .child(
                 div()
                     .id("splitter")
                     .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(relative(self.split))
-                    .ml(px(-3.))
-                    .w(px(6.))
                     .occlude()
-                    .cursor(CursorStyle::ResizeLeftRight)
+                    .map(|el| match vertical {
+                        true => el.left_0().right_0().top(relative(self.split)).mt(px(-3.)).h(px(6.)),
+                        false => el.top_0().bottom_0().left(relative(self.split)).ml(px(-3.)).w(px(6.)),
+                    })
+                    .cursor(if vertical { CursorStyle::ResizeUpDown } else { CursorStyle::ResizeLeftRight })
                     .hover(|style| style.bg(cx.theme().list_active))
                     .on_drag(SplitDrag, |_, _, _, cx| cx.new(|_| EmptyView)),
             );

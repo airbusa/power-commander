@@ -19,6 +19,8 @@ pub struct Session {
     /// The sidebar's tab; none while it is hidden.
     pub sidebar: Option<crate::sidebar::SidebarTab>,
     pub sidebar_width: f32,
+    /// The panels one above the other.
+    pub vertical: bool,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -39,6 +41,7 @@ pub struct TabState {
     pub name: Option<String>,
     /// A server's tab: `path` is on it. Restored as a local tab, not reconnected.
     pub url: Option<String>,
+    pub view: crate::View,
 }
 
 /// The window's tabs; the terminal's are its own.
