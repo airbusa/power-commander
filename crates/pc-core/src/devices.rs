@@ -1,9 +1,268 @@
-//! Phones and tablets paired through KDE Connect. A device's files, once
-//! mounted, are ordinary folders: KDE Connect mounts them with sshfs under
-//! the runtime folder, as its own `kdeconnect:/` does.
+//! The sidebar's devices: disks, cards, sticks and network shares as the
+//! system mounts them, and phones paired through KDE Connect. A phone's
+//! files, once mounted, are ordinary folders: KDE Connect mounts them with
+//! sshfs under the runtime folder, as its own `kdeconnect:/` does.
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum VolumeKind {
+    /// macOS's start-up disk, Windows's C:.
+    System,
+    Drive,
+    Removable,
+    Network,
+    /// GNOME's phones and cameras (MTP, PTP, AFC).
+    Phone,
+}
+
+/// A disk, card, stick or share; mounted, or mountable by udisks2.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Volume {
+    pub name: String,
+    pub kind: VolumeKind,
+    /// Where it is mounted.
+    pub path: Option<PathBuf>,
+    /// udisks2's object, which mounts and unmounts it.
+    pub udisks: Option<String>,
+}
+
+/// What is mounted or mountable, by kind, then by name.
+pub fn volumes() -> Vec<Volume> {
+    let mut volumes = platform_volumes();
+    volumes.sort_by_cached_key(|volume| (volume.kind, volume.name.to_lowercase()));
+    volumes
+}
+
+/// Mounts a volume udisks2 knows; where it went.
+pub fn mount_volume(volume: &Volume) -> io::Result<PathBuf> {
+    match (&volume.path, &volume.udisks) {
+        (Some(path), _) => Ok(path.clone()),
+        (None, Some(object)) => udisks::mount(object),
+        (None, None) => Err(io::Error::from(io::ErrorKind::Unsupported)),
+    }
+}
+
+pub fn unmount_volume(volume: &Volume) -> io::Result<()> {
+    match &volume.udisks {
+        Some(object) => udisks::unmount(object),
+        None => Err(io::Error::other("only the system can unmount this")),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn platform_volumes() -> Vec<Volume> {
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
+    // shortcut: without udisks2, drives are missing; shares and GNOME's mounts still show.
+    let mut volumes = udisks::volumes().unwrap_or_default();
+    let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    volumes.extend(network_mounts(&mounts, runtime.as_deref()));
+    volumes.extend(runtime.map(|dir| gvfs_mounts(&dir.join("gvfs"))).unwrap_or_default());
+    volumes
+}
+
+#[cfg(target_os = "macos")]
+fn platform_volumes() -> Vec<Volume> {
+    let entries = std::fs::read_dir("/Volumes").into_iter().flatten().flatten();
+    let volumes = entries.map(|entry| {
+        let path = entry.path();
+        // The start-up disk is a link to /.
+        let system = std::fs::canonicalize(&path).is_ok_and(|real| real == Path::new("/"));
+        Volume {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            kind: if system { VolumeKind::System } else { VolumeKind::Drive },
+            path: Some(path),
+            udisks: None,
+        }
+    });
+    volumes.collect()
+}
+
+#[cfg(windows)]
+fn platform_volumes() -> Vec<Volume> {
+    // shortcut: drive letters only, no labels or kinds; a Windows API call when there is a Windows build.
+    let letters = ('C'..='Z').map(|letter| format!("{letter}:\\"));
+    let found = letters.filter(|root| Path::new(root).exists());
+    let volumes = found.map(|root| Volume {
+        name: root.trim_end_matches('\\').to_owned(),
+        kind: if root.starts_with('C') { VolumeKind::System } else { VolumeKind::Drive },
+        path: Some(root.into()),
+        udisks: None,
+    });
+    volumes.collect()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn platform_volumes() -> Vec<Volume> {
+    Vec::new()
+}
+
+/// Network file systems of `/proc/self/mounts`, but KDE Connect's phones,
+/// which it mounts right in the runtime folder.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn network_mounts(mounts: &str, runtime: Option<&Path>) -> Vec<Volume> {
+    const NETWORK: [&str; 9] =
+        ["cifs", "smb3", "smbfs", "nfs", "nfs4", "fuse.sshfs", "fuse.rclone", "davfs", "fuse.davfs"];
+    let shares = mounts.lines().filter_map(|line| {
+        let mut fields = line.split(' ').skip(1);
+        let (path, kind) = (unescape(fields.next()?), fields.next()?);
+        let phone = runtime.is_some_and(|runtime| path.parent() == Some(runtime));
+        (NETWORK.contains(&kind) && !phone).then(|| Volume {
+            name: path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned()),
+            kind: VolumeKind::Network,
+            path: Some(path),
+            udisks: None,
+        })
+    });
+    shares.collect()
+}
+
+/// `/proc/mounts` writes a space as `\040`.
+fn unescape(field: &str) -> PathBuf {
+    let mut bytes = Vec::new();
+    let mut rest = field.as_bytes();
+    while let Some((&first, tail)) = rest.split_first() {
+        let octal = tail.get(..3).and_then(|digits| u8::from_str_radix(std::str::from_utf8(digits).ok()?, 8).ok());
+        match (first, octal) {
+            (b'\\', Some(byte)) => {
+                bytes.push(byte);
+                rest = &tail[3..];
+            }
+            _ => {
+                bytes.push(first);
+                rest = tail;
+            }
+        }
+    }
+    PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// GNOME mounts shares and phones as folders of `gvfs`, named after their
+/// address: `smb-share:server=nas,share=media`, `mtp:host=SAMSUNG_Android`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn gvfs_mounts(dir: &Path) -> Vec<Volume> {
+    let entries = std::fs::read_dir(dir).into_iter().flatten().flatten();
+    let volumes = entries.map(|entry| {
+        let raw = entry.file_name().to_string_lossy().into_owned();
+        let (scheme, rest) = raw.split_once(':').unwrap_or(("", &raw));
+        let field = |key: &str| rest.split(',').find_map(|pair| pair.strip_prefix(key)?.strip_prefix('='));
+        let name = match (field("share"), field("server").or(field("host"))) {
+            (Some(share), Some(server)) => format!("{share} on {server}"),
+            (None, Some(server)) => server.replace('_', " "),
+            _ => raw.clone(),
+        };
+        Volume {
+            name,
+            kind: match scheme {
+                "mtp" | "gphoto2" | "afc" => VolumeKind::Phone,
+                _ => VolumeKind::Network,
+            },
+            path: Some(entry.path()),
+            udisks: None,
+        }
+    });
+    volumes.collect()
+}
+
+/// udisks2 on the system bus: what Dolphin and Nautilus list as devices.
+#[cfg(target_os = "linux")]
+mod udisks {
+    use std::collections::HashMap;
+    use std::io;
+    use std::path::{Path, PathBuf};
+
+    use zbus::blocking::Connection;
+    use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
+
+    use super::{Volume, VolumeKind};
+
+    const SERVICE: &str = "org.freedesktop.UDisks2";
+    const FILESYSTEM: &str = "org.freedesktop.UDisks2.Filesystem";
+    type Properties = HashMap<String, OwnedValue>;
+
+    fn get<T: TryFrom<OwnedValue>>(properties: Option<&Properties>, name: &str) -> Option<T> {
+        T::try_from(properties?.get(name)?.try_clone().ok()?).ok()
+    }
+
+    /// The system's own places hold its file systems: those are not listed.
+    fn system_place(path: &Path) -> bool {
+        let places = ["/boot", "/home", "/var", "/usr", "/opt", "/srv", "/swap", "/nix", "/gnu"];
+        path == Path::new("/") || places.iter().any(|place| path.starts_with(place))
+    }
+
+    pub fn volumes() -> zbus::Result<Vec<Volume>> {
+        let bus = Connection::system()?;
+        let manager = "org.freedesktop.DBus.ObjectManager";
+        let reply = bus.call_method(Some(SERVICE), "/org/freedesktop/UDisks2", Some(manager), "GetManagedObjects", &())?;
+        let objects: HashMap<OwnedObjectPath, HashMap<String, Properties>> = reply.body().deserialize()?;
+        let volumes = objects.iter().filter_map(|(object, interfaces)| {
+            let block = interfaces.get("org.freedesktop.UDisks2.Block");
+            let filesystem = interfaces.get(FILESYSTEM)?;
+            if get(block, "HintIgnore").unwrap_or(false) {
+                return None;
+            }
+            let points: Vec<Vec<u8>> = get(Some(filesystem), "MountPoints").unwrap_or_default();
+            let points: Vec<PathBuf> = points
+                .into_iter()
+                .map(|point| PathBuf::from(String::from_utf8_lossy(point.strip_suffix(&[0]).unwrap_or(&point)).into_owned()))
+                .collect();
+            if points.iter().any(|point| system_place(point)) {
+                return None;
+            }
+            let drive = get::<OwnedObjectPath>(block, "Drive").filter(|drive| drive.as_str() != "/");
+            let drive = drive.and_then(|drive| objects.get(&drive)?.get("org.freedesktop.UDisks2.Drive"));
+            // A loop device's image, mounted elsewhere than the media folders, is the system's (snaps).
+            let in_media = points.iter().any(|point| point.starts_with("/media") || point.starts_with("/run/media"));
+            if drive.is_none() && !in_media {
+                return None;
+            }
+            let bus_name: String = get(drive, "ConnectionBus").unwrap_or_default();
+            let removable = get(drive, "Removable").unwrap_or(false)
+                || get(drive, "MediaRemovable").unwrap_or(false)
+                || ["usb", "sdio", "ieee1394"].contains(&bus_name.as_str());
+            let label = get::<String>(block, "HintName").filter(|name| !name.is_empty());
+            let label = label.or_else(|| get::<String>(block, "IdLabel").filter(|name| !name.is_empty()));
+            let size = get::<u64>(block, "Size").unwrap_or(0);
+            Some(Volume {
+                name: label.unwrap_or_else(|| format!("{:.1} GB volume", size as f64 / 1e9)),
+                kind: if removable { VolumeKind::Removable } else { VolumeKind::Drive },
+                path: points.into_iter().next(),
+                udisks: Some(object.to_string()),
+            })
+        });
+        Ok(volumes.collect())
+    }
+
+    fn call<R: for<'d> serde::Deserialize<'d> + zbus::zvariant::Type>(object: &str, method: &str) -> io::Result<R> {
+        let bus = Connection::system().map_err(io::Error::other)?;
+        let options: HashMap<&str, Value> = HashMap::new();
+        let reply = bus.call_method(Some(SERVICE), object, Some(FILESYSTEM), method, &(options,));
+        reply.and_then(|reply| reply.body().deserialize()).map_err(io::Error::other)
+    }
+
+    pub fn mount(object: &str) -> io::Result<PathBuf> {
+        call::<String>(object, "Mount").map(PathBuf::from)
+    }
+
+    pub fn unmount(object: &str) -> io::Result<()> {
+        call::<()>(object, "Unmount")
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod udisks {
+    use std::io;
+    use std::path::PathBuf;
+
+    pub fn mount(_: &str) -> io::Result<PathBuf> {
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+
+    pub fn unmount(_: &str) -> io::Result<()> {
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Device {
@@ -127,6 +386,38 @@ mod kde_connect {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_network_shares_but_phones() {
+        let mounts = "/dev/nvme0n1p3 / btrfs rw 0 0\n//nas/media /mnt/my\\040media cifs rw 0 0\n\
+                      remote: /home/me/Drive fuse.rclone rw 0 0\nkde@phone: /run/user/1000/abc123 fuse.sshfs rw 0 0\n";
+        let found = network_mounts(mounts, Some(Path::new("/run/user/1000")));
+        let names: Vec<_> = found.iter().map(|volume| (volume.name.as_str(), volume.path.clone().unwrap())).collect();
+        assert_eq!(names, [("my media", PathBuf::from("/mnt/my media")), ("Drive", PathBuf::from("/home/me/Drive"))]);
+    }
+
+    #[test]
+    fn names_gnome_mounts() {
+        let dir = std::env::temp_dir().join(format!("pc-gvfs-{}", std::process::id()));
+        for name in ["smb-share:server=nas,share=media", "mtp:host=SAMSUNG_Galaxy_S23"] {
+            std::fs::create_dir_all(dir.join(name)).unwrap();
+        }
+        let mut found = gvfs_mounts(&dir);
+        found.sort_by_key(|volume| volume.kind);
+        let names: Vec<_> = found.iter().map(|volume| (volume.name.as_str(), volume.kind)).collect();
+        assert_eq!(names, [("media on nas", VolumeKind::Network), ("SAMSUNG Galaxy S23", VolumeKind::Phone)]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Reads this computer's volumes; run by hand with `--ignored`.
+    #[test]
+    #[ignore]
+    fn lists_volumes() {
+        for volume in volumes() {
+            println!("{volume:?}");
+        }
+    }
     #[test]
     fn internal_storage_comes_first() {
         let folder = |path: &str| (std::path::PathBuf::from(path), String::new());

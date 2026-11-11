@@ -15,7 +15,7 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, StyledExt, Windo
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::connections::{self, Connection, Connections};
-use pc_core::devices::{self, Device};
+use pc_core::devices::{self, Device, Volume, VolumeKind};
 use pc_core::menu::Command;
 use pc_core::remote::{Address, Scheme};
 use pc_core::sidebar::{self, FolderTree, SidebarTab};
@@ -42,8 +42,9 @@ pub(crate) struct Sidebar {
     hosts: Vec<String>,
     closed: Vec<Scheme>,
     selected: Option<(Scheme, usize)>,
-    /// KDE Connect's paired devices; none hides their tab.
+    /// KDE Connect's paired devices; with no volumes either, their tab hides.
     devices: Vec<Device>,
+    volumes: Vec<Volume>,
     /// The folders of the devices mounted, by id.
     device_folders: HashMap<String, Vec<(PathBuf, String)>>,
 }
@@ -68,6 +69,7 @@ impl Sidebar {
             closed: Vec::new(),
             selected: None,
             devices: Vec::new(),
+            volumes: Vec::new(),
             device_folders: HashMap::new(),
         }
     }
@@ -84,6 +86,10 @@ impl Sidebar {
     /// Reads the open folders again; `hidden` shows dot folders.
     pub(crate) fn refresh(&mut self, hidden: bool) {
         self.tree.refresh(hidden);
+    }
+
+    fn has_devices(&self) -> bool {
+        !self.devices.is_empty() || !self.volumes.is_empty()
     }
 
     pub(crate) fn reload_servers(&mut self) {
@@ -219,7 +225,7 @@ impl Commander {
             .items_center()
             .child(rail_item("rail-tree", "tree.svg", "Folders", SidebarTab::Tree))
             .child(rail_item("rail-favourites", "folder-server.svg", "Favourites", SidebarTab::Favourites))
-            .when(!self.sidebar.devices.is_empty(), |el| {
+            .when(self.sidebar.has_devices(), |el| {
                 el.child(rail_item("rail-devices", "folder-mobile.svg", "Devices", SidebarTab::Devices))
             });
         let content = match tab {
@@ -344,28 +350,132 @@ impl Commander {
     pub(crate) fn watch_devices(cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             loop {
-                let found = cx.background_executor().spawn(async { devices::paired() }).await;
-                if this.update(cx, |this, cx| this.set_devices(found, cx)).is_err() {
+                let found = cx.background_executor().spawn(async { (devices::paired(), devices::volumes()) });
+                let (paired, volumes) = found.await;
+                if this.update(cx, |this, cx| this.set_devices(paired, volumes, cx)).is_err() {
                     break;
                 }
-                cx.background_executor().timer(Duration::from_secs(10)).await;
+                cx.background_executor().timer(Duration::from_secs(5)).await;
             }
         })
         .detach();
     }
 
-    fn set_devices(&mut self, devices: Vec<Device>, cx: &mut Context<Self>) {
-        if devices == self.sidebar.devices {
+    fn set_devices(&mut self, devices: Vec<Device>, volumes: Vec<Volume>, cx: &mut Context<Self>) {
+        if devices == self.sidebar.devices && volumes == self.sidebar.volumes {
             return;
         }
         // KDE Connect unmounts what it can no longer reach.
         let browsable = |id: &String| devices.iter().any(|device| device.id == *id && device.browsable);
         self.sidebar.device_folders.retain(|id, _| browsable(id));
-        if devices.is_empty() && self.sidebar.tab == Some(SidebarTab::Devices) {
+        self.sidebar.devices = devices;
+        self.sidebar.volumes = volumes;
+        if !self.sidebar.has_devices() && self.sidebar.tab == Some(SidebarTab::Devices) {
             self.sidebar.tab = Some(SidebarTab::Tree);
         }
-        self.sidebar.devices = devices;
         cx.notify();
+    }
+
+    /// Shows the volume, mounting it first if it is not.
+    fn open_volume(&mut self, volume: Volume, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(path) = volume.path.clone() {
+            return self.open_folder(path, window, cx);
+        }
+        let name = volume.name.clone();
+        let note = Notification::info(format!("Mounting {name}...")).id1::<Mounting>(name.clone()).autohide(false);
+        window.push_notification(note, cx);
+        let mount = cx.background_executor().spawn(async move { devices::mount_volume(&volume).map(|path| (volume, path)) });
+        cx.spawn_in(window, async move |this, cx| {
+            let mounted = mount.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                window.remove_notification1::<Mounting>(name.clone(), cx);
+                match mounted {
+                    Ok((volume, path)) => {
+                        let listed = this.sidebar.volumes.iter_mut().find(|listed| **listed == volume);
+                        if let Some(listed) = listed {
+                            listed.path = Some(path.clone());
+                        }
+                        this.open_folder(path, window, cx);
+                    }
+                    Err(err) => window.push_notification(Notification::error(format!("{name}: {err}")).autohide(false), cx),
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Panels in it go home first, so nothing holds it.
+    fn unmount_volume(&mut self, volume: Volume, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mount) = volume.path.clone() else {
+            return;
+        };
+        let home = std::env::home_dir().unwrap_or_else(|| "/".into());
+        for ix in 0..2 {
+            let panel = self.panels[ix].tabs.current();
+            if panel.remote().is_none() && panel.folder().starts_with(&mount) {
+                let home = home.clone();
+                self.navigate_on(ix, false, move |panel| panel.go_to_folder(home), window, cx);
+            }
+        }
+        let unmount = cx.background_executor().spawn(async move { devices::unmount_volume(&volume).map(|()| volume) });
+        cx.spawn_in(window, async move |this, cx| {
+            let unmounted = unmount.await;
+            let _ = this.update_in(cx, |this, window, cx| match unmounted {
+                Ok(volume) => {
+                    if let Some(listed) = this.sidebar.volumes.iter_mut().find(|listed| **listed == volume) {
+                        listed.path = None;
+                    }
+                    cx.notify();
+                }
+                Err(err) => window.push_notification(Notification::error(format!("Could not unmount: {err}")), cx),
+            });
+        })
+        .detach();
+    }
+
+    fn render_volume(&self, ix: usize, volume: &Volume, inside: Option<&Path>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme();
+        let selected = volume.path.is_some() && volume.path.as_deref() == inside;
+        let icon = match volume.kind {
+            VolumeKind::System | VolumeKind::Drive => Icon::new(IconName::HardDrive),
+            VolumeKind::Removable => Icon::new(Lucide::Usb),
+            VolumeKind::Network => Icon::new(IconName::Network),
+            VolumeKind::Phone => Icon::new(Lucide::Smartphone),
+        };
+        let detail = if volume.path.is_none() { "not mounted" } else { "" };
+        let (opened, menu_volume) = (volume.clone(), volume.clone());
+        let commander = cx.entity().downgrade();
+        h_flex()
+            .id(("volume", ix))
+            .h(ROW + px(2.))
+            .px_1()
+            .gap_1p5()
+            .rounded(theme.radius)
+            .cursor_pointer()
+            .when(selected, |el| el.bg(self.colors.cursor))
+            .when(!selected, |el| el.hover(|style| style.bg(theme.foreground.opacity(0.06))))
+            .child(icon.small().text_color(theme.muted_foreground))
+            .child(div().flex_none().max_w(relative(0.7)).truncate().child(volume.name.clone()))
+            .child(div().flex_1().min_w_0().truncate().text_xs().text_color(theme.muted_foreground).child(detail))
+            .on_click(cx.listener(move |this, _, window, cx| this.open_volume(opened.clone(), window, cx)))
+            .context_menu(move |menu, _, _| {
+                let act = |label: &'static str, unmount: bool| {
+                    let (commander, volume) = (commander.clone(), menu_volume.clone());
+                    PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                        let volume = volume.clone();
+                        let _ = commander.update(cx, |this, cx| match unmount {
+                            true => this.unmount_volume(volume, window, cx),
+                            false => this.open_volume(volume, window, cx),
+                        });
+                    })
+                };
+                let mounted = menu_volume.path.is_some() && menu_volume.udisks.is_some();
+                let menu = menu.item(act("Open", false));
+                match mounted {
+                    true => menu.item(act("Unmount", true)),
+                    false => menu,
+                }
+            })
     }
 
     /// Mounts the device in the background, then shows its widest folder.
@@ -405,6 +515,29 @@ impl Commander {
         let panel = self.panels[self.active].tabs.current();
         let here = panel.remote().is_none().then(|| panel.folder().to_owned());
         let mut list = v_flex().id("devices").flex_1().min_h_0().overflow_y_scroll().px_1();
+        // The deepest volume the active panel is in.
+        let inside: Option<PathBuf> = here.as_ref().and_then(|here| {
+            let mounted = self.sidebar.volumes.iter().filter_map(|volume| volume.path.as_ref());
+            mounted.filter(|path| here.starts_with(path)).max_by_key(|path| path.components().count()).cloned()
+        });
+        let of = |kinds: &[VolumeKind]| -> Vec<(usize, Volume)> {
+            let volumes = self.sidebar.volumes.iter().cloned().enumerate();
+            volumes.filter(|(_, volume)| kinds.contains(&volume.kind)).collect()
+        };
+        let drives = of(&[VolumeKind::System, VolumeKind::Drive, VolumeKind::Removable]);
+        let (phones, network) = (of(&[VolumeKind::Phone]), of(&[VolumeKind::Network]));
+        if !drives.is_empty() {
+            list = list.child(section("Drives", cx));
+        }
+        for (ix, volume) in &drives {
+            list = list.child(self.render_volume(*ix, volume, inside.as_deref(), cx));
+        }
+        if !phones.is_empty() || !self.sidebar.devices.is_empty() {
+            list = list.child(section("Phones", cx));
+        }
+        for (ix, volume) in &phones {
+            list = list.child(self.render_volume(*ix, volume, inside.as_deref(), cx));
+        }
         for device in &self.sidebar.devices {
             let theme = cx.theme();
             let icon = match device.kind.as_str() {
@@ -467,6 +600,12 @@ impl Commander {
                         .on_click(cx.listener(move |this, _, window, cx| this.open_folder(path.clone(), window, cx))),
                 );
             }
+        }
+        if !network.is_empty() {
+            list = list.child(section("Network", cx));
+        }
+        for (ix, volume) in &network {
+            list = list.child(self.render_volume(*ix, volume, inside.as_deref(), cx));
         }
         v_flex().size_full().child(header("Devices", cx)).child(list)
     }
@@ -584,6 +723,12 @@ impl Commander {
 fn header(title: &'static str, cx: &App) -> Div {
     let title = div().flex_1().text_color(cx.theme().muted_foreground).child(title);
     h_flex().h(px(24.)).px_2().pb_1().gap_1().child(title)
+}
+
+/// A group's name in a tab: Drives, Phones, Network.
+fn section(title: &'static str, cx: &App) -> Div {
+    let label = div().text_xs().font_semibold().text_color(cx.theme().muted_foreground);
+    label.px_1().pt_2().pb_0p5().child(title)
 }
 
 /// A server's right-click menu; the saved ones can be changed.
