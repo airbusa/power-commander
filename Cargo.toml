@@ -16,6 +16,7 @@ pc-core = { path = "crates/pc-core" }
 [patch.crates-io]
 gpui-component = { path = "vendor/gpui-component" }
 gpui-base = { path = "vendor/gpui-base" }
+gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
 
 # Dependencies optimized in debug builds too: unoptimized, a large JPEG took seconds.
 [profile.dev.package."*"]

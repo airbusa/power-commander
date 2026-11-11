@@ -35,6 +35,19 @@ a notice, and every change is marked `WDS patch`.
 | `src/input/base/state.rs` | moving and deleting by words stops at a `.` between names, as code has them; `set_folded`, `is_folded` and `unfold_all`, so the app folds lines from the keyboard |
 | `src/input/base/element.rs` | a multi-line input's placeholder wraps at the input's width instead of running past it |
 
+## gpui-pre-linux 0.3.9 (GPUI's Linux platform)
+
+`gpui-pre-linux/` is GPUI's Linux backend from crates.io, PowerCommander's
+own patch (not from WDS), wired in the same way. License: Apache-2.0
+(`gpui-pre-linux/LICENSE-APACHE`). `gpui-pre-linux.patch` holds the full
+diff against upstream; every change is marked `PowerCommander patch`.
+
+| File | Change |
+|---|---|
+| `src/linux/clipboard_files.rs` (new), `src/linux.rs` | files on the clipboard as file managers put them: `text/uri-list` with GNOME's `x-special/gnome-copied-files` and KDE's `application/x-kde-cutselection`; an item's `ExternalPaths` entry is the files, its string entry's metadata `cut` marks a cut |
+| `src/linux/wayland/client.rs`, `src/linux/wayland/clipboard.rs` | an item with files offers those types too and sends each as asked; another program's URI list reads as files, cut or copied, before its text |
+| `src/linux/x11/client.rs`, `src/linux/x11/clipboard.rs` | the same on X11: the types are stored beside the text, and a URI list is read before the text |
+
 ### Upgrading GPUI Kit
 
 `gpui-component.patch` holds the full diff against upstream 0.7.3. For a new

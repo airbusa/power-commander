@@ -11,6 +11,10 @@ use pc_core::ops::{Kind, Overwrite, Target};
 use crate::Commander;
 use crate::transfer::{Batch, Place};
 
+/// A string entry's metadata saying the files are cut: as the vendored
+/// gpui-pre-linux reads and writes it for other programs.
+const CUT: &str = "cut";
+
 /// A drag from a panel's row; what it takes is the panel's at the drop.
 #[derive(Clone, Copy)]
 pub(crate) struct Dragged {
@@ -142,7 +146,21 @@ impl Commander {
         }
         batch.unmark = None;
         let text = pc_core::clipboard::text_of(&batch.sources);
-        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+        // This computer's files go as a file list too, which file managers paste.
+        let local = batch.archived.is_none() && batch.from.id() == "local";
+        let item = match local {
+            true => ClipboardItem {
+                entries: vec![
+                    ClipboardEntry::ExternalPaths(ExternalPaths(batch.sources.clone().into())),
+                    ClipboardEntry::String(ClipboardString {
+                        text: text.clone(),
+                        metadata: cut.then(|| CUT.to_owned()),
+                    }),
+                ],
+            },
+            false => ClipboardItem::new_string(text.clone()),
+        };
+        cx.write_to_clipboard(item);
         let count = batch.sources.len();
         self.file_clip = Some(FileClip { batch, cut, text });
         let done = match cut {
@@ -165,9 +183,9 @@ impl Commander {
         let ours = self.file_clip.as_ref().filter(|clip| held.as_ref() == Some(&clip.text));
         let (batch, cut) = match ours {
             Some(clip) => (clip.batch.clone(), clip.cut),
-            // Another program's: this computer's files, copied.
-            None => match item.and_then(|item| other_files(&item)).and_then(Batch::paths) {
-                Some(batch) => (batch, false),
+            // Another program's: this computer's files, copied or cut.
+            None => match item.as_ref().and_then(other_files) {
+                Some((batch, cut)) => (batch, cut),
                 None => {
                     let text = "The clipboard holds no files.";
                     return window.push_notification(Notification::warning(text), cx);
@@ -181,9 +199,10 @@ impl Commander {
             let text = "They are in this folder already: Ctrl+V pastes into another one.";
             return window.push_notification(Notification::warning(text), cx);
         }
-        // A cut is pasted once.
+        // A cut is pasted once, as file managers do.
         if cut {
             self.file_clip = None;
+            cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
         }
         let kind = match cut {
             true => Kind::Move,
@@ -201,11 +220,17 @@ fn kind(window: &Window) -> Kind {
     }
 }
 
-/// A file list, or text naming files.
-fn other_files(item: &ClipboardItem) -> Option<Vec<std::path::PathBuf>> {
+/// A file list, cut or copied, or text naming files.
+fn other_files(item: &ClipboardItem) -> Option<(Batch, bool)> {
     let listed = item.entries().iter().find_map(|entry| match entry {
         ClipboardEntry::ExternalPaths(paths) => Some(paths.paths().to_vec()),
         _ => None,
     });
-    listed.or_else(|| pc_core::clipboard::paths_in(&item.text()?))
+    let cut = item.entries().iter().any(|entry| {
+        matches!(entry, ClipboardEntry::String(text) if text.metadata.as_deref() == Some(CUT))
+    });
+    match listed {
+        Some(paths) => Some((Batch::paths(paths)?, cut)),
+        None => Some((Batch::paths(pc_core::clipboard::paths_in(&item.text()?)?)?, false)),
+    }
 }
