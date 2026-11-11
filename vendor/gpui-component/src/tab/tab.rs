@@ -861,6 +861,10 @@ impl RenderOnce for Tab {
                 )
             })
             .child(inner_element)
+            // PowerCommander patch: the selected tab's accent line on top, as Breeze draws it.
+            .when(self.selected && !self.disabled && self.variant == TabVariant::Tab, |this| {
+                this.child(div().absolute().top_0().left_0().right_0().h(px(2.)).bg(cx.theme().primary))
+            })
             .when_some(self.suffix, |this, suffix| {
                 this.child(
                     div()

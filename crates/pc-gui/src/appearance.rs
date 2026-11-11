@@ -1,17 +1,15 @@
+use gpui_kit::component::scroll::ScrollbarMode;
 use gpui_kit::component::{Theme as KitTheme, ThemeMode};
 use gpui_kit::{App, Hsla, rgb};
 use pc_core::theme::Palette;
 
 #[derive(Clone, Copy)]
-pub struct Cursor {
-    pub background: Option<Hsla>,
-    pub foreground: Hsla,
-}
-
-#[derive(Clone, Copy)]
 pub struct PanelColors {
-    pub active: Cursor,
-    pub inactive: Cursor,
+    /// The active panel's cursor: its fill and its dotted frame.
+    pub cursor: Hsla,
+    pub cursor_frame: Hsla,
+    /// The sorted column's title and the active panel's path: the accent, softly.
+    pub soft_accent: Hsla,
     /// Marked files' names.
     pub marked: Hsla,
 }
@@ -28,11 +26,12 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         if let Some(font) = &palette.font {
             kit.font_family = font.clone().into();
         }
+        kit.scrollbar_mode = ScrollbarMode::Always;
         let kit = &mut kit.colors;
         kit.background = color(palette.view);
         kit.foreground = color(palette.text);
         kit.border = color(palette.border);
-        // The active panel's path; dialogs' main buttons.
+        // Dialogs' main buttons, the active tab's line.
         kit.primary = color(palette.selection);
         kit.primary_foreground = color(palette.selection_text);
         // The inactive panel's path.
@@ -50,16 +49,11 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         kit.tab_foreground = color(palette.dim);
         kit.tab_active_foreground = color(palette.text);
     });
+    let faint = color(palette.selection).opacity(0.3);
     PanelColors {
-        active: Cursor {
-            background: Some(color(palette.selection)),
-            foreground: color(palette.selection_text),
-        },
-        // The other panel's cursor: the selection, faint.
-        inactive: Cursor {
-            background: Some(color(palette.selection).opacity(0.3)),
-            foreground: color(palette.text),
-        },
+        cursor: faint,
+        cursor_frame: color(palette.text),
+        soft_accent: color(palette.header).blend(faint),
         marked: color(palette.marked),
     }
 }

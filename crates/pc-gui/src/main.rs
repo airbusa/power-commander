@@ -34,6 +34,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{AppMenuBar, ContextMenuExt, PopupMenu};
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
@@ -99,6 +100,8 @@ const COLUMN_WIDTHS: [f32; 4] = [56., 100., 132., 92.];
 const COLUMN_MIN: f32 = 24.;
 /// Row and header padding plus border, left of Name and right of Attr.
 const ROW_INSET: Pixels = px(5.);
+/// The rows' scrollbar, right of them and of their titles.
+const SCROLLBAR: Pixels = px(16.);
 /// Within this share of the middle, the splitter snaps to it.
 const SPLIT_MAGNET: f32 = 0.02;
 
@@ -980,11 +983,12 @@ impl Commander {
         let panel = side.tabs.current();
         let active = ix == self.active;
         let (title_bg, title_fg) = if active {
-            (theme.primary, theme.primary_foreground)
+            (self.colors.soft_accent, theme.foreground)
         } else {
             (theme.muted, theme.muted_foreground)
         };
         let sort = panel.sort();
+        let soft_accent = self.colors.soft_accent;
         let title = |label: &'static str, key: SortKey, right: bool| {
             let sorted = sort.key == key;
             let arrow = match sort.descending {
@@ -997,9 +1001,9 @@ impl Commander {
                 .px_1()
                 .gap_1()
                 .cursor_pointer()
-                .when(sorted, |el| {
-                    el.bg(theme.accent).text_color(theme.accent_foreground)
-                })
+                .border_color(theme.border)
+                .when(key != SortKey::Attributes, |el| el.border_r_1())
+                .when(sorted, |el| el.bg(soft_accent))
                 .on_click(cx.listener(move |this, _, _, cx| this.sort_by_column(ix, key, cx)))
                 .child(
                     div()
@@ -1020,7 +1024,7 @@ impl Commander {
                 .absolute()
                 .top_0()
                 .bottom_0()
-                .right(ROW_INSET + px(right - 3.))
+                .right(ROW_INSET + SCROLLBAR + px(right - 3.))
                 .w(px(6.))
                 .occlude()
                 .cursor(CursorStyle::ResizeColumn)
@@ -1031,7 +1035,8 @@ impl Commander {
         let column_titles = h_flex()
             .relative()
             .h(ROW + px(4.))
-            .px_1()
+            .pl_1()
+            .pr(px(4.) + SCROLLBAR)
             .bg(theme.list_head)
             .border_x_1()
             .border_b_1()
@@ -1044,7 +1049,7 @@ impl Commander {
                     }
                     let column = drag.column;
                     let right: f32 = this.columns[column + 1..].iter().sum();
-                    let edge = event.bounds.right() - ROW_INSET - px(right);
+                    let edge = event.bounds.right() - ROW_INSET - SCROLLBAR - px(right);
                     let width = f32::from(edge - event.event.position.x);
                     this.columns[column] = width.clamp(COLUMN_MIN, 600.);
                     cx.notify();
@@ -1073,7 +1078,14 @@ impl Commander {
             }),
         )
         .track_scroll(&side.scroll)
-        .flex_1();
+        .size_full()
+        .pr(SCROLLBAR);
+        let rows = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .child(rows)
+            .child(div().absolute().inset_0().child(Scrollbar::vertical(&side.scroll)));
         let tab_list = self.tab_list.as_ref().filter(|(side, ..)| *side == ix);
         let ring = theme.ring;
         v_flex()
@@ -1195,10 +1207,7 @@ impl Commander {
         let entry = &panel.entries()[row];
         let light = !theme.mode.is_dark();
         let icon = icons::material().icon(&entry.display_name(), entry.is_dir, light);
-        let cursor = (row == panel.cursor()).then_some(match ix == self.active {
-            true => self.colors.active,
-            false => self.colors.inactive,
-        });
+        let cursor = row == panel.cursor() && ix == self.active;
         let (name, extension) = entry.name_and_extension();
         let [ext, size, date, attr] = self.columns.map(px);
         let marked = panel.is_marked(entry);
@@ -1229,9 +1238,8 @@ impl Commander {
             .px_1()
             .border_1()
             .border_color(gpui_kit::transparent_black())
-            .when_some(cursor, |el, cursor| {
-                el.text_color(cursor.foreground)
-                    .when_some(cursor.background, |el, bg| el.bg(bg))
+            .when(cursor, |el| {
+                el.bg(self.colors.cursor).border_dashed().border_color(self.colors.cursor_frame)
             })
             .when(marked, |el| el.text_color(self.colors.marked))
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
