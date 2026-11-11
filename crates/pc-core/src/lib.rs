@@ -180,6 +180,24 @@ pub fn local_time(time: SystemTime, format: &str) -> String {
         .to_string()
 }
 
+/// Where a typed path leads: the panel's own file system, or this computer
+/// when it shows a server's.
+#[derive(Debug, PartialEq)]
+pub enum Typed {
+    Here(PathBuf),
+    Local(PathBuf),
+}
+
+fn typed_on_server(url: &str, folder: &Path, typed: &str) -> Typed {
+    if let Some(path) = typed.strip_prefix(url) {
+        return Typed::Here(PathBuf::from(path));
+    }
+    match Path::new(typed).is_absolute() || typed.starts_with('~') {
+        true => Typed::Local(command::resolve(typed, Path::new("/"))),
+        false => Typed::Here(folder.join(typed)),
+    }
+}
+
 #[derive(Clone)]
 pub struct Panel {
     /// The folder, or the archive `archive` browses; on `remote`'s server if any.
@@ -273,6 +291,15 @@ impl Panel {
         match &self.remote {
             Some(remote) => format!("{}{}", remote.url(), path),
             None => path,
+        }
+    }
+
+    /// Where a path typed for this panel leads. On a server: the server's
+    /// path after its address, or relative; else this computer's.
+    pub fn typed_location(&self, typed: &str) -> Typed {
+        match &self.remote {
+            Some(remote) => typed_on_server(&remote.url(), self.folder(), typed),
+            None => Typed::Here(command::resolve(typed, self.folder())),
         }
     }
 
@@ -1236,6 +1263,17 @@ mod tests {
         panel.move_cursor(-1);
         assert!(panel.open().is_err());
         assert_eq!(panel.path(), root, "stays where it was");
+    }
+
+    #[test]
+    fn typed_paths_on_a_server() {
+        let (url, folder) = ("sftp://me@host", Path::new("/home/me"));
+        let typed = |text| typed_on_server(url, folder, text);
+        assert_eq!(typed("sftp://me@host/srv"), Typed::Here("/srv".into()));
+        assert_eq!(typed("docs"), Typed::Here("/home/me/docs".into()));
+        assert_eq!(typed("/home/me"), Typed::Local("/home/me".into()));
+        let home = std::env::home_dir().unwrap();
+        assert_eq!(typed("~/x"), Typed::Local(home.join("x")));
     }
 
     #[test]

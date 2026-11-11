@@ -25,7 +25,7 @@ mod viewer;
 
 use std::borrow::Cow;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -42,7 +42,7 @@ use pc_core::remote::Address;
 use pc_core::session::Session;
 use pc_core::settings::{self, Settings};
 use pc_core::theme::{self, Theme};
-use pc_core::{Panel, Sort, SortKey, Tabs, archive, edit, icons, ops};
+use pc_core::{Panel, Sort, SortKey, Tabs, Typed, archive, edit, icons, ops};
 
 use crate::appearance::PanelColors;
 use crate::menus::{ReopenTab, Run, SelectTab, SetTheme};
@@ -609,24 +609,27 @@ impl Commander {
             self.cancel_path_edit(window, cx);
             return self.connect(ix, address, window, cx);
         }
-        // On a server, a path typed is the server's.
         let panel = self.panels[ix].tabs.current();
-        if let Some(remote) = panel.remote() {
-            let target = match typed.strip_prefix(&remote.url()) {
-                Some(path) => PathBuf::from(path),
-                None => panel.folder().join(&typed),
-            };
-            self.cancel_path_edit(window, cx);
-            return self.navigate_on(
-                ix,
-                true,
-                move |panel| panel.go_to_folder(target),
-                window,
-                cx,
-            );
-        }
+        let target = match panel.typed_location(&typed) {
+            // The server's, in the background.
+            Typed::Here(target) if panel.remote().is_some() => {
+                self.cancel_path_edit(window, cx);
+                let go = move |panel: &mut Panel| panel.go_to_folder(target);
+                return self.navigate_on(ix, true, go, window, cx);
+            }
+            Typed::Here(target) => target,
+            // A server's path left without its address: this computer's.
+            Typed::Local(target) if target.is_dir() => {
+                self.cancel_path_edit(window, cx);
+                let go = move |panel: &mut Panel| panel.disconnect(target);
+                return self.navigate_on(ix, false, go, window, cx);
+            }
+            Typed::Local(target) => {
+                let text = format!("{}: no such folder on this computer", target.display());
+                return window.push_notification(Notification::error(text), cx);
+            }
+        };
         let side = &mut self.panels[ix];
-        let target = command::resolve(&typed, side.tabs.current().folder());
         match side
             .tabs
             .navigate(|panel| panel.go_to_folder(target.clone()))
