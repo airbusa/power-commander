@@ -1,10 +1,12 @@
 diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
 --- a/src/dialog/dialog.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/dialog/dialog.rs	2026-11-10 08:48:57.488507824 +0100
-@@ -1,13 +1,18 @@
++++ b/src/dialog/dialog.rs	2026-11-11 07:40:05.965584961 +0100
+@@ -1,13 +1,20 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a dialog moves by
 +// its title, can open centred over a part of the window, and fades in
 +// without sliding. Changes are marked "WDS patch".
++// Modified for PowerCommander: the title is smaller and ends in "…" when
++// long. Changes are marked "PowerCommander patch".
 +
  use super::entrance::{DialogEntrance, EntranceSurface};
  use crate::root::WindowState;
@@ -25,7 +27,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
  };
  use gpui_base::{ElementExt as _, TextSelectionScopeId};
  use rust_i18n::t;
-@@ -28,6 +33,20 @@
+@@ -28,6 +35,20 @@
  type CancelHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static>;
  type CloseHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
  
@@ -46,7 +48,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
  /// Overwrite `slot` only when `value` was explicitly set.
  fn merge_field<T>(slot: &mut Option<T>, value: Option<T>) {
      if value.is_some() {
-@@ -205,6 +224,8 @@
+@@ -205,6 +226,8 @@
      width: Pixels,
      max_width: Option<Pixels>,
      margin_top: Option<Pixels>,
@@ -55,7 +57,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
      close_button: bool,
  
      overlay: bool,
-@@ -218,6 +239,7 @@
+@@ -218,6 +241,7 @@
      fn default() -> Self {
          Self {
              margin_top: None,
@@ -63,7 +65,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
              width: px(448.),
              max_width: None,
              overlay: true,
-@@ -225,7 +247,8 @@
+@@ -225,7 +249,8 @@
              overlay_visible: false,
              close_button: true,
              overlay_closable: true,
@@ -73,7 +75,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
          }
      }
  }
-@@ -475,6 +498,13 @@
+@@ -475,6 +500,13 @@
          self
      }
  
@@ -87,7 +89,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
      /// Sets the width of the dialog, defaults to 448px.
      ///
      /// The dialog is never wider than the viewport minus a margin on each side.
-@@ -598,6 +628,13 @@
+@@ -598,6 +630,13 @@
  
          let layer_ix = self.layer_ix;
          let selection_scope = self.selection_scope;
@@ -101,7 +103,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
          let on_close = self.button_props.close_handler();
          let on_ok = self.button_props.ok_handler();
          let on_cancel = self.button_props.cancel_handler();
-@@ -632,6 +669,23 @@
+@@ -632,6 +671,23 @@
          let base_size = window.text_style().font_size;
          let rem_size = window.rem_size();
  
@@ -125,7 +127,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
          let mut paddings = Edges::all(px(16.));
          if let Some(pl) = self.style.padding.left {
              paddings.left = pl.to_pixels(base_size, rem_size);
-@@ -708,9 +762,12 @@
+@@ -708,9 +764,12 @@
                              })
                              .popup(
                                  gpui_base::Positioner::corner(
@@ -140,7 +142,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
                                  .margin(margin)
                                  .child(
                                      v_flex()
-@@ -726,11 +783,47 @@
+@@ -726,11 +785,55 @@
                                          .pb(paddings.bottom)
                                          .gap(paddings.top.max(px(8.)))
                                          .refine_style(&self.style)
@@ -169,7 +171,15 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
 +                                                    .border_b_1()
 +                                                    .border_color(theme.border)
 +                                                    .rounded_t(theme.radius_lg - px(1.))
-+                                                    .child(DialogTitle::new().child(title))
++                                                    // PowerCommander patch: the window title's size; a long one ends in "…".
++                                                    .child(
++                                                        DialogTitle::new()
++                                                            .text_sm()
++                                                            .flex_1()
++                                                            .min_w_0()
++                                                            .truncate()
++                                                            .child(title),
++                                                    )
 +                                                    .on_mouse_down(
 +                                                        MouseButton::Left,
 +                                                        move |event: &MouseDownEvent, window, _| {
@@ -188,7 +198,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
                                          .child(
                                              v_flex()
                                                  .flex_1()
-@@ -744,14 +837,6 @@
+@@ -744,14 +847,6 @@
                                                              .child(header),
                                                      )
                                                  })
@@ -203,7 +213,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
                                                  .when_some(self.content_builder, |this, builder| {
                                                      this.child(builder(
                                                          DialogContent::new()
-@@ -785,7 +870,12 @@
+@@ -785,7 +880,12 @@
                                              )
                                          })
                                          .children(self.props.close_button.then(|| {
@@ -217,7 +227,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
                                              let right = (paddings.right - px(10.)).max(px(8.));
  
                                              gpui_base::DialogClose::new()
-@@ -841,7 +931,8 @@
+@@ -841,7 +941,8 @@
                                          }),
                                  )
                                  .map(|positioner| {
@@ -227,7 +237,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
                                          positioner
                                              .with_animation(
                                                  "slide-down",
-@@ -876,6 +967,38 @@
+@@ -876,6 +977,38 @@
      }
  }
  

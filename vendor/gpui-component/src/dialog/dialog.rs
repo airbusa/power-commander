@@ -1,6 +1,8 @@
 // Modified for Water Data Studio (Apache-2.0, section 4b): a dialog moves by
 // its title, can open centred over a part of the window, and fades in
 // without sliding. Changes are marked "WDS patch".
+// Modified for PowerCommander: the title is smaller and ends in "…" when
+// long. Changes are marked "PowerCommander patch".
 
 use super::entrance::{DialogEntrance, EntranceSurface};
 use crate::root::WindowState;
@@ -808,7 +810,15 @@ impl RenderOnce for Dialog {
                                                     .border_b_1()
                                                     .border_color(theme.border)
                                                     .rounded_t(theme.radius_lg - px(1.))
-                                                    .child(DialogTitle::new().child(title))
+                                                    // PowerCommander patch: the window title's size; a long one ends in "…".
+                                                    .child(
+                                                        DialogTitle::new()
+                                                            .text_sm()
+                                                            .flex_1()
+                                                            .min_w_0()
+                                                            .truncate()
+                                                            .child(title),
+                                                    )
                                                     .on_mouse_down(
                                                         MouseButton::Left,
                                                         move |event: &MouseDownEvent, window, _| {
