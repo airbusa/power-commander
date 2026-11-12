@@ -20,6 +20,17 @@ impl Default for SidebarOpacity {
     }
 }
 
+/// Whether the desktop shows through the sidebar blurred (else sharp), as Konsole's "Blur background".
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SidebarBlur(pub bool);
+
+impl Default for SidebarBlur {
+    fn default() -> Self {
+        SidebarBlur(true)
+    }
+}
+
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -30,6 +41,7 @@ pub struct Settings {
     pub show_hidden: bool,
     pub show_system: bool,
     pub sidebar_opacity: SidebarOpacity,
+    pub sidebar_blur: SidebarBlur,
     pub viewer: ViewerSettings,
     pub editor: EditorSettings,
     /// Files' own programs for Enter, F3 and F4.

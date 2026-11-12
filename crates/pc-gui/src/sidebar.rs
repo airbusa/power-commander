@@ -45,6 +45,8 @@ pub(crate) struct Sidebar {
     leaving: Option<SidebarTab>,
     /// How much of the window colour it paints over the desktop; none: solid.
     tint: Option<f32>,
+    /// The desktop through it blurred, else sharp.
+    blur: bool,
     tree: FolderTree,
     tree_scroll: UniformListScrollHandle,
     /// The active panel's folder, where the tree last went.
@@ -67,7 +69,7 @@ struct Mounting;
 pub(crate) struct SidebarDrag;
 
 impl Sidebar {
-    pub(crate) fn new(tab: Option<SidebarTab>, width: f32, hidden: bool, opacity: u8) -> Self {
+    pub(crate) fn new(tab: Option<SidebarTab>, width: f32, hidden: bool, opacity: u8, blur: bool) -> Self {
         Sidebar {
             tab,
             last: tab.unwrap_or(SidebarTab::Tree),
@@ -77,6 +79,7 @@ impl Sidebar {
             switches: 0,
             leaving: None,
             tint: theme::sidebar_tint(opacity),
+            blur,
             tree: FolderTree::new(hidden),
             tree_scroll: UniformListScrollHandle::new(),
             followed: None,
@@ -168,14 +171,15 @@ impl Commander {
         cx.notify();
     }
 
-    /// The sidebar `opacity` percent over the desktop: in the settings, or tried in their dialog.
-    pub(crate) fn show_sidebar_opacity(&mut self, opacity: u8, window: &mut Window, cx: &mut Context<Self>) {
+    /// The sidebar `opacity` percent over the desktop, `blur`red or not: in the settings, or tried in their dialog.
+    pub(crate) fn show_sidebar_backdrop(&mut self, opacity: u8, blur: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.sidebar.tint = theme::sidebar_tint(opacity);
+        self.sidebar.blur = blur;
         self.set_backdrop(window, cx);
         cx.notify();
     }
 
-    /// The desktop shows through, blurred, only while the sidebar is there:
+    /// The desktop shows through, blurred if wished, only while the sidebar is there:
     /// a see-through window loses subpixel text.
     pub(crate) fn set_backdrop(&self, window: &mut Window, cx: &mut App) {
         // Sliding out too.
@@ -183,6 +187,7 @@ impl Commander {
         let see_through = shown && self.sidebar.tint.is_some();
         window.set_background_appearance(match see_through {
             false => WindowBackgroundAppearance::Opaque,
+            true if !self.sidebar.blur => WindowBackgroundAppearance::Transparent,
             true if cfg!(windows) => WindowBackgroundAppearance::MicaBackdrop,
             true => WindowBackgroundAppearance::Blurred,
         });

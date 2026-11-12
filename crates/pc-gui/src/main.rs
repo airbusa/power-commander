@@ -407,7 +407,8 @@ impl Commander {
         let colors = appearance::apply(&palette(&settings, window), cx);
         menus::bind(&settings.keys, None, cx);
         let opacity = settings.sidebar_opacity.0;
-        let sidebar = sidebar::Sidebar::new(session.sidebar, session.sidebar_width, settings.show_hidden, opacity);
+        let blur = settings.sidebar_blur.0;
+        let sidebar = sidebar::Sidebar::new(session.sidebar, session.sidebar_width, settings.show_hidden, opacity, blur);
         menus::set(settings.appearance, &|command| sidebar.shows(command), cx);
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             if this.settings.appearance == Appearance::System {
@@ -502,8 +503,8 @@ impl Commander {
     }
 
     fn apply_settings(&mut self, settings: Settings, window: &mut Window, cx: &mut Context<Self>) {
-        if settings.sidebar_opacity != self.settings.sidebar_opacity {
-            self.show_sidebar_opacity(settings.sidebar_opacity.0, window, cx);
+        if (settings.sidebar_opacity, settings.sidebar_blur) != (self.settings.sidebar_opacity, self.settings.sidebar_blur) {
+            self.show_sidebar_backdrop(settings.sidebar_opacity.0, settings.sidebar_blur.0, window, cx);
         }
         if settings.filter() != self.settings.filter() {
             for side in &mut self.panels {

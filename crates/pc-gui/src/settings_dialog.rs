@@ -7,7 +7,7 @@ use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use pc_core::settings::{MenuStyle, PAGES, Settings, SidebarOpacity, StartFont, StartMode};
+use pc_core::settings::{MenuStyle, PAGES, Settings, SidebarBlur, SidebarOpacity, StartFont, StartMode};
 
 use crate::Commander;
 
@@ -62,8 +62,7 @@ pub fn open(
             };
             let opacity = value.end().round().clamp(0., 100.) as u8;
             this.draft.sidebar_opacity = SidebarOpacity(opacity);
-            let _ = this.commander.update(cx, |commander, cx| commander.show_sidebar_opacity(opacity, window, cx));
-            cx.notify();
+            this.try_backdrop(window, cx);
         });
         // Each input's text into the draft, as typed.
         let bind = |cx: &mut Context<SettingsDialog>,
@@ -138,8 +137,15 @@ struct SettingsDialog {
 impl SettingsDialog {
     /// The sidebar as last applied, whatever was tried.
     fn untry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let opacity = self.saved.sidebar_opacity.0;
-        let _ = self.commander.update(cx, |commander, cx| commander.show_sidebar_opacity(opacity, window, cx));
+        let (opacity, blur) = (self.saved.sidebar_opacity.0, self.saved.sidebar_blur.0);
+        let _ = self.commander.update(cx, |commander, cx| commander.show_sidebar_backdrop(opacity, blur, window, cx));
+    }
+
+    /// The draft's sidebar shown, before it is applied.
+    fn try_backdrop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (opacity, blur) = (self.draft.sidebar_opacity.0, self.draft.sidebar_blur.0);
+        let _ = self.commander.update(cx, |commander, cx| commander.show_sidebar_backdrop(opacity, blur, window, cx));
+        cx.notify();
     }
 
     fn apply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -336,11 +342,11 @@ impl SettingsDialog {
                 )]
             }
             // Where the desktop can show through it.
-            "Layout" if cfg!(any(target_os = "macos", windows)) => {
+            "Layout" if pc_core::theme::sidebar_see_through() => {
                 let opacity = self.draft.sidebar_opacity.0;
                 let shown = match opacity {
                     100 => "100%, solid".to_owned(),
-                    0 => "0%, the desktop blurred".to_owned(),
+                    0 => "0%, only the desktop".to_owned(),
                     _ => format!("{opacity}%"),
                 };
                 vec![GroupBox::new().outline().title("Sidebar").child(
@@ -352,6 +358,15 @@ impl SettingsDialog {
                                 .gap_4()
                                 .child(div().flex_1().child(Slider::new(&self.opacity)))
                                 .child(div().w(px(150.)).child(shown)),
+                        )
+                        .child(
+                            Checkbox::new("sidebar-blur")
+                                .label("Blur the desktop behind it")
+                                .checked(self.draft.sidebar_blur.0)
+                                .on_click(cx.listener(|this, checked: &bool, window, cx| {
+                                    this.draft.sidebar_blur = SidebarBlur(*checked);
+                                    this.try_backdrop(window, cx);
+                                })),
                         ),
                 )]
             }
