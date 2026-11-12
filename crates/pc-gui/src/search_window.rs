@@ -151,6 +151,10 @@ impl FindFiles {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // macOS: the application and Window menus only.
+        #[cfg(target_os = "macos")]
+        cx.observe_window_activation(window, |_, window, cx| crate::menus::show(window, Vec::new(), cx))
+            .detach();
         let input = |placeholder: &str, window: &mut Window, cx: &mut Context<Self>| {
             let placeholder = placeholder.to_owned();
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
