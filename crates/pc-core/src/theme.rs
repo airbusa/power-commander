@@ -40,6 +40,8 @@ pub struct Palette {
     pub marked: u32,
     /// The UI font's family, where the desktop names one.
     pub font: Option<String>,
+    /// The UI font's size in pixels, where the desktop names one.
+    pub font_size: Option<f32>,
 }
 
 /// The file lists' colours, from the look's background, text and accent.
@@ -115,6 +117,7 @@ pub fn system(dark: bool) -> Palette {
         // GTK's apps write in the desktop's font.
         false => Palette {
             font: desktop_font(),
+            font_size: None,
             ..adwaita(dark)
         },
     }
@@ -363,6 +366,7 @@ fn kde_or_breeze(kdeglobals: Option<&str>, dark: bool) -> Palette {
             selection: scheme.selection,
             selection_text: scheme.selection_text,
             font: scheme.font,
+            font_size: scheme.font_size,
             ..breeze
         },
     }
@@ -391,7 +395,8 @@ fn kde(kdeglobals: &str) -> Option<Palette> {
     let bar = color("Colors:Header", "BackgroundNormal").unwrap_or(window);
     let button = color("Colors:Button", "BackgroundNormal").unwrap_or(window);
     let text = color("Colors:View", "ForegroundNormal")?;
-    let font = values.get(&("General", "font")).and_then(|font| font.split(',').next());
+    let font_entry = values.get(&("General", "font"));
+    let font = font_entry.and_then(|font| font.split(',').next());
     Some(Palette {
         dark: luminance(window) < 0.5,
         window,
@@ -406,7 +411,19 @@ fn kde(kdeglobals: &str) -> Option<Palette> {
         selection_text: color("Colors:Selection", "ForegroundNormal")?,
         marked: color("Colors:View", "ForegroundNegative").unwrap_or(0xda4453),
         font: Some(font.filter(|font| !font.is_empty()).unwrap_or(PLASMA_FONT).to_owned()),
+        font_size: font_entry.and_then(|font| qt_font_pixels(font)),
     })
+}
+
+/// A Qt font entry's size in pixels: "Noto Sans,10,-1,5,…" is 10 points, at
+/// 96 pixels an inch; "…,-1,13,…" 13 pixels.
+fn qt_font_pixels(entry: &str) -> Option<f32> {
+    let mut fields = entry.split(',').skip(1).map(|field| field.trim().parse::<f32>().ok());
+    match (fields.next()??, fields.next().flatten()) {
+        (points, _) if points > 0. => Some(points * 96. / 72.),
+        (_, Some(pixels)) if pixels > 0. => Some(pixels),
+        _ => None,
+    }
 }
 
 /// KDE's Breeze Light and Breeze Dark.
@@ -425,6 +442,7 @@ fn breeze(dark: bool) -> Palette {
             selection_text: 0xfcfcfc,
             marked: 0xda4453,
             font: Some(PLASMA_FONT.into()),
+            font_size: None,
         },
         false => Palette {
             dark,
@@ -439,6 +457,7 @@ fn breeze(dark: bool) -> Palette {
             selection_text: 0xffffff,
             marked: 0xda4453,
             font: Some(PLASMA_FONT.into()),
+            font_size: None,
         },
     }
 }
@@ -459,6 +478,7 @@ fn adwaita(dark: bool) -> Palette {
             selection_text: 0xffffff,
             marked: 0xe01b24,
             font: None,
+            font_size: None,
         },
         false => Palette {
             dark,
@@ -473,6 +493,7 @@ fn adwaita(dark: bool) -> Palette {
             selection_text: 0xffffff,
             marked: 0xe01b24,
             font: None,
+            font_size: None,
         },
     }
 }
@@ -494,6 +515,7 @@ fn windows(dark: bool) -> Palette {
             selection_text: 0xffffff,
             marked: 0xff99a4,
             font: Some("Segoe UI".into()),
+            font_size: None,
         },
         false => Palette {
             dark,
@@ -508,6 +530,7 @@ fn windows(dark: bool) -> Palette {
             selection_text: 0xffffff,
             marked: 0xc42b1c,
             font: Some("Segoe UI".into()),
+            font_size: None,
         },
     }
 }
@@ -529,6 +552,7 @@ fn mac(dark: bool) -> Palette {
             selection_text: 0xffffff,
             marked: 0xff453a,
             font: None,
+            font_size: None,
         },
         false => Palette {
             dark,
@@ -543,6 +567,7 @@ fn mac(dark: bool) -> Palette {
             selection_text: 0xffffff,
             marked: 0xff3b30,
             font: None,
+            font_size: None,
         },
     }
 }
@@ -564,6 +589,13 @@ fn luminance(rgb: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qt_font_sizes() {
+        assert_eq!(qt_font_pixels("Segoe UI,10,-1,5,50,0,0,0,0,0"), Some(10. * 96. / 72.));
+        assert_eq!(qt_font_pixels("Noto Sans,-1,13,5,400,0"), Some(13.));
+        assert_eq!(qt_font_pixels("Noto Sans"), None);
+    }
 
     #[test]
     fn header_bars_by_theme() {

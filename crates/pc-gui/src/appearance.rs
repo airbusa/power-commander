@@ -1,6 +1,6 @@
 use gpui_kit::component::scroll::ScrollbarMode;
 use gpui_kit::component::{BreezeControls, Theme as KitTheme, ThemeMode};
-use gpui_kit::{App, Hsla, hsla, rgb};
+use gpui_kit::{App, Hsla, hsla, px, rgb};
 use pc_core::theme::Palette;
 
 #[derive(Clone, Copy)]
@@ -38,6 +38,10 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
     KitTheme::update(cx, |kit| {
         if let Some(font) = &palette.font {
             kit.font_family = font.clone().into();
+        }
+        // The app writes in `text_sm`, 0.875 of the base: that is the desktop's size.
+        if let Some(size) = palette.font_size {
+            kit.font_size = px(size / 0.875);
         }
         kit.scrollbar_mode = ScrollbarMode::Always;
         // A focused field's border takes the accent, as Breeze's; the ring
