@@ -24,6 +24,7 @@ mod properties_dialog;
 mod quick_view;
 mod remote;
 mod rename_dialog;
+mod search_window;
 mod settings_dialog;
 mod sidebar;
 mod transfer;
@@ -173,6 +174,7 @@ fn main() {
         })
         .detach();
         viewer::bind_keys(cx);
+        search_window::bind_keys(cx);
         editor::bind_keys(cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1200.), px(800.)), cx)),
@@ -1350,6 +1352,8 @@ impl Commander {
                     .on_click(
                         cx.listener(move |this, _, window, cx| this.edit_path(ix, window, cx)),
                     )
+                    // Search results say so, as Total Commander's listbox.
+                    .when(panel.is_found(), |el| el.child(div().flex_none().pr_2().font_weight(FontWeight::BOLD).child("Search results:")))
                     .child(div().flex_1().min_w_0().truncate().child(panel.location()))
                     .when(panel.remote().is_some(), |el| {
                         el.child(
@@ -1567,6 +1571,8 @@ impl Render for Commander {
                     Command::SplitFile => this.split_file(window, cx),
                     Command::MultiRenameTool => this.multi_rename(window, cx),
                     Command::CompareByContent => this.compare_files(window, cx),
+                    Command::Search => this.find_files(false, window, cx),
+                    Command::SearchInSeparateProcess => this.find_files(true, window, cx),
                     Command::AssociateWith => this.associate_with(window, cx),
                     Command::InternalAssociations => this.internal_associations(window, cx),
                     Command::CombineFiles => this.combine_files(window, cx),

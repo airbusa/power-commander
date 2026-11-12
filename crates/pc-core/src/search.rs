@@ -212,11 +212,11 @@ pub enum Event {
     Found(Found),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Found {
     pub path: PathBuf,
-    /// Inside the archive at `path`: the file's path there.
-    pub member: Option<PathBuf>,
+    /// A file inside the archive at `path`.
+    pub member: Option<archive::Member>,
     pub is_dir: bool,
     pub size: u64,
     pub modified: Option<SystemTime>,
@@ -228,16 +228,17 @@ impl Found {
     /// `/home/me/a.zip/docs/b.txt` for a file in an archive.
     pub fn shown(&self) -> String {
         match &self.member {
-            Some(member) => self.path.join(member).display().to_string(),
+            Some(member) => self.path.join(&member.inside).display().to_string(),
             None => self.path.display().to_string(),
         }
     }
 }
 
-/// Searches; blocks, so run it off the UI thread. `stop` ends it early.
-pub fn run(query: &Query, stop: &AtomicBool, event: &mut dyn FnMut(Event)) -> Result<(), String> {
+/// Searches `places`: folders, or files to check (what a search found
+/// before); `places(&query.places)` unless so. Blocks, so run it off the
+/// UI thread. `stop` ends it early.
+pub fn run(query: &Query, places: &[PathBuf], stop: &AtomicBool, event: &mut dyn FnMut(Event)) -> Result<(), String> {
     let search = Search::new(query, stop)?;
-    let places = places(&query.places);
     if places.is_empty() {
         return Err("Search in names no folder".into());
     }
@@ -249,7 +250,7 @@ pub fn run(query: &Query, stop: &AtomicBool, event: &mut dyn FnMut(Event)) -> Re
     };
     match query.locate {
         true => {
-            for path in search.located(&places)? {
+            for path in search.located(places)? {
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
@@ -259,7 +260,7 @@ pub fn run(query: &Query, stop: &AtomicBool, event: &mut dyn FnMut(Event)) -> Re
             }
         }
         false => {
-            for place in &places {
+            for place in places {
                 match fs::metadata(place) {
                     Ok(meta) if meta.is_dir() => search.walk(place, 0, &mut out),
                     // A file chosen to check.
@@ -279,6 +280,39 @@ pub fn run(query: &Query, stop: &AtomicBool, event: &mut dyn FnMut(Event)) -> Re
         }
     }
     Ok(())
+}
+
+/// Whether the locate index can be searched.
+pub fn has_locate() -> bool {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path).any(|dir| dir.join("locate").is_file())
+}
+
+/// Where "Drives" offers to search: the root, home, and mounted disks.
+pub fn drives() -> Vec<PathBuf> {
+    let mut drives = vec![PathBuf::from("/")];
+    drives.extend(std::env::home_dir());
+    let mounts = fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    for line in mounts.lines() {
+        let mut fields = line.split(' ');
+        let (Some(device), Some(point)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        // `\040` is a space in a mount point.
+        let point = PathBuf::from(point.replace("\\040", " "));
+        let disk = device.starts_with("/dev/") || line.contains(" fuse.") || line.contains(" nfs");
+        let user = ["/media/", "/run/media/", "/mnt/"].iter().any(|dir| point.starts_with(dir))
+            || std::env::home_dir().is_some_and(|home| point.starts_with(&home) && point != home);
+        if disk && user && !drives.contains(&point) {
+            drives.push(point);
+        }
+    }
+    drives
+}
+
+/// A day as saved searches keep it: `2026-11-12`.
+pub fn day(text: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(text.trim(), "%Y-%m-%d").ok()
 }
 
 /// The folders of "Search in", `~` being home.
@@ -306,7 +340,8 @@ struct Search<'a> {
     until: Option<SystemTime>,
     size: Option<(SizeOp, u64, Unit)>,
     attributes: Vec<(Attribute, bool)>,
-    locate_pattern: String,
+    /// What locate is asked: names' globs, or a regular expression.
+    locate_args: Vec<String>,
 }
 
 /// What a file's data is checked for.
@@ -358,12 +393,10 @@ impl<'a> Search<'a> {
                 Names::Masks(if masks.is_empty() { "*".into() } else { masks.join(" ") })
             }
         };
-        let locate_pattern = match &names {
-            Names::Regex(_) => wanted.trim().to_owned(),
-            Names::Masks(masks) => {
-                let masks: Vec<String> = masks.split(' ').map(mask_regex).collect();
-                format!("(^|/)({})$", masks.join("|"))
-            }
+        // Globs on the name let plocate use its index; a regular expression reads it all.
+        let locate_args = match &names {
+            Names::Regex(_) => vec!["--regex".into(), wanted.trim().to_owned()],
+            Names::Masks(masks) => ["-b"].into_iter().chain(masks.split(' ')).map(str::to_owned).collect(),
         };
         let day = |text: &str, end: bool| -> Result<SystemTime, String> {
             let date = NaiveDate::parse_from_str(text.trim(), "%Y-%m-%d")
@@ -394,7 +427,7 @@ impl<'a> Search<'a> {
             until,
             size: query.size,
             attributes: query.attributes.clone(),
-            locate_pattern,
+            locate_args,
         })
     }
 
@@ -552,7 +585,12 @@ impl<'a> Search<'a> {
         let fits: Vec<archive::Item> = fits.collect();
         let hit = |item: &archive::Item| Found {
             path: path.to_owned(),
-            member: Some(item.path.clone()),
+            member: Some(archive::Member {
+                archive: path.to_owned(),
+                listed: item.listed.clone(),
+                name: item.path.file_name().unwrap_or_default().to_owned(),
+                inside: item.path.clone(),
+            }),
             is_dir: item.entry.is_dir,
             size: item.entry.size,
             modified: item.entry.modified,
@@ -581,7 +619,8 @@ impl<'a> Search<'a> {
     /// The index's paths in `places`, as deep as asked.
     fn located(&self, places: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
         let output = Command::new("locate")
-            .args(["-0", "-e", "-i", "--regex", &self.locate_pattern])
+            .args(["-0", "-e", "-i"])
+            .args(&self.locate_args)
             .stdin(Stdio::null())
             .stderr(Stdio::piped())
             .output()
@@ -619,23 +658,6 @@ fn contains(mask: &str) -> String {
         true => mask.to_owned(),
         false => format!("*{mask}*"),
     }
-}
-
-/// A mask as locate's regular expression, for a name.
-fn mask_regex(mask: &str) -> String {
-    let mut regex = String::new();
-    for c in mask.chars() {
-        match c {
-            '*' => regex.push_str("[^/]*"),
-            '?' => regex.push_str("[^/]"),
-            c if c.is_alphanumeric() || c == '_' || !c.is_ascii() => regex.push(c),
-            c => {
-                regex.push('\\');
-                regex.push(c);
-            }
-        }
-    }
-    regex
 }
 
 /// `-rwxr-xr-x` as 7-Zip lists a Unix file, as permission bits.
@@ -853,7 +875,7 @@ fn md5_of(path: &Path) -> io::Result<[u8; 16]> {
     Ok(hasher.finalize().into())
 }
 
-/// Saved searches, and what was typed before.
+/// Saved searches, and what was typed before; the viewer's Find keeps its own.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Saved {
@@ -865,11 +887,11 @@ pub struct Saved {
 
 impl Saved {
     pub fn load() -> io::Result<Self> {
-        settings::read_json("searches.json")
+        settings::read_json("find_files.json")
     }
 
     pub fn save(&self) -> io::Result<()> {
-        settings::write_json("searches.json", self)
+        settings::write_json("find_files.json", self)
     }
 
     /// Puts what was typed first in its history.
@@ -915,7 +937,7 @@ mod tests {
     fn names(query: &Query) -> Vec<String> {
         let stop = AtomicBool::new(false);
         let mut found = Vec::new();
-        run(query, &stop, &mut |event| {
+        run(query, &places(&query.places), &stop, &mut |event| {
             if let Event::Found(hit) = event {
                 let root = Path::new(&query.places);
                 let shown = hit.path.strip_prefix(root).unwrap().display().to_string();
@@ -975,8 +997,9 @@ mod tests {
         assert_eq!(not, ["other/a.txt", "sub/c.txt", "wide.txt"]);
         assert_eq!(names(&query(text("Grüße"))), Vec::<String>::new());
         assert_eq!(names(&query(Text { utf16: true, utf8: false, ..text("grüße") })), ["wide.txt"]);
-        assert!(run(&query(text("")), &AtomicBool::new(false), &mut |_| {}).is_err());
-        assert!(run(&query(Text { hex: true, ..text("4g") }), &AtomicBool::new(false), &mut |_| {}).is_err());
+        let fails = |query: Query| run(&query, &places(&query.places), &AtomicBool::new(false), &mut |_| {}).is_err();
+        assert!(fails(query(text(""))));
+        assert!(fails(query(Text { hex: true, ..text("4g") })));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1049,7 +1072,8 @@ mod tests {
         let stop = AtomicBool::new(false);
         let mut found = Vec::new();
         let hello = Text { text: "hello".into(), ..Text::default() };
-        run(&query("*.txt", Some(hello)), &stop, &mut |event| {
+        let places = [root.clone()];
+        run(&query("*.txt", Some(hello)), &places, &stop, &mut |event| {
             if let Event::Found(hit) = event {
                 found.push(hit.shown().strip_prefix(&format!("{}/", root.display())).unwrap().to_owned());
             }
@@ -1063,6 +1087,29 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// Reads the system's locate database: `cargo test -p pc-core locates -- --ignored`.
+    #[test]
+    #[ignore]
+    fn locates_names() {
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+        let query = Query {
+            names: "Cargo.toml".into(),
+            locate: true,
+            depth: Some(1),
+            ..Query::default()
+        };
+        let mut found = Vec::new();
+        run(&query, &[repo.clone()], &AtomicBool::new(false), &mut |event| {
+            if let Event::Found(hit) = event {
+                found.push(hit.path.strip_prefix(&repo).unwrap().display().to_string());
+            }
+        })
+        .unwrap();
+        found.sort();
+        // One level down: crates/pc-core/Cargo.toml is two.
+        assert_eq!(found, ["Cargo.toml"]);
+    }
+
     #[test]
     fn reads_office_xml() {
         let xml = "<w:p><w:r><w:t>Hel</w:t></w:r><w:r><w:t>lo &amp; bye</w:t></w:r></w:p><w:p><w:t>Next&#x21;</w:t></w:p>";
@@ -1070,7 +1117,6 @@ mod tests {
         assert_eq!(decode_entities("a &unknown; b & c"), "a &unknown; b & c");
         assert_eq!(unix_mode("-rwxr-x---"), Some(0o750));
         assert_eq!(unix_mode("D"), None);
-        assert_eq!(mask_regex("*.tar.gz"), r"[^/]*\.tar\.gz");
         let mut history = vec!["a".to_owned(), "b".to_owned()];
         Saved::remember(&mut history, " b ");
         assert_eq!(history, ["b", "a"]);

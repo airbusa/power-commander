@@ -238,6 +238,8 @@ pub struct Panel {
     filter: Filter,
     sort: Sort,
     view: View,
+    /// Search results fed to the panel, listed by their path from `path`.
+    found: Option<Vec<PathBuf>>,
 }
 
 #[derive(Clone)]
@@ -263,6 +265,7 @@ impl Panel {
             filter,
             sort: Sort::default(),
             view: View::Full,
+            found: None,
         };
         panel.reload()?;
         Ok(panel)
@@ -346,6 +349,7 @@ impl Panel {
         let entries = remote.entries(&path)?;
         self.remote = Some(remote);
         self.archive = None;
+        self.found = None;
         self.marked.clear();
         self.measured.clear();
         self.path = path;
@@ -358,6 +362,7 @@ impl Panel {
         let entries = read_dir(&path)?;
         self.remote = None;
         self.archive = None;
+        self.found = None;
         self.marked.clear();
         self.measured.clear();
         self.path = path;
@@ -386,6 +391,9 @@ impl Panel {
     pub fn name(&self) -> String {
         if let Some(name) = &self.name {
             return name.clone();
+        }
+        if self.found.is_some() {
+            return "Search results".into();
         }
         let path = self.path();
         match path.file_name() {
@@ -452,6 +460,10 @@ impl Panel {
 
     /// Cursor lands on the folder or archive it leaves.
     pub fn up(&mut self) -> io::Result<()> {
+        // From search results: their folder.
+        if self.found.is_some() {
+            return self.go_to(self.path.clone(), None);
+        }
         if let Some(archive) = &self.archive
             && let Some(parent) = archive.dir.parent()
         {
@@ -470,6 +482,11 @@ impl Panel {
     /// Reads the folder or archive again; the cursor stays on its entry.
     pub fn reload(&mut self) -> io::Result<()> {
         let select = self.entries.get(self.cursor).map(|e| e.name.clone());
+        if self.found.is_some() {
+            let entries = self.found_entries();
+            self.show(entries, select);
+            return Ok(());
+        }
         let Some(archive) = &self.archive else {
             return self.go_to(self.path.clone(), select);
         };
@@ -489,6 +506,7 @@ impl Panel {
         let items = archive::list(&path)?;
         self.marked.clear();
         self.measured.clear();
+        self.found = None;
         self.path = path;
         self.archive = Some(Archive {
             items,
@@ -879,6 +897,65 @@ impl Panel {
         self.go_to(path, None)
     }
 
+    /// Its folder, the cursor on it; a file inside an archive, the archive's folder.
+    pub fn go_to_file(&mut self, path: &Path, member: Option<&Path>) -> io::Result<()> {
+        let parent = path.parent().unwrap_or(path).to_owned();
+        let Some(member) = member else {
+            return self.go_to(parent, path.file_name().map(OsString::from));
+        };
+        self.go_to(parent, None)?;
+        self.enter_archive(path.to_owned(), None)?;
+        let dir = member.parent().unwrap_or(Path::new("")).to_owned();
+        self.show_archive_dir(dir, member.file_name().map(OsString::from));
+        Ok(())
+    }
+
+    /// Feed to listbox: the files a search found, by their path from the
+    /// folder they are all in; `..` leaves for that folder.
+    pub fn show_found(&mut self, paths: Vec<PathBuf>) {
+        let Some(first) = paths.first() else {
+            return;
+        };
+        let mut root = first.parent().unwrap_or(first).to_owned();
+        for path in &paths {
+            while !path.starts_with(&root) && root.pop() {}
+        }
+        self.remote = None;
+        self.archive = None;
+        self.marked.clear();
+        self.measured.clear();
+        self.path = root;
+        self.found = Some(paths);
+        let entries = self.found_entries();
+        self.show(entries, None);
+    }
+
+    /// Showing search results.
+    pub fn is_found(&self) -> bool {
+        self.found.is_some()
+    }
+
+    /// The found that are still there.
+    fn found_entries(&self) -> Vec<Entry> {
+        let mut entries = vec![parent_entry(None)];
+        for path in self.found.iter().flatten() {
+            let Ok(meta) = fs::metadata(path).or_else(|_| fs::symlink_metadata(path)) else {
+                continue;
+            };
+            let (hidden, system, attributes) = attributes(path.file_name().unwrap_or_default(), Some(&meta));
+            entries.push(Entry {
+                name: path.strip_prefix(&self.path).unwrap_or(path).as_os_str().to_owned(),
+                is_dir: meta.is_dir(),
+                size: meta.len(),
+                modified: meta.modified().ok(),
+                hidden,
+                system,
+                attributes,
+            });
+        }
+        entries
+    }
+
     /// The folder, local or on the server: inside an archive, the archive's.
     pub fn folder(&self) -> &Path {
         match self.archive {
@@ -916,11 +993,12 @@ impl Panel {
             Some(remote) => remote.entries(&path)?,
             None => read_dir(&path)?,
         };
-        if path != self.path || self.archive.is_some() {
+        if path != self.path || self.archive.is_some() || self.found.is_some() {
             self.marked.clear();
             self.measured.clear();
         }
         self.archive = None;
+        self.found = None;
         self.path = path;
         self.show(entries, select);
         Ok(())
@@ -939,7 +1017,8 @@ impl Panel {
     }
 
     fn show(&mut self, mut entries: Vec<Entry>, select: Option<OsString>) {
-        entries.retain(|entry| self.filter.shows(entry));
+        // What a search found shows, hidden or not.
+        entries.retain(|entry| self.found.is_some() || self.filter.shows(entry));
         // Marks stay on what is still there.
         let names: HashSet<&OsString> = entries.iter().map(|e| &e.name).collect();
         self.marked.retain(|name| names.contains(name));
@@ -1288,6 +1367,38 @@ fn by_name(a: &Entry, b: &Entry) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shows_search_results() {
+        let root = std::env::temp_dir().join(format!("pc-core-found-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("a/deep")).unwrap();
+        fs::create_dir_all(root.join("b")).unwrap();
+        fs::write(root.join("a/deep/x.txt"), "x").unwrap();
+        fs::write(root.join("b/.y.txt"), "yy").unwrap();
+        let mut panel = Panel::new(&root, Filter::default()).unwrap();
+        panel.show_found(vec![root.join("a/deep/x.txt"), root.join("b/.y.txt"), root.join("a/deep")]);
+        let names: Vec<_> = panel.entries().iter().map(Entry::display_name).collect();
+        // Hidden or not; the folder first, as folders go.
+        assert_eq!(names, ["..", "a/deep", "a/deep/x.txt", "b/.y.txt"]);
+        assert_eq!((panel.path(), panel.name()), (root.clone(), "Search results".to_owned()));
+        assert_eq!(panel.origin_of(&panel.entries()[2]).unwrap().name(), root.join("a/deep/x.txt").display().to_string());
+        fs::remove_file(root.join("b/.y.txt")).unwrap();
+        panel.reload().unwrap();
+        assert_eq!(panel.entries().len(), 3, "a file gone goes from the list");
+        panel.set_cursor(1);
+        assert!(panel.open().unwrap());
+        assert_eq!(panel.path(), root.join("a/deep"));
+        assert!(!panel.is_found());
+        panel.show_found(vec![root.join("a/deep/x.txt")]);
+        assert_eq!(panel.path(), root.join("a/deep"), "one file: its folder");
+        panel.up().unwrap();
+        assert!(!panel.is_found());
+        assert_eq!(panel.path(), root.join("a/deep"), "`..` leaves for the folder");
+        panel.go_to_file(&root.join("b"), None).unwrap();
+        assert_eq!(panel.current_entry().unwrap().name, "b");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn navigates() {

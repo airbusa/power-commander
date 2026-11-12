@@ -30,6 +30,7 @@ pub(crate) struct Item {
 }
 
 /// A file inside an archive, to take out for F3 and F4.
+#[derive(Clone, Debug)]
 pub struct Member {
     pub archive: PathBuf,
     pub listed: String,

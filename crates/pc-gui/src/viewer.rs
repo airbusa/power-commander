@@ -225,6 +225,19 @@ struct LastSearches(Searches);
 
 impl Global for LastSearches {}
 
+/// Find Files' text becomes the last Find: F3 in the viewer finds it.
+pub(crate) fn remember_find(text: &pc_core::search::Text, cx: &mut App) {
+    let query = Query {
+        text: text.text.clone(),
+        whole_words: text.whole_words,
+        case_sensitive: text.case_sensitive,
+        backwards: false,
+        hex: text.hex,
+        regex: text.regex,
+    };
+    searches(cx).add(query);
+}
+
 /// Read from disk at the first Find.
 fn searches(cx: &mut App) -> &mut Searches {
     if !cx.has_global::<LastSearches>() {
