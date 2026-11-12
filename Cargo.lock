@@ -5560,6 +5560,7 @@ dependencies = [
  "suppaftp",
  "tokio",
  "trash",
+ "windows 0.62.2",
  "zbus",
 ]
 
@@ -5574,6 +5575,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "pc-core",
+ "raw-window-handle",
  "winresource",
 ]
 

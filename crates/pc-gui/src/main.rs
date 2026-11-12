@@ -7,6 +7,8 @@ mod associations_dialog;
 mod attributes_dialog;
 mod compare_view;
 mod connections_dialog;
+#[cfg(any(target_os = "macos", windows))]
+mod context_menu;
 mod drag_drop;
 mod editor;
 #[cfg(target_os = "macos")]
@@ -1308,6 +1310,8 @@ impl Commander {
         };
         #[cfg(target_os = "macos")]
         let rows = self.with_file_menu(ix, rows, cx);
+        #[cfg(windows)]
+        let rows = self.with_shell_menu(ix, rows, cx);
         let theme = cx.theme();
         let tab_list = self.tab_list.as_ref().filter(|(side, ..)| *side == ix);
         let ring = theme.ring;
@@ -1551,12 +1555,20 @@ impl Commander {
                     this.enter(window, cx);
                 }
             }))
-            // macOS: the menu is for the row right-clicked, as Finder's (file_menu).
+            // The menu is for the row right-clicked: Finder's (file_menu), Explorer's (context_menu).
             .map(|el| {
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", windows))]
                 let el = el.on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, _, window, cx| this.right_click(ix, row, window, cx)),
+                );
+                #[cfg(windows)]
+                let el = el.on_mouse_up(
+                    MouseButton::Right,
+                    cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.shell_menu(ix, Some(row), window, cx)
+                    }),
                 );
                 el
             })

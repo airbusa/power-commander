@@ -11,7 +11,7 @@ use pc_core::finder;
 use pc_core::menu::Command;
 
 use crate::menus::Run;
-use crate::{Commander, Open, name_dialog};
+use crate::{Commander, Open};
 
 actions!(file_menu, [ShowPackageContents, RenameFile, Duplicate, MakeAlias, QuickLook, RevealInFinder]);
 
@@ -37,19 +37,6 @@ struct Chosen {
 }
 
 impl Commander {
-    /// The right-clicked row of panel `ix` is what the menu is for: the
-    /// marked ones if it is one of them, else it alone, as Finder selects.
-    pub(crate) fn right_click(&mut self, ix: usize, row: usize, window: &mut Window, cx: &mut Context<Self>) {
-        self.active = ix;
-        window.focus(&self.focus, cx);
-        let panel = self.panels[ix].tabs.current_mut();
-        if panel.entries().get(row).is_some_and(|entry| !panel.is_marked(entry)) {
-            panel.mark_all(false);
-        }
-        panel.set_cursor(row);
-        cx.notify();
-    }
-
     /// Panel `ix`'s files, with the menu a right click opens.
     pub(crate) fn with_file_menu(&self, ix: usize, files: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         let (commander, focus) = (cx.entity().downgrade(), self.focus.clone());
@@ -162,32 +149,6 @@ impl Commander {
             });
         })
         .detach();
-    }
-
-    /// The one chosen entry renamed, here or on a server.
-    fn rename_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let side = self.active;
-        let chosen = self.panels[side].tabs.current().chosen();
-        let [entry] = chosen.as_slice() else {
-            return;
-        };
-        let name = entry.name.clone();
-        let commander = cx.entity().downgrade();
-        name_dialog::open("Rename", "New name:", entry.display_name(), window, cx, move |to, window, cx| {
-            let name = name.clone();
-            let _ = commander.update(cx, |this, cx| {
-                let panel = this.panels[side].tabs.current_mut();
-                if panel.remote().is_some() {
-                    let renamed = move |panel: &mut pc_core::Panel| panel.rename_entry(&name, &to);
-                    return this.navigate_on(side, true, renamed, window, cx);
-                }
-                let folder = panel.folder().to_owned();
-                if let Err(err) = panel.rename_entry(&name, &to) {
-                    window.push_notification(Notification::error(format!("Could not rename: {err}")), cx);
-                }
-                this.refresh_folder(&folder, cx);
-            });
-        });
     }
 }
 

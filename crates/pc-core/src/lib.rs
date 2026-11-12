@@ -31,6 +31,8 @@ pub mod search;
 pub mod secrets;
 pub mod session;
 pub mod settings;
+#[cfg(windows)]
+pub mod shell_menu;
 pub mod sidebar;
 pub mod sftp;
 pub mod space;
@@ -868,22 +870,33 @@ impl Panel {
         self.go_to(self.path.clone(), first)
     }
 
-    /// Renames an entry of the folder, here or on a server; the cursor on it then.
+    /// Renames an entry here or on a server (`name` may be a path, as in
+    /// search results); the cursor on it then.
     pub fn rename_entry(&mut self, name: &OsStr, to: &str) -> io::Result<()> {
         self.on_disk()?;
         let to = to.trim();
-        if to.is_empty() || to.contains('/') || to == "." || to == PARENT {
+        if to.is_empty() || to.contains(['/', std::path::MAIN_SEPARATOR]) || to == "." || to == PARENT {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{to}: not a name")));
         }
-        let (from, target) = (self.path.join(name), self.path.join(to));
+        let from = self.path.join(name);
+        let target = from.with_file_name(to);
         let fs = self.fs();
         // Only its case changed, it is there already: on macOS and Windows, itself.
-        let itself = name.to_string_lossy().eq_ignore_ascii_case(to);
+        let itself = from.file_name().is_some_and(|old| old.to_string_lossy().eq_ignore_ascii_case(to));
         if !itself && fs.metadata(&target).is_ok() {
             return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{to} exists already")));
         }
         fs.rename(&from, &target)?;
-        self.go_to(self.path.clone(), Some(OsString::from(to)))
+        let shown = Path::new(name).with_file_name(to).into_os_string();
+        match &mut self.found {
+            Some(found) => {
+                found.iter_mut().filter(|path| **path == from).for_each(|path| *path = target.clone());
+                let entries = self.found_entries();
+                self.show(entries, Some(shown));
+                Ok(())
+            }
+            None => self.go_to(self.path.clone(), Some(shown)),
+        }
     }
 
     /// The chosen entries, to the trash or for good; stops at the first error.
@@ -1428,6 +1441,31 @@ mod tests {
         assert_eq!(panel.path(), root.join("a/deep"), "`..` leaves for the folder");
         panel.go_to_file(&root.join("b"), None).unwrap();
         assert_eq!(panel.current_entry().unwrap().name, "b");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn renames() {
+        let root = std::env::temp_dir().join(format!("pc-core-rename-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("a.txt"), "a").unwrap();
+        fs::write(root.join("sub/b.txt"), "b").unwrap();
+        let mut panel = Panel::new(&root, Filter::default()).unwrap();
+        panel.rename_entry(OsStr::new("a.txt"), " c.txt ").unwrap();
+        assert!(root.join("c.txt").is_file() && !root.join("a.txt").exists());
+        assert_eq!(panel.current_entry().unwrap().name, "c.txt", "the cursor follows");
+        assert!(panel.rename_entry(OsStr::new("c.txt"), "sub").is_err(), "taken");
+        assert!(panel.rename_entry(OsStr::new("c.txt"), "x/y").is_err(), "not a name");
+        assert!(panel.rename_entry(OsStr::new("c.txt"), "..").is_err(), "not a name");
+        panel.rename_entry(OsStr::new("c.txt"), "C.txt").unwrap();
+        panel.rename_entry(OsStr::new("C.txt"), "c.txt").unwrap();
+        panel.show_found(vec![root.join("c.txt"), root.join("sub/b.txt")]);
+        panel.rename_entry(OsStr::new("sub/b.txt"), "d.txt").unwrap();
+        assert!(root.join("sub/d.txt").is_file());
+        let names: Vec<_> = panel.entries().iter().map(Entry::display_name).collect();
+        assert_eq!(names, ["..", "c.txt", "sub/d.txt"]);
+        assert_eq!(panel.current_entry().unwrap().display_name(), "sub/d.txt");
         fs::remove_dir_all(root).unwrap();
     }
 
