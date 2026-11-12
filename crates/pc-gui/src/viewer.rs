@@ -14,7 +14,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, Disableable, IconName, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use pc_core::codepage;
+use pc_core::{codepage, ebook, resume};
 use pc_core::settings::ViewerSettings;
 use pc_core::menu::Command;
 use pc_core::viewer::{
@@ -48,6 +48,7 @@ actions!(
         ShowUtf8,
         ShowMarkdown,
         ShowPdf,
+        ShowBook,
         FontAnsi,
         FontAscii,
         FontVariable,
@@ -127,6 +128,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("7", ShowUtf8, keys),
         KeyBinding::new("8", ShowMarkdown, keys),
         KeyBinding::new("9", ShowPdf, keys),
+        KeyBinding::new("0", ShowBook, keys),
         KeyBinding::new("a", FontAnsi, keys),
         KeyBinding::new("s", FontAscii, keys),
         KeyBinding::new("v", FontVariable, keys),
@@ -295,6 +297,14 @@ struct Viewer {
     size: u64,
     /// The source the Markdown mode renders.
     markdown: Option<SharedString>,
+    /// The Book mode's book as HTML, or why it cannot be read.
+    book: Option<Result<SharedString, String>>,
+    /// The book's fingerprint, by which its place is kept (pc_core::resume).
+    book_print: Option<String>,
+    /// Where the book was left, until scrolled there once it is laid out.
+    book_resume: Option<f64>,
+    /// "Continuing at 40%", for a moment.
+    book_continued: Option<f64>,
     /// The PDF mode's pages.
     pdf: Option<Entity<PdfView>>,
     /// An office document being converted for them: the tool, or why it failed.
@@ -320,6 +330,7 @@ struct Viewer {
 impl Drop for Viewer {
     fn drop(&mut self) {
         self.stop_finding();
+        self.leave_book();
     }
 }
 
@@ -340,6 +351,15 @@ fn menu_bar(viewer: WeakEntity<Viewer>, cx: &mut App) -> Entity<AppMenuBar> {
         (name.into(), build)
     });
     AppMenuBar::built(menus.into(), cx)
+}
+
+/// How far a rendered page scrolls.
+#[derive(Clone, Copy)]
+enum PageScroll {
+    Lines(f32),
+    Pages(f32),
+    Top,
+    Bottom,
 }
 
 struct ViewerMap(WeakEntity<Viewer>);
@@ -543,6 +563,10 @@ impl Viewer {
             media: media_view(&shown, None, quick, cx),
             size: file_size(&shown, &text),
             markdown: markdown(&shown, &text),
+            book: None,
+            book_print: None,
+            book_resume: None,
+            book_continued: None,
             pdf: pdf_view(&shown, cx),
             converting: None,
             _converting: None,
@@ -567,6 +591,7 @@ impl Viewer {
             _poll: Self::poll(cx),
         };
         viewer.convert(cx);
+        viewer.open_book();
         viewer
     }
 
@@ -605,6 +630,8 @@ impl Viewer {
     ) {
         self.size = file_size(&self.shown, &text);
         self.markdown = markdown(&self.shown, &text);
+        self.leave_book();
+        self.open_book();
         self.pdf = pdf_view(&self.shown, cx);
         self.zoom_pdf(cx);
         self.convert(cx);
@@ -1097,7 +1124,7 @@ impl Viewer {
                 .entry("Find next", false, Box::new(FindNext), picture_shown)
         };
         let options = move |mut menu: M| {
-            let modes: [(&str, Mode, Box<dyn Action>); 9] = [
+            let modes: [(&str, Mode, Box<dyn Action>); 10] = [
                 ("Text only", Mode::Text, Box::new(ShowText)),
                 (
                     "Binary (fixed line length)",
@@ -1111,9 +1138,11 @@ impl Viewer {
                 ("UTF-8", Mode::Utf8, Box::new(ShowUtf8)),
                 ("Markdown", Mode::Markdown, Box::new(ShowMarkdown)),
                 ("PDF", Mode::Pdf, Box::new(ShowPdf)),
+                ("Book (EPUB, FB2)", Mode::Book, Box::new(ShowBook)),
             ];
+            let book = self.shown.book;
             for (label, this, action) in modes {
-                let off = this == Mode::Picture && !picture || this == Mode::Pdf && !pdf;
+                let off = this == Mode::Picture && !picture || this == Mode::Pdf && !pdf || this == Mode::Book && !book;
                 menu = menu.entry(label, mode == this, action, off);
             }
             menu = menu.separator();
@@ -1342,6 +1371,115 @@ impl Viewer {
         (rows.into_any_element(), status)
     }
 
+    /// Markdown and books scroll their rendered page; false in other modes.
+    fn scroll_page(&self, by: PageScroll, cx: &mut Context<Self>) -> bool {
+        if !matches!(self.shown.mode, Mode::Markdown | Mode::Book) {
+            return false;
+        }
+        let scroll = &self.markdown_scroll;
+        let (offset, max) = (scroll.offset(), scroll.max_offset());
+        let line = px(40.) * self.zoom;
+        let page = (scroll.bounds().size.height - line).max(line);
+        let y = match by {
+            PageScroll::Lines(lines) => offset.y - line * lines,
+            PageScroll::Pages(pages) => offset.y - page * pages,
+            PageScroll::Top => px(0.),
+            PageScroll::Bottom => -max.y,
+        };
+        scroll.set_offset(point(offset.x, y.clamp(-max.y, px(0.))));
+        cx.notify();
+        true
+    }
+
+    /// The Book mode's book read, and where it was left; nothing else is a book.
+    fn open_book(&mut self) {
+        (self.book, self.book_print, self.book_resume) = (None, None, None);
+        if self.shown.mode != Mode::Book {
+            return;
+        }
+        let path = self.shown.path().to_owned();
+        self.book = Some(ebook::html(&path).map(SharedString::from).map_err(|err| err.to_string()));
+        // Never in Quick View, which only shows it.
+        if !self.quick {
+            self.book_print = resume::fingerprint(&path).ok();
+            self.book_resume = self.book_print.as_deref().and_then(resume::left_at);
+        }
+    }
+
+    /// The share of the book read so far, to go on from next time; not before it went back there.
+    fn leave_book(&self) {
+        let (Some(print), None) = (&self.book_print, self.book_resume) else {
+            return;
+        };
+        let (offset, max) = (self.markdown_scroll.offset(), self.markdown_scroll.max_offset());
+        if max.y > px(0.) {
+            let read = (f32::from(-offset.y) / f32::from(max.y)).clamp(0., 1.) as f64;
+            let name = self.shown.path().file_name().unwrap_or_default().to_string_lossy();
+            let _ = resume::leave(print, &name, read, 1.);
+        }
+    }
+
+    /// The book, rendered as the Markdown mode is; scrolled to where it was left once laid out.
+    fn render_book(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let html = match &self.book {
+            Some(Ok(html)) => html.clone(),
+            Some(Err(err)) => {
+                let text = format!("This book cannot be read: {err}. 1 shows the file as text.");
+                return div().p_4().child(text).into_any_element();
+            }
+            None => SharedString::default(),
+        };
+        if let Some(at) = self.book_resume {
+            let max = self.markdown_scroll.max_offset();
+            match max.y > px(0.) {
+                true => {
+                    self.markdown_scroll.set_offset(point(px(0.), -max.y * at as f32));
+                    self.book_resume = None;
+                    self.book_continued = Some(at);
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(std::time::Duration::from_secs(4)).await;
+                        let _ = this.update(cx, |this, cx| {
+                            this.book_continued = None;
+                            cx.notify();
+                        });
+                    })
+                    .detach();
+                }
+                // Laid out at the next frame.
+                false => window.request_animation_frame(),
+            }
+        }
+        let view = TextView::html("viewer-book", html).selectable(true);
+        div()
+            .absolute()
+            .inset_0()
+            .child(
+                div()
+                    .id("viewer-book-scroll")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.markdown_scroll)
+                    .child(v_flex().px_6().py_4().text_size(cx.theme().font_size * self.zoom).child(view)),
+            )
+            .child(div().absolute().inset_0().child(Scrollbar::new(&self.markdown_scroll)))
+            .when_some(self.book_continued, |el, at| {
+                el.child(
+                    div()
+                        .absolute()
+                        .top_3()
+                        .left_3()
+                        .px_3()
+                        .py_1()
+                        .rounded_md()
+                        .bg(gpui_kit::black().opacity(0.6))
+                        .text_color(gpui_kit::white())
+                        .text_sm()
+                        .child(format!("Continuing at {:.0}%", at * 100.)),
+                )
+            })
+            .into_any_element()
+    }
+
     fn render_markdown(&self, cx: &App) -> AnyElement {
         let source = self.markdown.clone().unwrap_or_else(|| {
             let limit = MARKDOWN_LIMIT >> 20;
@@ -1426,6 +1564,7 @@ impl Render for Viewer {
                 None => (self.render_picture(cx), String::new()),
             },
             Mode::Markdown => (self.render_markdown(cx), String::new()),
+            Mode::Book => (self.render_book(window, cx), String::new()),
             Mode::Pdf => match (&self.pdf, &self.converting) {
                 (Some(pdf), _) => (pdf.clone().into_any_element(), pdf.read(cx).status()),
                 (None, Some(Ok(tool))) => {
@@ -1449,7 +1588,7 @@ impl Render for Viewer {
         };
         // The PDF view has its own, of page thumbnails.
         let minimap = match self.shown.mode {
-            Mode::Picture | Mode::Pdf => None,
+            Mode::Picture | Mode::Pdf | Mode::Book => None,
             _ if !crate::minimap_shown(cx) => None,
             Mode::Markdown => Some(self.markdown_minimap.clone()),
             _ => Some(self.minimap.clone()),
@@ -1498,6 +1637,7 @@ impl Render for Viewer {
                 cx.listener(|this, _: &ShowMarkdown, w, cx| this.set_mode(Mode::Markdown, w, cx)),
             )
             .on_action(cx.listener(|this, _: &ShowPdf, w, cx| this.set_mode(Mode::Pdf, w, cx)))
+            .on_action(cx.listener(|this, _: &ShowBook, w, cx| this.set_mode(Mode::Book, w, cx)))
             .on_action(
                 cx.listener(|this, _: &FontAnsi, w, cx| this.set_font(Font::Ansi, None, w, cx)),
             )
@@ -1549,6 +1689,9 @@ impl Render for Viewer {
                 this.player(cx).inspect(|player| player.seek_by(5.));
             }))
             .on_action(cx.listener(|this, _: &LineUp, _, cx| {
+                if this.scroll_page(PageScroll::Lines(-1.), cx) {
+                    return;
+                }
                 match (this.player(cx), &this.pdf) {
                     (Some(player), _) => player.change_volume(5.),
                     (None, Some(pdf)) => pdf.update(cx, |pdf, cx| pdf.scroll_by(-PDF_LINE, cx)),
@@ -1556,6 +1699,9 @@ impl Render for Viewer {
                 }
             }))
             .on_action(cx.listener(|this, _: &LineDown, _, cx| {
+                if this.scroll_page(PageScroll::Lines(1.), cx) {
+                    return;
+                }
                 match (this.player(cx), &this.pdf) {
                     (Some(player), _) => player.change_volume(-5.),
                     (None, Some(pdf)) => pdf.update(cx, |pdf, cx| pdf.scroll_by(PDF_LINE, cx)),
@@ -1563,6 +1709,9 @@ impl Render for Viewer {
                 }
             }))
             .on_action(cx.listener(|this, _: &PageUp, _, cx| {
+                if this.scroll_page(PageScroll::Pages(-1.), cx) {
+                    return;
+                }
                 match (this.player(cx), &this.pdf) {
                     (Some(player), _) => player.seek_by(-60.),
                     (None, Some(pdf)) => {
@@ -1574,6 +1723,9 @@ impl Render for Viewer {
                 }
             }))
             .on_action(cx.listener(|this, _: &PageDown, _, cx| {
+                if this.scroll_page(PageScroll::Pages(1.), cx) {
+                    return;
+                }
                 match (this.player(cx), &this.pdf) {
                     (Some(player), _) => player.seek_by(60.),
                     (None, Some(pdf)) => pdf.update(cx, |pdf, cx| pdf.scroll_by(pdf.page_height(), cx)),
@@ -1583,15 +1735,23 @@ impl Render for Viewer {
                 }
             }))
             .on_action(cx.listener(|this, _: &Top, _, cx| {
+                if this.scroll_page(PageScroll::Top, cx) {
+                    return;
+                }
                 match (this.player(cx), &this.pdf) {
                     (Some(player), _) => player.seek_to(0.),
                     (None, Some(pdf)) => pdf.update(cx, |pdf, cx| pdf.scroll_to_end(false, cx)),
                     (None, None) => this.scroll(|v| v.top = 0, cx),
                 }
             }))
-            .on_action(cx.listener(|this, _: &Bottom, _, cx| match &this.pdf {
-                Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_to_end(true, cx)),
-                None => this.scroll(|v| v.top = v.max_top(), cx),
+            .on_action(cx.listener(|this, _: &Bottom, _, cx| {
+                if this.scroll_page(PageScroll::Bottom, cx) {
+                    return;
+                }
+                match &this.pdf {
+                    Some(pdf) => pdf.update(cx, |pdf, cx| pdf.scroll_to_end(true, cx)),
+                    None => this.scroll(|v| v.top = v.max_top(), cx),
+                }
             }))
             // macOS shows the menus on the system's menu bar.
             .when(!self.quick && !cfg!(target_os = "macos"), |el| {

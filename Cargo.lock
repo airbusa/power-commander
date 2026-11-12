@@ -5537,10 +5537,12 @@ dependencies = [
 name = "pc-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "crc32fast",
  "dirs 6.0.0",
  "encoding_rs",
+ "flate2",
  "glow",
  "keyring",
  "khronos-egl",
@@ -5550,6 +5552,7 @@ dependencies = [
  "pdfium-render",
  "regex",
  "ring",
+ "roxmltree 0.21.1",
  "russh",
  "russh-config",
  "russh-sftp",

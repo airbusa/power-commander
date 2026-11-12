@@ -32,6 +32,11 @@ russh = { version = "0.65", default-features = false, features = ["ring", "flate
 russh-config = "0.58"
 russh-sftp = "3"
 serde = { version = "1", features = ["derive"] }
+# Books for the viewer: an EPUB's zip, its package's and FB2's XML, pictures
+# inline; GPUI builds all three already.
+flate2 = "1"
+roxmltree = "0.21"
+base64 = "0.22"
 serde_json = "1"
 # Runs the SSH connections; GPUI builds it already.
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "io-util", "sync"] }

@@ -10,6 +10,7 @@ pub mod compare;
 pub mod connections;
 pub mod convert;
 pub mod devices;
+pub mod ebook;
 pub mod edit;
 #[cfg(target_os = "macos")]
 pub mod finder;

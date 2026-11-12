@@ -834,6 +834,8 @@ pub enum Mode {
     Markdown,
     /// Not Lister's: pages rendered by PDFium.
     Pdf,
+    /// Not Lister's: an EPUB's or FB2's text, rendered (crate::ebook).
+    Book,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -867,6 +869,8 @@ pub struct Shown {
     pictures: &'static [&'static str],
     /// The viewer renders Markdown; else it is text.
     markdown: bool,
+    /// An EPUB or FB2, which the viewer renders.
+    pub book: bool,
     /// The front end plays video and sound, and shows office documents.
     plays: bool,
 }
@@ -900,6 +904,7 @@ impl Shown {
             office: None,
             pictures,
             markdown,
+            book: false,
             plays,
         }
     }
@@ -919,12 +924,14 @@ impl Shown {
         let markdown = self.markdown
             && matches!(extension, "md" | "markdown")
             && std::fs::metadata(path)?.len() <= MARKDOWN_LIMIT;
+        let book = self.markdown && crate::ebook::is_book(path);
         let detected = detect(path)?;
         let office = match self.plays && crate::pdf::available() {
             true => crate::convert::converter_for(path),
             false => None,
         };
         self.pdf = extension == "pdf" && crate::pdf::available() || office.is_some();
+        self.book = book;
         self.picture = picture;
         self.media = media;
         self.office = office;
@@ -938,6 +945,7 @@ impl Shown {
             StartMode::Auto if self.pdf => Mode::Pdf,
             StartMode::Auto if html => Mode::Html,
             StartMode::Auto if markdown => Mode::Markdown,
+            StartMode::Auto if self.book => Mode::Book,
             StartMode::Auto => match detected {
                 Detected::Plain => Mode::Text,
                 Detected::Utf8 => Mode::Utf8,
@@ -994,7 +1002,7 @@ impl Shown {
             Mode::Text if self.pdf && self.office.is_none() => {
                 TextFile::text(crate::pdf::text(path)?, lines)
             }
-            Mode::Text | Mode::Picture | Mode::Html | Mode::Pdf => {
+            Mode::Text | Mode::Picture | Mode::Html | Mode::Pdf | Mode::Book => {
                 TextFile::open(path, lines, plain)?
             }
         })
@@ -1013,6 +1021,7 @@ impl Shown {
             Mode::Unicode => "UTF-16".into(),
             Mode::Utf8 => "UTF-8".into(),
             Mode::Markdown => "Markdown".into(),
+            Mode::Book => "Book".into(),
             Mode::Pdf => match &self.office {
                 Some(converter) => format!("PDF by {}", converter.name),
                 None => "PDF".into(),
@@ -1026,6 +1035,7 @@ impl Shown {
             || mode == Mode::Picture && !self.picture
             || mode == Mode::Pdf && !self.pdf
             || mode == Mode::Markdown && !self.markdown
+            || mode == Mode::Book && !self.book
         {
             return false;
         }
@@ -1054,7 +1064,7 @@ impl Shown {
 
     /// Rows, not pictures or pages, which Find goes through.
     pub fn has_rows(&self) -> bool {
-        !matches!(self.mode, Mode::Picture | Mode::Markdown | Mode::Pdf)
+        !matches!(self.mode, Mode::Picture | Mode::Markdown | Mode::Pdf | Mode::Book)
     }
 }
 
