@@ -459,6 +459,18 @@ diff -ruN a/src/kbd.rs b/src/kbd.rs
              .into_any_element()
      }
  }
+diff -ruN a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/lib.rs	2026-11-12 19:17:41.116460935 +0100
+@@ -121,7 +121,7 @@
+ pub use time::{calendar, date_picker, time_field};
+ pub use title_bar::*;
+ pub use virtual_list::{VirtualList, VirtualListScrollHandle, h_virtual_list, v_virtual_list};
+-pub use window_border::{WindowBorder, window_border, window_paddings};
++pub use window_border::{WindowBorder, WindowCornerRadius, top_corners, window_border, window_paddings};
+ pub use window_ext::WindowExt;
+ 
+ rust_i18n::i18n!("locales", fallback = "en");
 diff -ruN a/src/list/list.rs b/src/list/list.rs
 --- a/src/list/list.rs	2006-07-24 03:21:28.000000000 +0200
 +++ b/src/list/list.rs	2026-11-10 08:48:57.491860684 +0100
@@ -827,7 +839,7 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
  
 diff -ruN a/src/root.rs b/src/root.rs
 --- a/src/root.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/root.rs	2026-11-11 17:36:29.321504482 +0100
++++ b/src/root.rs	2026-11-12 19:17:41.116555135 +0100
 @@ -1,3 +1,6 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): notifications paint
 +// above dialogs. Changes are marked "WDS patch".
@@ -864,9 +876,12 @@ diff -ruN a/src/root.rs b/src/root.rs
          }
      }
  
-@@ -443,12 +450,15 @@
+@@ -441,14 +448,21 @@
+         TextSelection::activate_scope(self.active_text_selection_scope(), window, cx);
+     }
  
-     fn style(&self, surface: &mut gpui::Stateful<gpui::Div>, _window: &mut Window, cx: &mut App) {
+-    fn style(&self, surface: &mut gpui::Stateful<gpui::Div>, _window: &mut Window, cx: &mut App) {
++    fn style(&self, surface: &mut gpui::Stateful<gpui::Div>, window: &mut Window, cx: &mut App) {
          use gpui::Refineable as _;
 -        surface.style().refine(
 -            &gpui::StyleRefinement::default()
@@ -874,9 +889,13 @@ diff -ruN a/src/root.rs b/src/root.rs
 -                .bg(cx.theme().tokens.background)
 -                .text_color(cx.theme().foreground),
 -        );
++        // PowerCommander patch: rounded as the frame, see `WindowCornerRadius`.
++        let (top_left, top_right) = crate::top_corners(window, cx);
 +        let style = gpui::StyleRefinement::default()
 +            .font_family(cx.theme().font_family.clone())
-+            .text_color(cx.theme().foreground);
++            .text_color(cx.theme().foreground)
++            .rounded_tl(top_left)
++            .rounded_tr(top_right);
 +        // PowerCommander patch: see `see_through`.
 +        let style = match self.see_through {
 +            true => style,
@@ -886,7 +905,7 @@ diff -ruN a/src/root.rs b/src/root.rs
      }
  
      fn decorate(
-@@ -493,6 +503,12 @@
+@@ -493,6 +507,12 @@
              .debug_selector(|| "root-layers".to_string())
              .children(WindowState::sheet_layer(root.clone(), window, cx))
              .children(WindowState::dialog_layer(&root, window, cx))
@@ -1627,7 +1646,7 @@ diff -ruN a/src/table/state.rs b/src/table/state.rs
              })
 diff -ruN a/src/title_bar.rs b/src/title_bar.rs
 --- a/src/title_bar.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/title_bar.rs	2026-11-12 05:36:14.860931895 +0100
++++ b/src/title_bar.rs	2026-11-12 05:44:08.348953607 +0100
 @@ -1,3 +1,7 @@
 +// Modified for PowerCommander (Apache-2.0, section 4b): the window's buttons
 +// are those the desktop's layout names, and may be the icon theme's pictures
@@ -1832,6 +1851,72 @@ diff -ruN a/src/tree.rs b/src/tree.rs
                              })
                              .into_any_element()
                      })
+diff -ruN a/src/window_border.rs b/src/window_border.rs
+--- a/src/window_border.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/window_border.rs	2026-11-12 19:17:41.116294289 +0100
+@@ -21,6 +21,24 @@
+ /// corners, so keep the generic window wrapper square until rounded content masks exist.
+ pub(crate) const BORDER_RADIUS: Pixels = px(0.0);
+ 
++/// PowerCommander patch: the top corners' radius of a window drawing its own
++/// frame, as the desktop's theme rounds them. The root surface and a title bar
++/// round theirs with `top_corners`, so no background shows past the curve.
++pub struct WindowCornerRadius(pub Pixels);
++
++impl gpui::Global for WindowCornerRadius {}
++
++/// PowerCommander patch: the window's top-left and top-right radius now; none
++/// on a side tiled or maximized, or framed by the system.
++pub fn top_corners(window: &Window, cx: &App) -> (Pixels, Pixels) {
++    let Decorations::Client { tiling } = window.window_decorations() else {
++        return (px(0.0), px(0.0));
++    };
++    let radius = cx.try_global::<WindowCornerRadius>().map_or(BORDER_RADIUS, |radius| radius.0);
++    let round = |tiled: bool| if tiling.top || tiled { px(0.0) } else { radius };
++    (round(tiling.left), round(tiling.right))
++}
++
+ /// Create a new window border.
+ pub fn window_border() -> WindowBorder {
+     WindowBorder::new()
+@@ -155,6 +173,7 @@
+         window.set_client_inset(platform_inset);
+         let window_size = window.window_bounds().get_bounds().size;
+         let is_window_active = window.is_window_active();
++        let (top_left, top_right) = top_corners(window, cx);
+         let border_color = if cx.theme().is_dark() {
+             Hsla {
+                 h: 0.,
+@@ -177,12 +196,8 @@
+             .flex()
+             .flex_col()
+             .overflow_hidden()
+-            .when(!(tiling.top || tiling.right), |div| {
+-                div.rounded_tr(BORDER_RADIUS)
+-            })
+-            .when(!(tiling.top || tiling.left), |div| {
+-                div.rounded_tl(BORDER_RADIUS)
+-            })
++            .rounded_tr(top_right)
++            .rounded_tl(top_left)
+             .when(!tiling.top, |div| div.pt(visual_shadow))
+             .when(!tiling.bottom, |div| div.pb(visual_shadow))
+             .when(!tiling.left, |div| div.pl(visual_shadow))
+@@ -211,12 +226,8 @@
+                     .min_h_0()
+                     .min_w_0()
+                     .overflow_hidden()
+-                    .when(!(tiling.top || tiling.right), |div| {
+-                        div.rounded_tr(BORDER_RADIUS)
+-                    })
+-                    .when(!(tiling.top || tiling.left), |div| {
+-                        div.rounded_tl(BORDER_RADIUS)
+-                    })
++                    .rounded_tr(top_right)
++                    .rounded_tl(top_left)
+                     .border_color(border_color)
+                     .when(!tiling.top, |div| div.border_t(BORDER_SIZE))
+                     .when(!tiling.bottom, |div| div.border_b(BORDER_SIZE))
 diff -ruN a/src/window_ext.rs b/src/window_ext.rs
 --- a/src/window_ext.rs	2006-07-24 03:21:28.000000000 +0200
 +++ b/src/window_ext.rs	2026-11-11 17:36:29.321728788 +0100

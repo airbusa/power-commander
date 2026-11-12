@@ -5,7 +5,7 @@
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::DropdownMenu;
-use gpui_kit::component::{GlobalState, Icon, Sizable, TitleBar, WindowButtonPictures, h_flex};
+use gpui_kit::component::{GlobalState, Icon, Sizable, TitleBar, WindowButtonPictures, WindowCornerRadius, h_flex, top_corners};
 use gpui_kit::*;
 
 use crate::Commander;
@@ -69,7 +69,20 @@ pub(crate) fn title_bar(title: impl Into<SharedString>, window: &Window, cx: &mu
     let title = div().min_w_0().truncate().font_weight(FontWeight::BOLD).child(title.into());
     // Kept clear of the buttons on both sides, as GTK centres it.
     let title = div().absolute().inset_0().px(px(140.)).flex().items_center().justify_center().child(title);
-    Some(TitleBar::new().child(title))
+    let mut bar = TitleBar::new().child(title);
+    // As tall as GTK's, its top corners the window's.
+    if let Some((height, _)) = pc_core::theme::header_bar() {
+        let (top_left, top_right) = top_corners(window, cx);
+        bar = bar.h(px(height)).rounded_tl(top_left).rounded_tr(top_right);
+    }
+    Some(bar)
+}
+
+/// The window's top corners as the GTK theme rounds them, before a window opens.
+pub(crate) fn round_corners(cx: &mut App) {
+    if let Some((_, radius)) = pc_core::theme::header_bar() {
+        cx.set_global(WindowCornerRadius(px(radius)));
+    }
 }
 
 fn own_frame(window: &Window) -> bool {

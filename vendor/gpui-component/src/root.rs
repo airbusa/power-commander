@@ -448,11 +448,15 @@ impl gpui_base::RootPlugin for WindowState {
         TextSelection::activate_scope(self.active_text_selection_scope(), window, cx);
     }
 
-    fn style(&self, surface: &mut gpui::Stateful<gpui::Div>, _window: &mut Window, cx: &mut App) {
+    fn style(&self, surface: &mut gpui::Stateful<gpui::Div>, window: &mut Window, cx: &mut App) {
         use gpui::Refineable as _;
+        // PowerCommander patch: rounded as the frame, see `WindowCornerRadius`.
+        let (top_left, top_right) = crate::top_corners(window, cx);
         let style = gpui::StyleRefinement::default()
             .font_family(cx.theme().font_family.clone())
-            .text_color(cx.theme().foreground);
+            .text_color(cx.theme().foreground)
+            .rounded_tl(top_left)
+            .rounded_tr(top_right);
         // PowerCommander patch: see `see_through`.
         let style = match self.see_through {
             true => style,

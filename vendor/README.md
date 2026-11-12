@@ -21,7 +21,8 @@ a notice, and every change is marked `WDS patch`.
 | `src/menu/menu_item.rs` | PowerCommander patch: menu items are rounded, and the highlighted one is framed in the theme's `ring` colour, as KDE's Breeze menus |
 | `src/menu/popup_menu.rs` | PowerCommander patch: every menu and submenu may be as tall as the window minus 16 px (upstream: menus of over 20 items scroll within half the window, at most 450 px); only a menu taller than that scrolls, by wheel and keys, and no menu shows a scrollbar; `scrollable()` has no effect; `with_menu_items` is public, for a ☰ button's menu of the app's menus |
 | `src/tree.rs` | `Tree::context_menu` builders get the menu's `Context<PopupMenu>` instead of `Context<TreeState>`, so tree menus can have submenus; the row renderer's `selected` is not overridden, so the app can show several selected rows |
-| `src/root.rs`, `src/window_ext.rs` | notifications paint above dialogs (deferred, priority 90); PowerCommander patch: `WindowExt::set_see_through` stops the root painting the window's background, for a window the system's blur or Mica shows through |
+| `src/root.rs`, `src/window_ext.rs` | notifications paint above dialogs (deferred, priority 90); PowerCommander patch: `WindowExt::set_see_through` stops the root painting the window's background, for a window the system's blur or Mica shows through; PowerCommander patch: the root surface's top corners round as the window's (`top_corners`) |
+| `src/window_border.rs`, `src/lib.rs` | PowerCommander patch: the frame of a window drawing its own rounds its top corners by the `WindowCornerRadius` global (the desktop theme's), square on a side tiled or maximized; `top_corners` gives that radius to what paints into the corners (the root surface, a title bar) |
 | `src/styled.rs` | PowerCommander patch: a popup's hairline ring is the theme's `border` colour (upstream: the foreground at 10%), as KDE frames menus |
 | `src/tab/tab_bar.rs` | the segmented tab bar's indicator uses the theme's `tab_active` colour instead of the background, so the app can tint the active tab |
 | `src/tab/tab.rs` | PowerCommander patch: the selected tab of the `Tab` variant has a 2 px line of the theme's `primary` colour on top, as KDE's Breeze tabs |
@@ -51,7 +52,7 @@ diff against upstream; every change is marked `PowerCommander patch`.
 | `src/linux/clipboard_files.rs` (new), `src/linux.rs` | files on the clipboard as file managers put them: `text/uri-list` with GNOME's `x-special/gnome-copied-files` and KDE's `application/x-kde-cutselection`; an item's `ExternalPaths` entry is the files, its string entry's metadata `cut` marks a cut |
 | `src/linux/wayland/client.rs`, `src/linux/wayland/clipboard.rs` | an item with files offers those types too and sends each as asked; another program's URI list reads as files, cut or copied, before its text |
 | `src/linux/x11/client.rs`, `src/linux/x11/clipboard.rs` | the same on X11: the types are stored beside the text, and a URI list is read before the text |
-| `src/linux/wayland/client.rs`, `src/linux/wayland/window.rs` | a blurred window background also through `ext-background-effect-v1` (blurring the window's region), where KDE's own blur protocol is gone (KWin 6.8) |
+| `src/linux/wayland/client.rs`, `src/linux/wayland/window.rs` | a blurred window background also through `ext-background-effect-v1` (blurring the window inside its shadow, given again on every resize), where KDE's own blur protocol is gone (KWin 6.8) |
 
 ### Upgrading GPUI Kit
 

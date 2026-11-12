@@ -21,6 +21,24 @@ const RESIZE_HIT_SIZE: Pixels = px(4.0);
 /// corners, so keep the generic window wrapper square until rounded content masks exist.
 pub(crate) const BORDER_RADIUS: Pixels = px(0.0);
 
+/// PowerCommander patch: the top corners' radius of a window drawing its own
+/// frame, as the desktop's theme rounds them. The root surface and a title bar
+/// round theirs with `top_corners`, so no background shows past the curve.
+pub struct WindowCornerRadius(pub Pixels);
+
+impl gpui::Global for WindowCornerRadius {}
+
+/// PowerCommander patch: the window's top-left and top-right radius now; none
+/// on a side tiled or maximized, or framed by the system.
+pub fn top_corners(window: &Window, cx: &App) -> (Pixels, Pixels) {
+    let Decorations::Client { tiling } = window.window_decorations() else {
+        return (px(0.0), px(0.0));
+    };
+    let radius = cx.try_global::<WindowCornerRadius>().map_or(BORDER_RADIUS, |radius| radius.0);
+    let round = |tiled: bool| if tiling.top || tiled { px(0.0) } else { radius };
+    (round(tiling.left), round(tiling.right))
+}
+
 /// Create a new window border.
 pub fn window_border() -> WindowBorder {
     WindowBorder::new()
@@ -155,6 +173,7 @@ impl RenderOnce for WindowBorder {
         window.set_client_inset(platform_inset);
         let window_size = window.window_bounds().get_bounds().size;
         let is_window_active = window.is_window_active();
+        let (top_left, top_right) = top_corners(window, cx);
         let border_color = if cx.theme().is_dark() {
             Hsla {
                 h: 0.,
@@ -177,12 +196,8 @@ impl RenderOnce for WindowBorder {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .when(!(tiling.top || tiling.right), |div| {
-                div.rounded_tr(BORDER_RADIUS)
-            })
-            .when(!(tiling.top || tiling.left), |div| {
-                div.rounded_tl(BORDER_RADIUS)
-            })
+            .rounded_tr(top_right)
+            .rounded_tl(top_left)
             .when(!tiling.top, |div| div.pt(visual_shadow))
             .when(!tiling.bottom, |div| div.pb(visual_shadow))
             .when(!tiling.left, |div| div.pl(visual_shadow))
@@ -211,12 +226,8 @@ impl RenderOnce for WindowBorder {
                     .min_h_0()
                     .min_w_0()
                     .overflow_hidden()
-                    .when(!(tiling.top || tiling.right), |div| {
-                        div.rounded_tr(BORDER_RADIUS)
-                    })
-                    .when(!(tiling.top || tiling.left), |div| {
-                        div.rounded_tl(BORDER_RADIUS)
-                    })
+                    .rounded_tr(top_right)
+                    .rounded_tl(top_left)
                     .border_color(border_color)
                     .when(!tiling.top, |div| div.border_t(BORDER_SIZE))
                     .when(!tiling.bottom, |div| div.border_b(BORDER_SIZE))

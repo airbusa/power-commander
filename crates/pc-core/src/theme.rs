@@ -192,6 +192,31 @@ pub fn sidebar_see_through() -> bool {
     cfg!(any(target_os = "macos", windows)) || kwin
 }
 
+/// GTK's header bar: its height and top corner radius, as the GTK theme draws
+/// them (measured with GTK 3, which GNOME Terminal is); libadwaita's, as
+/// GNOME's own apps draw them, for a theme not known. None off Linux.
+pub fn header_bar() -> Option<(f32, f32)> {
+    static BAR: OnceLock<Option<(f32, f32)>> = OnceLock::new();
+    let find = || {
+        if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
+            return None;
+        }
+        let theme = interface_setting("gtk-theme").unwrap_or_default();
+        Some(header_bar_of(&theme))
+    };
+    *BAR.get_or_init(find)
+}
+
+/// "Yaru-dark" draws as "Yaru" does.
+fn header_bar_of(theme: &str) -> (f32, f32) {
+    match theme.split('-').next().unwrap_or_default() {
+        "Breeze" => (48., 6.),
+        "Adwaita" => (47., 8.),
+        "Yaru" => (47., 12.),
+        _ => (47., 12.),
+    }
+}
+
 /// The window buttons GTK draws, from the desktop's icon theme: minimize,
 /// maximize, restore and close, as SVG files. None without GNOME's settings.
 pub fn window_buttons() -> Option<&'static [PathBuf; 4]> {
@@ -441,6 +466,14 @@ fn luminance(rgb: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn header_bars_by_theme() {
+        assert_eq!(header_bar_of("Breeze-Dark"), (48., 6.));
+        assert_eq!(header_bar_of("Yaru-prussiangreen-dark"), (47., 12.));
+        assert_eq!(header_bar_of("Adwaita"), (47., 8.));
+        assert_eq!(header_bar_of(""), (47., 12.));
+    }
 
     const BREEZE_DARK: &str = "[Colors:Header]\nBackgroundNormal=41,44,48\n\
         [Colors:Selection]\nBackgroundNormal=61,174,233\nForegroundNormal=252,252,252\n\
