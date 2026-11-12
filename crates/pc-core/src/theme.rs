@@ -192,29 +192,62 @@ pub fn sidebar_see_through() -> bool {
     cfg!(any(target_os = "macos", windows)) || kwin
 }
 
-/// GTK's header bar: its height and top corner radius, as the GTK theme draws
-/// them (measured with GTK 3, which GNOME Terminal is); libadwaita's, as
-/// GNOME's own apps draw them, for a theme not known. None off Linux.
-pub fn header_bar() -> Option<(f32, f32)> {
-    static BAR: OnceLock<Option<(f32, f32)>> = OnceLock::new();
+/// GTK's header bar as the GTK theme draws it (measured with GTK 3, which
+/// GNOME Terminal is); libadwaita's, as GNOME's own apps draw it, for a theme
+/// not known.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HeaderBar {
+    pub height: f32,
+    /// Its top corners'.
+    pub radius: f32,
+    /// Its colour in the window focused, then not ("backdrop"), light.
+    pub light: [u32; 2],
+    pub dark: [u32; 2],
+}
+
+impl HeaderBar {
+    pub fn color(&self, dark: bool, focused: bool) -> u32 {
+        let [active, backdrop] = if dark { self.dark } else { self.light };
+        if focused { active } else { backdrop }
+    }
+}
+
+/// The GTK theme's header bar; none off Linux.
+pub fn header_bar() -> Option<HeaderBar> {
+    static BAR: OnceLock<Option<HeaderBar>> = OnceLock::new();
     let find = || {
         if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
             return None;
         }
         let theme = interface_setting("gtk-theme").unwrap_or_default();
-        Some(header_bar_of(&theme))
+        // Breeze's colours are the KDE scheme's, which KDE writes for GTK.
+        let colors = dirs::config_dir().and_then(|dir| std::fs::read_to_string(dir.join("gtk-3.0/colors.css")).ok());
+        Some(header_bar_of(&theme, colors.as_deref()))
     };
     *BAR.get_or_init(find)
 }
 
 /// "Yaru-dark" draws as "Yaru" does.
-fn header_bar_of(theme: &str) -> (f32, f32) {
+fn header_bar_of(theme: &str, kde_colors: Option<&str>) -> HeaderBar {
+    let bar = |height, radius, light, dark| HeaderBar { height, radius, light, dark };
+    let libadwaita = bar(47., 12., [0xffffff, 0xfafafa], [0x303030, 0x242424]);
     match theme.split('-').next().unwrap_or_default() {
-        "Breeze" => (48., 6.),
-        "Adwaita" => (47., 8.),
-        "Yaru" => (47., 12.),
-        _ => (47., 12.),
+        "Breeze" => {
+            let color = |name: &str| kde_colors.and_then(|css| css_color(css, name));
+            let kde = color("theme_titlebar_background_breeze").zip(color("theme_titlebar_background_backdrop_breeze"));
+            let [active, backdrop] = kde.map_or([0xdee0e2, 0xeff0f1], |(active, backdrop)| [active, backdrop]);
+            bar(48., 6., [active, backdrop], kde.map_or(libadwaita.dark, |_| [active, backdrop]))
+        }
+        "Adwaita" => bar(47., 8., [0xdddad6, 0xf6f5f4], [0x282828, 0x353535]),
+        "Yaru" => bar(47., 12., [0xebebeb, 0xfafafa], [0x222222, 0x2c2c2c]),
+        _ => libadwaita,
     }
+}
+
+/// `@define-color name #rrggbb;` of GTK's CSS.
+fn css_color(css: &str, name: &str) -> Option<u32> {
+    let line = css.lines().find_map(|line| line.trim().strip_prefix("@define-color ")?.strip_prefix(name)?.strip_prefix(' '))?;
+    u32::from_str_radix(line.trim().trim_end_matches(';').strip_prefix('#')?, 16).ok()
 }
 
 /// The window buttons GTK draws, from the desktop's icon theme: minimize,
@@ -469,10 +502,13 @@ mod tests {
 
     #[test]
     fn header_bars_by_theme() {
-        assert_eq!(header_bar_of("Breeze-Dark"), (48., 6.));
-        assert_eq!(header_bar_of("Yaru-prussiangreen-dark"), (47., 12.));
-        assert_eq!(header_bar_of("Adwaita"), (47., 8.));
-        assert_eq!(header_bar_of(""), (47., 12.));
+        let kde = "@define-color theme_titlebar_background_backdrop_breeze #31363b;\n@define-color theme_titlebar_background_breeze #2a2e32;\n";
+        let breeze = header_bar_of("Breeze-Dark", Some(kde));
+        assert_eq!((breeze.height, breeze.radius, breeze.light), (48., 6., [0x2a2e32, 0x31363b]));
+        assert_eq!(header_bar_of("Breeze", None).color(false, false), 0xeff0f1);
+        assert_eq!(header_bar_of("Yaru-prussiangreen-dark", None).color(true, true), 0x222222);
+        assert_eq!(header_bar_of("Adwaita", None).radius, 8.);
+        assert_eq!(header_bar_of("", None).color(false, true), 0xffffff);
     }
 
     const BREEZE_DARK: &str = "[Colors:Header]\nBackgroundNormal=41,44,48\n\
