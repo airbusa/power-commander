@@ -12,10 +12,12 @@ use pc_core::{Entry, icons};
 
 use crate::Commander;
 
-/// Applications' icons by path and size in pixels: none while being made,
-/// or where it failed.
+/// An application's path and an icon's size in pixels.
+type Key = (PathBuf, u32);
+
+/// Applications' icons: none while being made, or where it failed.
 #[derive(Default)]
-pub(crate) struct AppIcons(RefCell<HashMap<(PathBuf, u32), Option<Arc<RenderImage>>>>);
+pub(crate) struct AppIcons(RefCell<HashMap<Key, Option<Arc<RenderImage>>>>);
 
 impl Commander {
     /// `entry`'s icon in panel `ix`, `size` high.

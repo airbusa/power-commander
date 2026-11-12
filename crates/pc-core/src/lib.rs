@@ -11,6 +11,8 @@ pub mod connections;
 pub mod convert;
 pub mod devices;
 pub mod edit;
+#[cfg(target_os = "macos")]
+pub mod finder;
 pub mod ftp;
 pub mod html;
 pub mod icons;
@@ -864,6 +866,24 @@ impl Panel {
             .next()
             .map(|c| c.as_os_str().to_owned());
         self.go_to(self.path.clone(), first)
+    }
+
+    /// Renames an entry of the folder, here or on a server; the cursor on it then.
+    pub fn rename_entry(&mut self, name: &OsStr, to: &str) -> io::Result<()> {
+        self.on_disk()?;
+        let to = to.trim();
+        if to.is_empty() || to.contains('/') || to == "." || to == PARENT {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{to}: not a name")));
+        }
+        let (from, target) = (self.path.join(name), self.path.join(to));
+        let fs = self.fs();
+        // Only its case changed, it is there already: on macOS and Windows, itself.
+        let itself = name.to_string_lossy().eq_ignore_ascii_case(to);
+        if !itself && fs.metadata(&target).is_ok() {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{to} exists already")));
+        }
+        fs.rename(&from, &target)?;
+        self.go_to(self.path.clone(), Some(OsString::from(to)))
     }
 
     /// The chosen entries, to the trash or for good; stops at the first error.

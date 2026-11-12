@@ -9,6 +9,8 @@ mod compare_view;
 mod connections_dialog;
 mod drag_drop;
 mod editor;
+#[cfg(target_os = "macos")]
+mod file_menu;
 mod file_tools;
 mod find_dialog;
 mod header;
@@ -1304,6 +1306,8 @@ impl Commander {
             View::Brief => self.render_brief(ix, cx),
             View::Thumbnails => self.render_thumbnails(ix, cx),
         };
+        #[cfg(target_os = "macos")]
+        let rows = self.with_file_menu(ix, rows, cx);
         let theme = cx.theme();
         let tab_list = self.tab_list.as_ref().filter(|(side, ..)| *side == ix);
         let ring = theme.ring;
@@ -1547,6 +1551,15 @@ impl Commander {
                     this.enter(window, cx);
                 }
             }))
+            // macOS: the menu is for the row right-clicked, as Finder's (file_menu).
+            .map(|el| {
+                #[cfg(target_os = "macos")]
+                let el = el.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, _, window, cx| this.right_click(ix, row, window, cx)),
+                );
+                el
+            })
     }
 }
 
@@ -1754,6 +1767,8 @@ impl Render for Commander {
                     .hover(|style| style.bg(cx.theme().list_active))
                     .on_drag(SplitDrag, |_, _, _, cx| cx.new(|_| EmptyView)),
             );
+        #[cfg(target_os = "macos")]
+        let panels = self.file_menu_actions(panels, cx);
         let main = v_flex()
             .flex_1()
             .min_w_0()
