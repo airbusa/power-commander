@@ -136,6 +136,11 @@ impl Player {
         let _ = self.command(&["seek", &seconds.to_string(), "relative"]);
     }
 
+    /// To `seconds` from the start, exactly there.
+    pub fn seek_seconds(&self, seconds: f64) {
+        let _ = self.command(&["seek", &seconds.max(0.).to_string(), "absolute+exact"]);
+    }
+
     /// To a share of the whole, 0 to 1: exactly there, not at the keyframe before.
     pub fn seek_to(&self, share: f64) {
         let percent = (share.clamp(0., 1.) * 100.).to_string();

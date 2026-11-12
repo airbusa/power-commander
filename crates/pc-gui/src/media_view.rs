@@ -5,6 +5,7 @@ use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -12,6 +13,7 @@ use gpui_kit::component::{ActiveTheme, IconNamed, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::media::{Player, clock};
+use pc_core::resume;
 
 /// The player's icons, Lucide's (assets/media).
 #[derive(Clone, Copy)]
@@ -57,8 +59,20 @@ pub struct MediaView {
     /// Where the seek bar is, for the mouse.
     bar: Rc<Cell<Bounds<Pixels>>>,
     seeking: bool,
+    /// The file's fingerprint once made, to go on where it was left
+    /// (pc_core::resume); none in Quick View, which only shows it.
+    fingerprint: Option<String>,
+    /// Gone to where it was left, or found there was nowhere to go.
+    resumed: bool,
+    /// "Continuing at 12:34", for a moment.
+    continued: Option<f64>,
+    /// When the place was last saved while playing.
+    saved: Instant,
     _frames: Task<()>,
 }
+
+/// While playing, the place is saved this often.
+const SAVE_EVERY: Duration = Duration::from_secs(15);
 
 impl MediaView {
     /// `paused`: Quick View's, which shows what the cursor passes.
@@ -67,6 +81,18 @@ impl MediaView {
         let player = Player::open(&path, paused, move || {
             let _ = sent.unbounded_send(());
         });
+        if !paused {
+            let print = path.clone();
+            let printing = cx.background_executor().spawn(async move { resume::fingerprint(&print).ok() });
+            cx.spawn(async move |this, cx| {
+                let fingerprint = printing.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.fingerprint = fingerprint;
+                    this.resume(cx);
+                });
+            })
+            .detach();
+        }
         let frames = cx.spawn(async move |this, cx| {
             while received.next().await.is_some() {
                 // Notices come in bursts; one redraw takes them all.
@@ -83,6 +109,10 @@ impl MediaView {
             stale: Vec::new(),
             bar: Rc::default(),
             seeking: false,
+            fingerprint: None,
+            resumed: false,
+            continued: None,
+            saved: Instant::now(),
             _frames: frames,
         }
     }
@@ -103,7 +133,50 @@ impl MediaView {
             let image = Arc::new(RenderImage::new([image::Frame::new(buffer)]));
             self.stale.extend(self.image.replace(image));
         }
+        self.resume(cx);
+        if self.saved.elapsed() > SAVE_EVERY && self.player().is_some_and(|player| !player.state().paused) {
+            self.save();
+        }
         cx.notify();
+    }
+
+    /// Once its length is known: a long one goes on where it was left.
+    fn resume(&mut self, cx: &mut Context<Self>) {
+        let (Some(fingerprint), Some(player)) = (&self.fingerprint, self.player()) else {
+            return;
+        };
+        let duration = player.state().duration;
+        if self.resumed || duration <= 0. {
+            return;
+        }
+        self.resumed = true;
+        let Some(at) = resume::left_at(fingerprint).filter(|at| duration >= resume::MEDIA_MIN && *at < duration) else {
+            return;
+        };
+        player.seek_seconds(at);
+        self.continued = Some(at);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(4)).await;
+            let _ = this.update(cx, |this, cx| {
+                this.continued = None;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Where a long one is now, to go on from next time; not before it went back there.
+    fn save(&mut self) {
+        self.saved = Instant::now();
+        let (Some(fingerprint), Some(player)) = (&self.fingerprint, self.player()) else {
+            return;
+        };
+        let state = player.state();
+        if !self.resumed || state.duration < resume::MEDIA_MIN {
+            return;
+        }
+        let name = self.path.file_name().unwrap_or_default().to_string_lossy();
+        let _ = resume::leave(fingerprint, &name, state.position, state.duration);
     }
 
     /// To where the mouse is on the seek bar.
@@ -112,6 +185,12 @@ impl MediaView {
         if let Some(player) = self.player().filter(|_| bar.size.width > px(0.)) {
             player.seek_to(((x - bar.origin.x) / bar.size.width) as f64);
         }
+    }
+}
+
+impl Drop for MediaView {
+    fn drop(&mut self) {
+        self.save();
     }
 }
 
@@ -265,6 +344,21 @@ impl Render for MediaView {
                         }
                     })
                     .child(picture)
+                    .when_some(self.continued, |el, at| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .top_3()
+                                .left_3()
+                                .px_3()
+                                .py_1()
+                                .rounded_md()
+                                .bg(gpui_kit::black().opacity(0.6))
+                                .text_color(gpui_kit::white())
+                                .text_sm()
+                                .child(format!("Continuing at {}", clock(at))),
+                        )
+                    })
                     .when_some(notice, |el, notice| {
                         el.child(
                             div()
