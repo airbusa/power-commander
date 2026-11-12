@@ -140,6 +140,8 @@ fn main() {
     name_the_app();
     let app = gpui_kit::application().with_assets(AppAssets);
     app.run(|cx| {
+        #[cfg(target_os = "macos")]
+        dock_icon();
         gpui_kit::init(cx);
         let keys = Some(CONTEXT);
         cx.bind_keys([
@@ -231,6 +233,22 @@ fn name_the_app() {
     // SAFETY: the dictionary made for an executable without a bundle is a mutable one.
     let info: Retained<NSMutableDictionary<NSString, AnyObject>> = unsafe { Retained::cast_unchecked(info) };
     info.insert(ns_string!("CFBundleName"), ns_string!("Power Commander"));
+}
+
+/// Run outside its bundle, as by `cargo run`: the Dock shows its icon all the same.
+#[cfg(target_os = "macos")]
+fn dock_icon() {
+    use objc2::{AllocAnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::{NSBundle, NSString, ns_string};
+    const ICON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packaging/macos/PowerCommander.icns");
+    let bundled = NSBundle::mainBundle().infoDictionary().is_some_and(|info| info.objectForKey(ns_string!("CFBundleIconFile")).is_some());
+    let Some(mtm) = MainThreadMarker::new().filter(|_| !bundled) else {
+        return;
+    };
+    if let Some(icon) = NSImage::initWithContentsOfFile(NSImage::alloc(), &NSString::from_str(ICON)) {
+        unsafe { NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&icon)) };
+    }
 }
 
 /// Where Settings opens from other windows.
