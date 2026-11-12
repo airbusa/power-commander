@@ -299,6 +299,8 @@ struct Viewer {
     markdown: Option<SharedString>,
     /// The Book mode's book as HTML, or why it cannot be read.
     book: Option<Result<SharedString, String>>,
+    /// The book's text as its minimap shows it.
+    book_map: Option<SharedString>,
     /// The book's fingerprint, by which its place is kept (pc_core::resume).
     book_print: Option<String>,
     /// Where the book was left, until scrolled there once it is laid out.
@@ -364,15 +366,25 @@ enum PageScroll {
 
 struct ViewerMap(WeakEntity<Viewer>);
 
-/// The minimap's view of a rendered Markdown page: its source lines,
-/// scrolled as far through as the page.
+/// The minimap's view of a rendered Markdown page or book: its source lines
+/// or the book's text, scrolled as far through as the page.
 struct MarkdownMap(WeakEntity<Viewer>);
+
+impl Viewer {
+    /// What the rendered page's minimap shows.
+    fn page_text(&self) -> Option<&SharedString> {
+        match self.shown.mode {
+            Mode::Book => self.book_map.as_ref(),
+            _ => self.markdown.as_ref(),
+        }
+    }
+}
 
 impl MarkdownMap {
     /// Source lines, and the page's scroll, visible and scrollable heights.
     fn page(&self, cx: &App) -> Option<(usize, f32, f32, f32)> {
         let viewer = self.0.upgrade()?.read(cx);
-        let lines = viewer.markdown.as_ref()?.lines().count().max(1);
+        let lines = viewer.page_text()?.lines().count().max(1);
         let scroll = &viewer.markdown_scroll;
         let shown = f32::from(scroll.bounds().size.height);
         let max = f32::from(scroll.max_offset().y);
@@ -396,7 +408,7 @@ impl minimap::Source for MarkdownMap {
         let Some(source) = self
             .0
             .upgrade()
-            .and_then(|viewer| viewer.read(cx).markdown.clone())
+            .and_then(|viewer| viewer.read(cx).page_text().cloned())
         else {
             return Vec::new();
         };
@@ -564,6 +576,7 @@ impl Viewer {
             size: file_size(&shown, &text),
             markdown: markdown(&shown, &text),
             book: None,
+            book_map: None,
             book_print: None,
             book_resume: None,
             book_continued: None,
@@ -1393,12 +1406,15 @@ impl Viewer {
 
     /// The Book mode's book read, and where it was left; nothing else is a book.
     fn open_book(&mut self) {
-        (self.book, self.book_print, self.book_resume) = (None, None, None);
+        (self.book, self.book_map, self.book_print, self.book_resume) = (None, None, None, None);
         if self.shown.mode != Mode::Book {
             return;
         }
         let path = self.shown.path().to_owned();
         self.book = Some(ebook::html(&path).map(SharedString::from).map_err(|err| err.to_string()));
+        if let Some(Ok(html)) = &self.book {
+            self.book_map = Some(ebook::minimap_text(html).into());
+        }
         // Never in Quick View, which only shows it.
         if !self.quick {
             self.book_print = resume::fingerprint(&path).ok();
@@ -1588,9 +1604,9 @@ impl Render for Viewer {
         };
         // The PDF view has its own, of page thumbnails.
         let minimap = match self.shown.mode {
-            Mode::Picture | Mode::Pdf | Mode::Book => None,
+            Mode::Picture | Mode::Pdf => None,
             _ if !crate::minimap_shown(cx) => None,
-            Mode::Markdown => Some(self.markdown_minimap.clone()),
+            Mode::Markdown | Mode::Book => Some(self.markdown_minimap.clone()),
             _ => Some(self.minimap.clone()),
         };
         let header = (!self.quick).then(|| crate::header::title_bar(title(self.shown.path()), window, cx)).flatten();

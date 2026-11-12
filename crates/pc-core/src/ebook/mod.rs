@@ -11,11 +11,36 @@ use std::path::Path;
 use base64::Engine as _;
 use regex::{Captures, Regex};
 
+mod style;
+
 pub const EXTENSIONS: &[&str] = &["epub", "fb2", "mobi", "azw", "azw3", "prc"];
 
 pub fn is_book(path: &Path) -> bool {
     let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
     extension.is_some_and(|extension| EXTENSIONS.contains(&extension.as_str()))
+}
+
+/// The book's text for the minimap: its blocks wrapped at 100 columns, so a
+/// long paragraph takes as many rows as it takes room on the page.
+pub fn minimap_text(html: &str) -> String {
+    let mut out = String::new();
+    for line in crate::html::to_text(html).lines() {
+        let mut row = String::new();
+        for word in line.split_whitespace() {
+            if !row.is_empty() && row.chars().count() + 1 + word.chars().count() > 100 {
+                out.push_str(&row);
+                out.push('\n');
+                row.clear();
+            }
+            if !row.is_empty() {
+                row.push(' ');
+            }
+            row.push_str(word);
+        }
+        out.push_str(&row);
+        out.push('\n');
+    }
+    out
 }
 
 /// The book as one HTML document.
@@ -166,6 +191,14 @@ fn epub(zip: &Zip) -> io::Result<String> {
         .filter(|node| node.tag_name().name() == "itemref")
         .filter_map(|itemref| itemref.attribute("idref"))
         .collect();
+    let mut sheet = style::Stylesheet::default();
+    for (href, kind) in manifest.values() {
+        if *kind == "text/css"
+            && let Ok(css) = zip.text(&resolve(base, href))
+        {
+            sheet.add(&css);
+        }
+    }
     let mut html = String::new();
     for id in spine {
         let Some((href, kind)) = manifest.get(id) else {
@@ -177,20 +210,20 @@ fn epub(zip: &Zip) -> io::Result<String> {
         let chapter = resolve(base, href);
         // A chapter that is not there leaves a gap, not an unreadable book.
         if let Ok(xhtml) = zip.text(&chapter) {
-            html.push_str(&chapter_html(zip, &chapter, &xhtml));
+            html.push_str(&chapter_html(zip, &chapter, &xhtml, &mut sheet));
         }
     }
     if html.trim().is_empty() {
         return Err(invalid("the book has no text"));
     }
-    Ok(html)
+    Ok(sheet.apply(&html))
 }
 
 /// Elements that have no end, `<br/>` and the like.
 const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
 
-/// A chapter's body, its pictures inline, its links only text.
-fn chapter_html(zip: &Zip, chapter: &str, xhtml: &str) -> String {
+/// A chapter's body, its pictures inline, its links only text; its own CSS to `sheet`.
+fn chapter_html(zip: &Zip, chapter: &str, xhtml: &str, sheet: &mut style::Stylesheet) -> String {
     use std::sync::LazyLock;
     static BODY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<body[^>]*>(.*)</body\s*>").unwrap());
     static DROPPED: LazyLock<Regex> =
@@ -201,6 +234,10 @@ fn chapter_html(zip: &Zip, chapter: &str, xhtml: &str) -> String {
     });
     static IMG_SRC: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r#"(?is)(<img\b[^>]*?\bsrc\s*=\s*)(["'])(.*?)["']"#).unwrap());
+    static STYLE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<style\b[^>]*>(.*?)</style\s*>").unwrap());
+    for css in STYLE.captures_iter(xhtml) {
+        sheet.add(&css[1]);
+    }
     let body = BODY.captures(xhtml).and_then(|body| body.get(1)).map_or(xhtml, |body| body.as_str());
     let body = DROPPED.replace_all(body, "");
     let folder = folder_of(chapter);
@@ -314,10 +351,13 @@ fn kindle(data: Vec<u8>) -> io::Result<String> {
         Regex::new(r"(?is)<\?xml[^>]*>|<!DOCTYPE[^>]*>|<head\b.*?</head\s*>|</?html\b[^>]*>|</?body\b[^>]*>").unwrap()
     });
     static PAGE_BREAK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<mbp:pagebreak[^>]*>").unwrap());
-    let text = match text.rfind("</html>") {
-        Some(end) => &text[..end + "</html>".len()],
-        None => &text[..],
+    // An AZW3's CSS follows its text.
+    let (text, css) = match text.rfind("</html>") {
+        Some(end) => text.split_at(end + "</html>".len()),
+        None => (&text[..], ""),
     };
+    let mut sheet = style::Stylesheet::default();
+    sheet.add(css);
     let html = RECINDEX.replace_all(text, |found: &Captures| match found[1].parse().ok().and_then(picture) {
         Some(url) => format!(r#"<img src="{url}"/>"#),
         None => String::new(),
@@ -332,7 +372,7 @@ fn kindle(data: Vec<u8>) -> io::Result<String> {
     if html.trim().is_empty() {
         return Err(invalid("the book has no text"));
     }
-    Ok(html)
+    Ok(sheet.apply(&html))
 }
 
 /// PalmDOC's LZ77: literals, runs of them, a space and a letter, and copies
