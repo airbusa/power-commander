@@ -61,13 +61,13 @@ struct Mounting;
 pub(crate) struct SidebarDrag;
 
 impl Sidebar {
-    pub(crate) fn new(tab: Option<SidebarTab>, width: f32, hidden: bool) -> Self {
+    pub(crate) fn new(tab: Option<SidebarTab>, width: f32, hidden: bool, opacity: u8) -> Self {
         Sidebar {
             tab,
             width: if width > 0. { width } else { WIDTH },
             slides: 0,
             closing: None,
-            tint: theme::sidebar_tint(),
+            tint: theme::sidebar_tint(opacity),
             tree: FolderTree::new(hidden),
             tree_scroll: UniformListScrollHandle::new(),
             followed: None,
@@ -128,6 +128,13 @@ impl Commander {
         }
         self.set_backdrop(window, cx);
         self.reload_menus(cx);
+        cx.notify();
+    }
+
+    /// The sidebar `opacity` percent over the desktop: in the settings, or tried in their dialog.
+    pub(crate) fn show_sidebar_opacity(&mut self, opacity: u8, window: &mut Window, cx: &mut Context<Self>) {
+        self.sidebar.tint = theme::sidebar_tint(opacity);
+        self.set_backdrop(window, cx);
         cx.notify();
     }
 

@@ -149,10 +149,12 @@ fn on_kde() -> bool {
 }
 
 /// How much of the window colour the sidebar paints over the system's own
-/// material behind it: macOS's blur, Windows 11's Mica. None: solid, as on
-/// Linux, where only the compositor could blur what is behind.
-pub fn sidebar_tint() -> Option<f32> {
-    cfg!(any(target_os = "macos", windows)).then_some(0.)
+/// material behind it, macOS's blur, Windows 11's Mica, from its opacity in
+/// percent. None: solid, at 100% and on Linux, where only the compositor
+/// could blur what is behind.
+pub fn sidebar_tint(opacity: u8) -> Option<f32> {
+    let see_through = cfg!(any(target_os = "macos", windows)) && opacity < 100;
+    see_through.then_some(f32::from(opacity) / 100.)
 }
 
 /// The window buttons GTK draws, from the desktop's icon theme: minimize,

@@ -381,7 +381,8 @@ impl Commander {
         }
         let colors = appearance::apply(&palette(&settings, window), cx);
         menus::bind(&settings.keys, None, cx);
-        let sidebar = sidebar::Sidebar::new(session.sidebar, session.sidebar_width, settings.show_hidden);
+        let opacity = settings.sidebar_opacity.0;
+        let sidebar = sidebar::Sidebar::new(session.sidebar, session.sidebar_width, settings.show_hidden, opacity);
         menus::set(settings.appearance, &|command| sidebar.shows(command), cx);
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             if this.settings.appearance == Appearance::System {
@@ -472,6 +473,9 @@ impl Commander {
     }
 
     fn apply_settings(&mut self, settings: Settings, window: &mut Window, cx: &mut Context<Self>) {
+        if settings.sidebar_opacity != self.settings.sidebar_opacity {
+            self.show_sidebar_opacity(settings.sidebar_opacity.0, window, cx);
+        }
         if settings.filter() != self.settings.filter() {
             for side in &mut self.panels {
                 side.tabs.set_filter(settings.filter());

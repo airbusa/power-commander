@@ -7,6 +7,19 @@ use serde::de::DeserializeOwned;
 use crate::Filter;
 use serde::{Deserialize, Serialize};
 
+/// How much the sidebar covers the desktop behind it, in percent, where it
+/// can be see-through (macOS's blur, Windows 11's Mica): 100 is solid.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SidebarOpacity(pub u8);
+
+/// About ForkLift's: the desktop shows through, dimmed.
+impl Default for SidebarOpacity {
+    fn default() -> Self {
+        SidebarOpacity(75)
+    }
+}
+
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -16,6 +29,7 @@ pub struct Settings {
     pub tab_header_always: bool,
     pub show_hidden: bool,
     pub show_system: bool,
+    pub sidebar_opacity: SidebarOpacity,
     pub viewer: ViewerSettings,
     pub editor: EditorSettings,
     /// Files' own programs for Enter, F3 and F4.

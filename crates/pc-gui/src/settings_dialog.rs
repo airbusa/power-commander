@@ -3,10 +3,11 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::radio::RadioGroup;
+use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use pc_core::settings::{MenuStyle, PAGES, Settings, StartFont, StartMode};
+use pc_core::settings::{MenuStyle, PAGES, Settings, SidebarOpacity, StartFont, StartMode};
 
 use crate::Commander;
 
@@ -49,7 +50,21 @@ pub fn open(
     let binary_width = input(settings.viewer.binary_width.to_string(), true, cx);
     let limit = input(settings.editor.limit_mb.to_string(), true, cx);
     let external = input(settings.editor.external.clone(), false, cx);
+    let opacity = cx.new(|_| {
+        let value = f32::from(settings.sidebar_opacity.0);
+        SliderState::new().min(0.).max(100.).step(5.).default_value(value)
+    });
     let view = cx.new(|cx| {
+        // Tried on the sidebar as it moves; closed, the dialog puts back what was applied.
+        let trying = cx.subscribe_in(&opacity, window, |this: &mut SettingsDialog, _, event: &SliderEvent, window, cx| {
+            let SliderEvent::Change(value) = event else {
+                return;
+            };
+            let opacity = value.end().round().clamp(0., 100.) as u8;
+            this.draft.sidebar_opacity = SidebarOpacity(opacity);
+            let _ = this.commander.update(cx, |commander, cx| commander.show_sidebar_opacity(opacity, window, cx));
+            cx.notify();
+        });
         // Each input's text into the draft, as typed.
         let bind = |cx: &mut Context<SettingsDialog>,
                     input: &Entity<InputState>,
@@ -86,6 +101,8 @@ pub fn open(
             binary_width,
             limit,
             external,
+            opacity,
+            _opacity: trying,
             commander,
             saved: settings.clone(),
             draft: settings,
@@ -93,11 +110,13 @@ pub fn open(
         }
     });
     window.open_dialog(cx, move |dialog, _, _| {
+        let closing = view.clone();
         dialog
             .title("Settings")
             .width(px(WIDTH))
             .overlay_closable(false)
             .child(view.clone())
+            .on_close(move |_, window, cx| closing.update(cx, |this, cx| this.untry(window, cx)))
     });
 }
 
@@ -111,10 +130,18 @@ struct SettingsDialog {
     binary_width: Entity<InputState>,
     limit: Entity<InputState>,
     external: Entity<InputState>,
+    opacity: Entity<SliderState>,
     _inputs: [Subscription; 4],
+    _opacity: Subscription,
 }
 
 impl SettingsDialog {
+    /// The sidebar as last applied, whatever was tried.
+    fn untry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let opacity = self.saved.sidebar_opacity.0;
+        let _ = self.commander.update(cx, |commander, cx| commander.show_sidebar_opacity(opacity, window, cx));
+    }
+
     fn apply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.draft == self.saved {
             return;
@@ -308,6 +335,26 @@ impl SettingsDialog {
                         })),
                 )]
             }
+            // Where the desktop can show through it.
+            "Layout" if cfg!(any(target_os = "macos", windows)) => {
+                let opacity = self.draft.sidebar_opacity.0;
+                let shown = match opacity {
+                    100 => "100%, solid".to_owned(),
+                    0 => "0%, the desktop blurred".to_owned(),
+                    _ => format!("{opacity}%"),
+                };
+                vec![GroupBox::new().outline().title("Sidebar").child(
+                    v_flex()
+                        .gap_2()
+                        .child("How much it covers the desktop behind it:")
+                        .child(
+                            h_flex()
+                                .gap_4()
+                                .child(div().flex_1().child(Slider::new(&self.opacity)))
+                                .child(div().w(px(150.)).child(shown)),
+                        ),
+                )]
+            }
             "Display" => vec![
                 GroupBox::new().outline().title("File display").child(
                     h_flex()
@@ -410,7 +457,10 @@ impl Render for SettingsDialog {
                             .outline()
                             .label("Cancel")
                             .min_w(px(80.))
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.untry(window, cx);
+                                window.close_dialog(cx);
+                            })),
                     )
                     .child(
                         Button::new("settings-apply")
