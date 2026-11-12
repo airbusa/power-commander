@@ -4,13 +4,13 @@ use std::sync::Arc;
 
 #[cfg(target_os = "macos")]
 use gpui_kit::component::MacControls;
-use gpui_kit::component::{BreezeControls, Theme as KitTheme, ThemeMode};
+use gpui_kit::component::{NativeControls, Theme as KitTheme, ThemeMode};
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use gpui_kit::component::{ActiveTheme, QtControls, StateImages};
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use gpui_kit::{Global, RenderImage, Window};
 use gpui_kit::{App, Hsla, hsla, px, rgb};
-use pc_core::theme::Palette;
+use pc_core::theme::{ControlColors, ControlStyle, Palette};
 
 #[derive(Clone, Copy)]
 pub struct PanelColors {
@@ -80,23 +80,17 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         kit.tab_foreground = color(palette.dim);
         kit.tab_active_foreground = color(palette.text);
     });
-    // On KDE the controls take Breeze's look, in the scheme's colours.
-    if pc_core::theme::breeze_controls() {
-        let breeze = palette.breeze();
-        cx.set_global(BreezeControls {
-            button: color(breeze.button),
-            frame: color(breeze.frame),
-            checked: color(breeze.checked),
-            highlight: color(breeze.highlight),
-            mark: color(breeze.mark),
-            groove: color(breeze.groove),
-            fill: color(breeze.fill),
-            handle_frame: color(breeze.handle_frame),
-            default_fill: color(breeze.default_fill),
-            default_frame: color(breeze.default_frame),
-            tab: color(breeze.tab),
-            tab_inactive: color(breeze.tab_inactive),
-        });
+    // The desktop style's controls (KDE's Breeze, Windows 11's), in its colours.
+    if let Some(style) = pc_core::theme::control_style() {
+        cx.set_global(native_controls(style, &palette.controls(style)));
+        // Windows' corners, and its fields' faint frame, a button's.
+        if style == ControlStyle::Fluent {
+            let frame = color(palette.controls(style).button[0][1]);
+            KitTheme::update(cx, |kit| {
+                kit.radius = px(4.);
+                kit.colors.input = frame;
+            });
+        }
     }
     // Qt's drawings are in the scheme's colours: not for the other look.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -163,6 +157,39 @@ fn mac_controls(palette: &Palette) -> MacControls {
     }
 }
 
+/// The controls in `colors`, at the style's sizes.
+fn native_controls(style: ControlStyle, colors: &ControlColors) -> NativeControls {
+    let color = |value: u32| Hsla::from(rgb(value));
+    let pair = |[fill, frame]: [u32; 2]| (color(fill), color(frame));
+    let fluent = style == ControlStyle::Fluent;
+    // Windows 11's sizes (WinUI's): 20 px boxes, a 12 px dot, a 4 px groove, a 1 px groove under a 3 px bar.
+    let px_of = |breeze: f32, fluent_size: f32| px(if fluent { fluent_size } else { breeze });
+    NativeControls {
+        check_size: px_of(16., 20.),
+        radio_dot: px_of(6., 12.),
+        check_frame: color(colors.check_frame),
+        check_fill: color(colors.check_fill),
+        checked_frame: color(colors.checked_frame),
+        checked_fill: color(colors.checked_fill),
+        mark: color(colors.mark),
+        groove: color(colors.groove),
+        fill: color(colors.fill),
+        slider_groove: px_of(6., 4.),
+        progress: [px_of(6., 1.), px_of(6., 3.)],
+        handle: color(colors.handle),
+        handle_middle: color(colors.handle_middle),
+        handle_rim: px_of(1., 4.),
+        handle_frame: colors.handle_frame.map(color),
+        button: colors.button.map(pair),
+        default_button: colors.default_button.map(pair),
+        button_text: color(colors.button_text),
+        default_button_text: color(colors.default_button_text),
+        button_edge: colors.button_edge.map(|edges| edges.map(color)),
+        tabs: colors.tabs.map(|tabs| tabs.map(color)),
+        field_line: colors.field_line.map(color),
+    }
+}
+
 /// macOS: the selected rows' colour, the user's accent, as Finder has it.
 #[cfg(target_os = "macos")]
 pub fn mac_selection(dark: bool) -> Option<u32> {
@@ -201,7 +228,7 @@ impl Global for QtDrawn {}
 /// once drawn; until then, and without it, Breeze's.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub fn draw_qt_controls(window: &Window, cx: &mut App) {
-    if !pc_core::theme::breeze_controls() {
+    if pc_core::theme::control_style() != Some(ControlStyle::Breeze) {
         return;
     }
     let scale = window.scale_factor();

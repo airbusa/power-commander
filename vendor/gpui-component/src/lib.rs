@@ -20,9 +20,9 @@ mod title_bar;
 mod touch_selection;
 mod virtual_list;
 mod window_border;
-// PowerCommander patch: see `BreezeControls`.
-mod breeze;
-pub use breeze::BreezeControls;
+// PowerCommander patch: see `NativeControls`.
+mod native;
+pub use native::NativeControls;
 // PowerCommander patch: see `QtControls`.
 mod qt;
 pub use qt::{QtControls, StateImages};

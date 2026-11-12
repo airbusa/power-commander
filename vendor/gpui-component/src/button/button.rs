@@ -159,11 +159,10 @@ pub enum ButtonVariant {
 }
 
 impl ButtonVariant {
-    /// PowerCommander patch: Breeze's push buttons, see `BreezeControls`: the
-    /// default (primary) one tinted by the selection, the others in the button
-    /// colour, framed in the selection colour when hovered or pressed.
-    fn breeze(&self, outline: bool, state: ButtonStyleState, cx: &App) -> Option<ButtonVariantStyle> {
-        let breeze = cx.try_global::<crate::BreezeControls>().copied()?;
+    /// PowerCommander patch: push buttons in the desktop style's colours, see
+    /// `NativeControls`; the default (primary) one in its own.
+    fn native(&self, outline: bool, state: ButtonStyleState, cx: &App) -> Option<ButtonVariantStyle> {
+        let native = cx.try_global::<crate::NativeControls>().copied()?;
         let primary = match self {
             Self::Primary => true,
             Self::Default | Self::Secondary => false,
@@ -172,21 +171,23 @@ impl ButtonVariant {
         if outline {
             return None;
         }
-        let (bg, border) = match (primary, state) {
-            (_, ButtonStyleState::Active) => (breeze.checked, breeze.highlight),
-            (true, ButtonStyleState::Hovered) => (breeze.default_fill, breeze.highlight),
-            (false, ButtonStyleState::Hovered) => (breeze.button, breeze.highlight),
-            (true, ButtonStyleState::Normal) => (breeze.default_fill, breeze.default_frame),
-            (false, ButtonStyleState::Normal) => (breeze.button, breeze.handle_frame),
+        let (states, fg) = match primary {
+            true => (native.default_button, native.default_button_text),
+            false => (native.button, native.button_text),
         };
-        Some(ButtonVariantStyle { bg: bg.into(), border, fg: breeze.mark, underline: false, shadow: false })
+        let (bg, border) = match state {
+            ButtonStyleState::Normal => states[0],
+            ButtonStyleState::Hovered => states[1],
+            ButtonStyleState::Active => states[2],
+        };
+        Some(ButtonVariantStyle { bg: bg.into(), border, fg, underline: false, shadow: false })
     }
 
     /// PowerCommander patch: AppKit's push buttons, see `MacControls`: filled,
     /// unframed, the default (primary) one in the accent; no change on hover.
     fn mac(&self, state: Option<ButtonStyleState>, cx: &App) -> Option<ButtonVariantStyle> {
         let mac = cx.try_global::<crate::MacControls>().copied()?;
-        if cx.has_global::<crate::BreezeControls>() || !self.is_mac_push() {
+        if cx.has_global::<crate::NativeControls>() || !self.is_mac_push() {
             return None;
         }
         let primary = matches!(self, Self::Primary);
@@ -654,7 +655,7 @@ impl InteractiveElement for Button {
 impl RenderOnce for Button {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let style: ButtonVariant = self.variant;
-        let breeze_framed = cx.has_global::<crate::BreezeControls>()
+        let native_framed = cx.has_global::<crate::NativeControls>()
             && matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Secondary);
         // PowerCommander patch: push buttons as the Qt style draws them, see `QtControls`.
         let qt = matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Default | ButtonVariant::Secondary)
@@ -664,8 +665,17 @@ impl RenderOnce for Button {
         let qt_default = self.variant == ButtonVariant::Primary;
         // PowerCommander patch: AppKit's push buttons are 24 px, see `MacControls`.
         let mac_push = cx.has_global::<crate::MacControls>()
-            && !cx.has_global::<crate::BreezeControls>()
+            && !cx.has_global::<crate::NativeControls>()
             && self.variant.is_mac_push();
+        let native_edge = cx
+            .try_global::<crate::NativeControls>()
+            .and_then(|native| native.button_edge)
+            .filter(|_| qt.is_none() && !self.outline && !self.disabled && !self.shows_selected_style())
+            .and_then(|[plain, default]| match self.variant {
+                ButtonVariant::Primary => Some(default),
+                ButtonVariant::Default | ButtonVariant::Secondary => Some(plain),
+                _ => None,
+            });
         let interactive = self.interactive();
         let hoverable = self.hoverable();
         let disabled = self.disabled;
@@ -779,8 +789,8 @@ impl RenderOnce for Button {
             .when(self.border_corners.bottom_right, |this| {
                 this.rounded_br(rounding)
             })
-            // PowerCommander patch: every Breeze push button is framed, see `BreezeControls`.
-            .when(qt.is_none() && (self.variant.is_default() || self.outline || breeze_framed), |this| {
+            // PowerCommander patch: every native push button is framed, see `NativeControls`.
+            .when(qt.is_none() && (self.variant.is_default() || self.outline || native_framed), |this| {
                 this.when(self.border_edges.left, |this| this.border_l_1())
                     .when(self.border_edges.right, |this| this.border_r_1())
                     .when(self.border_edges.top, |this| this.border_t_1())
@@ -904,6 +914,12 @@ impl RenderOnce for Button {
         .track_focus(&focus_handle)
         .tab_index(self.tab_index)
         .tab_stop(self.tab_stop)
+        // PowerCommander patch: Windows' darker bottom edge of the frame, see `NativeControls`.
+        .when_some(native_edge, |this, edge| {
+            this.relative().child(
+                div().absolute().left(rounding).right(rounding).bottom(gpui::px(-1.)).h(gpui::px(1.)).bg(edge),
+            )
+        })
         .when_some(qt.as_ref(), |this, qt| {
             let parts = &qt.button[qt_default as usize];
             this.child(crate::qt::layers(crate::qt::BUTTON, disabled, |state| {
@@ -1198,7 +1214,7 @@ impl ButtonVariant {
     }
 
     fn normal(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
-        if let Some(style) = self.breeze(outline, ButtonStyleState::Normal, cx) {
+        if let Some(style) = self.native(outline, ButtonStyleState::Normal, cx) {
             return style;
         }
         if let Some(style) = self.mac(Some(ButtonStyleState::Normal), cx) {
@@ -1220,7 +1236,7 @@ impl ButtonVariant {
     }
 
     fn hovered(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
-        if let Some(style) = self.breeze(outline, ButtonStyleState::Hovered, cx) {
+        if let Some(style) = self.native(outline, ButtonStyleState::Hovered, cx) {
             return style;
         }
         if let Some(style) = self.mac(Some(ButtonStyleState::Hovered), cx) {
@@ -1310,7 +1326,7 @@ impl ButtonVariant {
     }
 
     fn active(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
-        if let Some(style) = self.breeze(outline, ButtonStyleState::Active, cx) {
+        if let Some(style) = self.native(outline, ButtonStyleState::Active, cx) {
             return style;
         }
         if let Some(style) = self.mac(Some(ButtonStyleState::Active), cx) {

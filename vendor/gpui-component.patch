@@ -1,51 +1,14 @@
-diff -ruN a/src/breeze.rs b/src/breeze.rs
---- a/src/breeze.rs	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/breeze.rs	2026-11-12 22:39:45.309412900 +0100
-@@ -0,0 +1,32 @@
-+// PowerCommander patch: this file is new.
-+use gpui::{Global, Hsla};
-+
-+/// Controls drawn as KDE's Breeze style draws them (`breezehelper.cpp`), in
-+/// these colours of the user's scheme; without it, GPUI Kit's own look.
-+#[derive(Clone, Copy, Debug)]
-+pub struct BreezeControls {
-+    /// Buttons', check boxes' and radio buttons' fill.
-+    pub button: Hsla,
-+    /// Frames: a fifth of the text over the window.
-+    pub frame: Hsla,
-+    /// A checked box's or radio button's fill.
-+    pub checked: Hsla,
-+    /// The selection colour: a checked box's frame, a slider's or progress bar's fill.
-+    pub highlight: Hsla,
-+    /// Check marks and radio dots: the text colour.
-+    pub mark: Hsla,
-+    /// A slider's or progress bar's groove.
-+    pub groove: Hsla,
-+    /// What fills it.
-+    pub fill: Hsla,
-+    /// A slider handle's frame, a button's.
-+    pub handle_frame: Hsla,
-+    /// The default button's fill and frame (a dialog's OK).
-+    pub default_fill: Hsla,
-+    pub default_frame: Hsla,
-+    /// The selected tab's fill, the others'.
-+    pub tab: Hsla,
-+    pub tab_inactive: Hsla,
-+}
-+
-+impl Global for BreezeControls {}
 diff -ruN a/src/button/button.rs b/src/button/button.rs
---- a/src/button/button.rs	2026-11-12 22:39:45.265485894 +0100
-+++ b/src/button/button.rs	2026-11-12 22:39:45.355683616 +0100
-@@ -159,6 +159,52 @@
+--- a/src/button/button.rs	2026-11-12 23:15:18.873561129 +0100
++++ b/src/button/button.rs	2026-11-12 23:15:18.883992084 +0100
+@@ -159,6 +159,53 @@
  }
  
  impl ButtonVariant {
-+    /// PowerCommander patch: Breeze's push buttons, see `BreezeControls`: the
-+    /// default (primary) one tinted by the selection, the others in the button
-+    /// colour, framed in the selection colour when hovered or pressed.
-+    fn breeze(&self, outline: bool, state: ButtonStyleState, cx: &App) -> Option<ButtonVariantStyle> {
-+        let breeze = cx.try_global::<crate::BreezeControls>().copied()?;
++    /// PowerCommander patch: push buttons in the desktop style's colours, see
++    /// `NativeControls`; the default (primary) one in its own.
++    fn native(&self, outline: bool, state: ButtonStyleState, cx: &App) -> Option<ButtonVariantStyle> {
++        let native = cx.try_global::<crate::NativeControls>().copied()?;
 +        let primary = match self {
 +            Self::Primary => true,
 +            Self::Default | Self::Secondary => false,
@@ -54,21 +17,23 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
 +        if outline {
 +            return None;
 +        }
-+        let (bg, border) = match (primary, state) {
-+            (_, ButtonStyleState::Active) => (breeze.checked, breeze.highlight),
-+            (true, ButtonStyleState::Hovered) => (breeze.default_fill, breeze.highlight),
-+            (false, ButtonStyleState::Hovered) => (breeze.button, breeze.highlight),
-+            (true, ButtonStyleState::Normal) => (breeze.default_fill, breeze.default_frame),
-+            (false, ButtonStyleState::Normal) => (breeze.button, breeze.handle_frame),
++        let (states, fg) = match primary {
++            true => (native.default_button, native.default_button_text),
++            false => (native.button, native.button_text),
 +        };
-+        Some(ButtonVariantStyle { bg: bg.into(), border, fg: breeze.mark, underline: false, shadow: false })
++        let (bg, border) = match state {
++            ButtonStyleState::Normal => states[0],
++            ButtonStyleState::Hovered => states[1],
++            ButtonStyleState::Active => states[2],
++        };
++        Some(ButtonVariantStyle { bg: bg.into(), border, fg, underline: false, shadow: false })
 +    }
 +
 +    /// PowerCommander patch: AppKit's push buttons, see `MacControls`: filled,
 +    /// unframed, the default (primary) one in the accent; no change on hover.
 +    fn mac(&self, state: Option<ButtonStyleState>, cx: &App) -> Option<ButtonVariantStyle> {
 +        let mac = cx.try_global::<crate::MacControls>().copied()?;
-+        if cx.has_global::<crate::BreezeControls>() || !self.is_mac_push() {
++        if cx.has_global::<crate::NativeControls>() || !self.is_mac_push() {
 +            return None;
 +        }
 +        let primary = matches!(self, Self::Primary);
@@ -90,11 +55,11 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
      #[inline]
      pub fn is_link(&self) -> bool {
          matches!(self, Self::Link)
-@@ -608,6 +654,18 @@
+@@ -608,6 +655,27 @@
  impl RenderOnce for Button {
      fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
          let style: ButtonVariant = self.variant;
-+        let breeze_framed = cx.has_global::<crate::BreezeControls>()
++        let native_framed = cx.has_global::<crate::NativeControls>()
 +            && matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Secondary);
 +        // PowerCommander patch: push buttons as the Qt style draws them, see `QtControls`.
 +        let qt = matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Default | ButtonVariant::Secondary)
@@ -104,12 +69,21 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
 +        let qt_default = self.variant == ButtonVariant::Primary;
 +        // PowerCommander patch: AppKit's push buttons are 24 px, see `MacControls`.
 +        let mac_push = cx.has_global::<crate::MacControls>()
-+            && !cx.has_global::<crate::BreezeControls>()
++            && !cx.has_global::<crate::NativeControls>()
 +            && self.variant.is_mac_push();
++        let native_edge = cx
++            .try_global::<crate::NativeControls>()
++            .and_then(|native| native.button_edge)
++            .filter(|_| qt.is_none() && !self.outline && !self.disabled && !self.shows_selected_style())
++            .and_then(|[plain, default]| match self.variant {
++                ButtonVariant::Primary => Some(default),
++                ButtonVariant::Default | ButtonVariant::Secondary => Some(plain),
++                _ => None,
++            });
          let interactive = self.interactive();
          let hoverable = self.hoverable();
          let disabled = self.disabled;
-@@ -644,6 +702,10 @@
+@@ -644,6 +712,10 @@
          let is_focused = focus_handle.is_focused(window);
  
          let rounding = match self.rounded {
@@ -120,7 +94,7 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
              ButtonRounded::Small => cx.theme().radius * 0.5,
              ButtonRounded::Medium => cx.theme().radius,
              ButtonRounded::Large => cx.theme().radius * 2.0,
-@@ -670,6 +732,8 @@
+@@ -670,6 +742,8 @@
                  if self.label.is_none() && children.is_empty() {
                      // Icon Button
                      match self.size {
@@ -129,7 +103,7 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
                          Size::Size(px) => this.size(px),
                          Size::XSmall => this.size_5(),
                          Size::Small => this.size_6(),
-@@ -678,6 +742,14 @@
+@@ -678,6 +752,14 @@
                  } else {
                      // Normal Button
                      match self.size {
@@ -144,13 +118,13 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
                          Size::Size(size) => this.px(size * 0.2),
                          Size::XSmall => this.h_5().px_1().when(self.compact, |this| this.min_w_5()),
                          Size::Small => this
-@@ -707,13 +779,15 @@
+@@ -707,13 +789,15 @@
              .when(self.border_corners.bottom_right, |this| {
                  this.rounded_br(rounding)
              })
 -            .when(self.variant.is_default() || self.outline, |this| {
-+            // PowerCommander patch: every Breeze push button is framed, see `BreezeControls`.
-+            .when(qt.is_none() && (self.variant.is_default() || self.outline || breeze_framed), |this| {
++            // PowerCommander patch: every native push button is framed, see `NativeControls`.
++            .when(qt.is_none() && (self.variant.is_default() || self.outline || native_framed), |this| {
                  this.when(self.border_edges.left, |this| this.border_l_1())
                      .when(self.border_edges.right, |this| this.border_r_1())
                      .when(self.border_edges.top, |this| this.border_t_1())
@@ -162,7 +136,7 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
                  this.border_color(normal_style.border)
                      .bg(normal_style.bg)
                      .text_color(normal_style.fg)
-@@ -806,10 +880,13 @@
+@@ -806,10 +890,13 @@
                          .refine_style(&instance_style)
                  })
                  .disabled(|style| {
@@ -178,10 +152,16 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
                          .shadow_none()
                          .refine_style(&instance_style)
                  })
-@@ -827,6 +904,12 @@
+@@ -827,6 +914,18 @@
          .track_focus(&focus_handle)
          .tab_index(self.tab_index)
          .tab_stop(self.tab_stop)
++        // PowerCommander patch: Windows' darker bottom edge of the frame, see `NativeControls`.
++        .when_some(native_edge, |this, edge| {
++            this.relative().child(
++                div().absolute().left(rounding).right(rounding).bottom(gpui::px(-1.)).h(gpui::px(1.)).bg(edge),
++            )
++        })
 +        .when_some(qt.as_ref(), |this, qt| {
 +            let parts = &qt.button[qt_default as usize];
 +            this.child(crate::qt::layers(crate::qt::BUTTON, disabled, |state| {
@@ -191,11 +171,11 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
          .child(content)
          // Fade the whole button while loading, so every variant is dimmed by
          // the same amount. Fading `bg`, `border` and `fg` one by one instead
-@@ -1115,6 +1198,12 @@
+@@ -1115,6 +1214,12 @@
      }
  
      fn normal(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
-+        if let Some(style) = self.breeze(outline, ButtonStyleState::Normal, cx) {
++        if let Some(style) = self.native(outline, ButtonStyleState::Normal, cx) {
 +            return style;
 +        }
 +        if let Some(style) = self.mac(Some(ButtonStyleState::Normal), cx) {
@@ -204,11 +184,11 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
          let bg = self.bg_color(outline, cx);
          let border = self.border_color(outline, cx);
          let fg = self.text_color(outline, cx);
-@@ -1131,6 +1220,12 @@
+@@ -1131,6 +1236,12 @@
      }
  
      fn hovered(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
-+        if let Some(style) = self.breeze(outline, ButtonStyleState::Hovered, cx) {
++        if let Some(style) = self.native(outline, ButtonStyleState::Hovered, cx) {
 +            return style;
 +        }
 +        if let Some(style) = self.mac(Some(ButtonStyleState::Hovered), cx) {
@@ -217,11 +197,11 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
          let bg: Background = match self {
              Self::Default => {
                  if outline {
-@@ -1215,6 +1310,12 @@
+@@ -1215,6 +1326,12 @@
      }
  
      fn active(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
-+        if let Some(style) = self.breeze(outline, ButtonStyleState::Active, cx) {
++        if let Some(style) = self.native(outline, ButtonStyleState::Active, cx) {
 +            return style;
 +        }
 +        if let Some(style) = self.mac(Some(ButtonStyleState::Active), cx) {
@@ -230,7 +210,7 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
          let bg = match self {
              Self::Default => {
                  if outline {
-@@ -1331,6 +1432,9 @@
+@@ -1331,6 +1448,9 @@
      }
  
      fn disabled(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
@@ -241,8 +221,8 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
              Self::Default | Self::Link | Self::Ghost | Self::Text => cx.theme().transparent.into(),
              Self::Primary => cx.theme().tokens.button_primary.background.opacity(0.15),
 diff -ruN a/src/checkbox.rs b/src/checkbox.rs
---- a/src/checkbox.rs	2026-11-12 22:39:45.266448027 +0100
-+++ b/src/checkbox.rs	2026-11-12 22:39:45.356578377 +0100
+--- a/src/checkbox.rs	2026-11-12 23:15:18.874371760 +0100
++++ b/src/checkbox.rs	2026-11-12 23:15:18.892052924 +0100
 @@ -197,11 +197,16 @@
          window,
          cx,
@@ -251,11 +231,11 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
 -        cx.theme().primary_foreground.opacity(0.5)
 -    } else {
 -        cx.theme().primary_foreground
-+    // PowerCommander patch: Breeze marks in the text colour, see `BreezeControls`;
++    // PowerCommander patch: the desktop style's mark, see `NativeControls`;
 +    // AppKit's, bolder, on the accent, see `MacControls`.
 +    let mac = cx.try_global::<crate::MacControls>().copied();
-+    let color = match (cx.try_global::<crate::BreezeControls>(), mac) {
-+        (Some(breeze), _) => breeze.mark,
++    let color = match (cx.try_global::<crate::NativeControls>(), mac) {
++        (Some(native), _) => native.mark,
 +        (None, Some(mac)) if disabled => mac.disabled_text,
 +        (None, Some(mac)) => mac.on_accent,
 +        (None, None) => cx.theme().primary_foreground,
@@ -309,9 +289,9 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
 -                                style
 -                                    .border_color(disabled_indicator_color)
 -                                    .when(checked, |style| style.bg(disabled_indicator_color))
-+                    // PowerCommander patch: the Qt style's box, else Breeze's, see `QtControls`, `BreezeControls`;
++                    // PowerCommander patch: the Qt style's box, else the desktop style's, see `QtControls`, `NativeControls`;
 +                    // AppKit's, see `MacControls`.
-+                    .map(|this| match (&qt, cx.try_global::<crate::BreezeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
++                    .map(|this| match (&qt, cx.try_global::<crate::NativeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
 +                        (Some(qt), _, _) => {
 +                            let images = &qt.checkbox[checked as usize];
 +                            let (width, height) = qt.size(&images.0[crate::qt::NORMAL]);
@@ -328,13 +308,13 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
 +                                .border_color(cx.theme().transparent)
 +                                .bg(if self.disabled { fill.opacity(0.5) } else { fill })
 +                        }
-+                        (None, Some(breeze), _) => {
++                        (None, Some(native), _) => {
 +                            let (border, fill) = match checked {
-+                                true => (breeze.highlight, breeze.checked),
-+                                false => (breeze.frame, breeze.button),
++                                true => (native.checked_frame, native.checked_fill),
++                                false => (native.check_frame, native.check_fill),
 +                            };
 +                            let dim = if self.disabled { 0.5 } else { 1. };
-+                            this.size(px(16.))
++                            this.size(native.check_size)
 +                                .rounded(px(4.))
 +                                .border_color(border.opacity(dim))
 +                                .bg(fill.opacity(dim))
@@ -381,8 +361,8 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
              .when(self.label.is_some() || !children.is_empty(), |this| {
                  this.child(
 diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
---- a/src/dialog/dialog.rs	2026-11-12 22:39:45.267878727 +0100
-+++ b/src/dialog/dialog.rs	2026-11-12 22:39:45.351173982 +0100
+--- a/src/dialog/dialog.rs	2026-11-12 23:15:18.874905765 +0100
++++ b/src/dialog/dialog.rs	2026-11-12 23:15:18.885199649 +0100
 @@ -1,13 +1,20 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a dialog moves by
 +// its title, can open centred over a part of the window, and fades in
@@ -542,7 +522,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
 +        let mac = cx
 +            .try_global::<crate::MacControls>()
 +            .copied()
-+            .filter(|_| !cx.has_global::<crate::BreezeControls>());
++            .filter(|_| !cx.has_global::<crate::NativeControls>());
 +        let band = px(if mac.is_some() { 32. } else { TITLE_BAND_HEIGHT });
 +        let corner = mac.map_or(cx.theme().radius_lg, |_| px(16.));
 +        let active = window.is_window_active();
@@ -734,8 +714,8 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
  pub(crate) mod tests {
      use super::*;
 diff -ruN a/src/group_box.rs b/src/group_box.rs
---- a/src/group_box.rs	2026-11-12 22:31:13.000000000 +0100
-+++ b/src/group_box.rs	2026-11-12 22:39:45.346555685 +0100
+--- a/src/group_box.rs	2026-11-12 23:15:18.875997900 +0100
++++ b/src/group_box.rs	2026-11-12 23:15:18.892176649 +0100
 @@ -1,6 +1,6 @@
  use gpui::{
      AnyElement, App, Background, ElementId, InteractiveElement as _, IntoElement, ParentElement,
@@ -753,7 +733,7 @@ diff -ruN a/src/group_box.rs b/src/group_box.rs
 +        let mac = cx
 +            .try_global::<crate::MacControls>()
 +            .copied()
-+            .filter(|_| !cx.has_global::<crate::BreezeControls>());
++            .filter(|_| !cx.has_global::<crate::NativeControls>());
          let (bg, border, has_paddings): (Option<Background>, _, _) = match self.variant {
              GroupBoxVariant::Normal => (None, None, false),
 +            _ if mac.is_some() => (mac.map(|mac| mac.group.into()), None, true),
@@ -784,8 +764,8 @@ diff -ruN a/src/group_box.rs b/src/group_box.rs
                              .children(self.children),
                      )
 diff -ruN a/src/highlighter/input_adapter.rs b/src/highlighter/input_adapter.rs
---- a/src/highlighter/input_adapter.rs	2026-11-12 22:39:45.268385001 +0100
-+++ b/src/highlighter/input_adapter.rs	2026-11-12 22:39:45.379725110 +0100
+--- a/src/highlighter/input_adapter.rs	2026-11-12 23:15:18.876126986 +0100
++++ b/src/highlighter/input_adapter.rs	2026-11-12 23:15:18.887036119 +0100
 @@ -1,3 +1,7 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the highlighter
 +// factory is public, and a background parse leaves the fold candidates alone
@@ -821,8 +801,8 @@ diff -ruN a/src/highlighter/input_adapter.rs b/src/highlighter/input_adapter.rs
          });
          parse_task.borrow_mut().replace(task);
 diff -ruN a/src/highlighter/mod.rs b/src/highlighter/mod.rs
---- a/src/highlighter/mod.rs	2026-11-12 22:39:45.268766612 +0100
-+++ b/src/highlighter/mod.rs	2026-11-12 22:39:45.378869389 +0100
+--- a/src/highlighter/mod.rs	2026-11-12 23:15:18.876856482 +0100
++++ b/src/highlighter/mod.rs	2026-11-12 23:15:18.886942972 +0100
 @@ -1,3 +1,7 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the editor's
 +// highlighter factory is public, so an app can wrap it. Changes are marked
@@ -847,8 +827,8 @@ diff -ruN a/src/highlighter/mod.rs b/src/highlighter/mod.rs
  }
  
 diff -ruN a/src/input/input.rs b/src/input/input.rs
---- a/src/input/input.rs	2026-11-12 22:31:13.000000000 +0100
-+++ b/src/input/input.rs	2026-11-12 22:39:45.327460936 +0100
+--- a/src/input/input.rs	2026-11-12 23:15:18.877270589 +0100
++++ b/src/input/input.rs	2026-11-12 23:15:18.887837011 +0100
 @@ -705,6 +705,10 @@
          };
  
@@ -856,20 +836,41 @@ diff -ruN a/src/input/input.rs b/src/input/input.rs
 +        let mac = cx
 +            .try_global::<crate::MacControls>()
 +            .copied()
-+            .filter(|_| !cx.has_global::<crate::BreezeControls>() && !presentation.is_code_editor());
++            .filter(|_| !cx.has_global::<crate::NativeControls>() && !presentation.is_code_editor());
          let bg = if presentation.is_code_editor() {
              cx.theme().editor_background()
          } else {
-@@ -758,7 +762,7 @@
+@@ -715,6 +719,18 @@
+         } else {
+             bg
+         };
++        // PowerCommander patch: Windows' fields, see `NativeControls`: a button's
++        // fill, the page's when focused, and a bottom line, the accent's when focused.
++        let field_line = cx
++            .try_global::<crate::NativeControls>()
++            .and_then(|native| native.field_line.map(|line| (line, native.checked_fill, native.button[0].0)))
++            .filter(|_| self.appearance && self.bordered);
++        let bg = match field_line {
++            Some(_) if presentation.is_disabled() || presentation.is_code_editor() => bg,
++            Some(_) if focused => cx.theme().background,
++            Some((_, _, fill)) => fill,
++            None => bg,
++        };
+         let prefix = self.prefix;
+         let suffix = self.suffix;
+         let show_clear_button = self.cleanable
+@@ -757,8 +773,8 @@
+             .styles(|styles| {
                  styles.focused(|style| {
                      style.when(
-                         self.appearance && self.bordered && self.focus_bordered,
+-                        self.appearance && self.bordered && self.focus_bordered,
 -                        |style| style.border_1().border_color(cx.theme().ring),
++                        self.appearance && self.bordered && self.focus_bordered && field_line.is_none(),
 +                        |style| style.border_1().border_color(mac.map_or(cx.theme().ring, |mac| mac.accent)),
                      )
                  })
              })
-@@ -797,6 +801,13 @@
+@@ -797,6 +813,21 @@
                      .when(self.bordered, |this| {
                          this.border_1().border_color(cx.theme().input)
                      })
@@ -880,12 +881,20 @@ diff -ruN a/src/input/input.rs b/src/input/input.rs
 +                            .when(self.bordered, |this| this.border_color(mac.field_frame))
 +                            .when(!is_multi_line && matches!(self.size, Size::Medium), |this| this.h(px(24.)).py_0())
 +                    })
++            })
++            // In place of the bottom border: the field clips what is on its border.
++            .when_some(field_line, |this, (line, accent, _)| {
++                let (height, color) = if focused { (px(2.), accent) } else { (px(1.), line) };
++                let inset = cx.theme().radius;
++                this.relative()
++                    .border_b_0()
++                    .child(div().absolute().left(inset).right(inset).bottom_0().h(height).bg(color))
              })
              .items_center()
              .gap(gap_x)
 diff -ruN a/src/input/popovers/completion_menu.rs b/src/input/popovers/completion_menu.rs
---- a/src/input/popovers/completion_menu.rs	2026-11-12 22:39:45.269390757 +0100
-+++ b/src/input/popovers/completion_menu.rs	2026-11-12 22:39:45.325863492 +0100
+--- a/src/input/popovers/completion_menu.rs	2026-11-12 23:15:18.877511247 +0100
++++ b/src/input/popovers/completion_menu.rs	2026-11-12 23:15:18.887579181 +0100
 @@ -1,3 +1,7 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the completion
 +// menu is as wide as the editor's configured width. Changes are marked
@@ -907,8 +916,8 @@ diff -ruN a/src/input/popovers/completion_menu.rs b/src/input/popovers/completio
                      )
                      .when_some(selected_documentation, |this, documentation| {
 diff -ruN a/src/kbd.rs b/src/kbd.rs
---- a/src/kbd.rs	2026-11-12 22:39:45.269948321 +0100
-+++ b/src/kbd.rs	2026-11-12 22:39:45.310204498 +0100
+--- a/src/kbd.rs	2026-11-12 23:15:18.877779647 +0100
++++ b/src/kbd.rs	2026-11-12 23:15:18.891971088 +0100
 @@ -1,3 +1,8 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a binding of
 +// several keystrokes shows them all. Changes are marked "WDS patch".
@@ -1004,15 +1013,15 @@ diff -ruN a/src/kbd.rs b/src/kbd.rs
      }
  }
 diff -ruN a/src/lib.rs b/src/lib.rs
---- a/src/lib.rs	2026-11-12 22:39:45.270355807 +0100
-+++ b/src/lib.rs	2026-11-12 22:39:45.329588654 +0100
+--- a/src/lib.rs	2026-11-12 23:15:18.877830804 +0100
++++ b/src/lib.rs	2026-11-12 23:15:18.892077310 +0100
 @@ -20,6 +20,15 @@
  mod touch_selection;
  mod virtual_list;
  mod window_border;
-+// PowerCommander patch: see `BreezeControls`.
-+mod breeze;
-+pub use breeze::BreezeControls;
++// PowerCommander patch: see `NativeControls`.
++mod native;
++pub use native::NativeControls;
 +// PowerCommander patch: see `QtControls`.
 +mod qt;
 +pub use qt::{QtControls, StateImages};
@@ -1032,8 +1041,8 @@ diff -ruN a/src/lib.rs b/src/lib.rs
  
  rust_i18n::i18n!("locales", fallback = "en");
 diff -ruN a/src/list/list.rs b/src/list/list.rs
---- a/src/list/list.rs	2026-11-12 22:39:45.271280483 +0100
-+++ b/src/list/list.rs	2026-11-12 22:39:45.365103746 +0100
+--- a/src/list/list.rs	2026-11-12 23:15:18.877957044 +0100
++++ b/src/list/list.rs	2026-11-12 23:15:18.888047051 +0100
 @@ -1,3 +1,6 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a list can take
 +// a single click as selecting only. Changes are marked "WDS patch".
@@ -1086,7 +1095,7 @@ diff -ruN a/src/list/list.rs b/src/list/list.rs
                              secondary: e.modifiers().secondary(),
 diff -ruN a/src/mac.rs b/src/mac.rs
 --- a/src/mac.rs	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/mac.rs	2026-11-12 22:39:45.353716060 +0100
++++ b/src/mac.rs	2026-11-12 23:15:18.892027846 +0100
 @@ -0,0 +1,40 @@
 +// PowerCommander patch: this file is new.
 +use gpui::{Global, Hsla};
@@ -1129,8 +1138,8 @@ diff -ruN a/src/mac.rs b/src/mac.rs
 +/// The check box's mark, bolder than GPUI Kit's, as AppKit's.
 +pub(crate) const CHECK_MARK: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path d="M2.4 6.4 4.9 8.9 9.7 3.2" fill="none" stroke="black" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>"#;
 diff -ruN a/src/menu/app_menu_bar.rs b/src/menu/app_menu_bar.rs
---- a/src/menu/app_menu_bar.rs	2026-11-12 22:39:45.272116954 +0100
-+++ b/src/menu/app_menu_bar.rs	2026-11-12 22:39:45.367154090 +0100
+--- a/src/menu/app_menu_bar.rs	2026-11-12 23:15:18.878123641 +0100
++++ b/src/menu/app_menu_bar.rs	2026-11-12 23:15:18.888342252 +0100
 @@ -1,7 +1,13 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): menu-bar menus may
 +// use the window's height. Changes are marked "WDS patch".
@@ -1288,8 +1297,8 @@ diff -ruN a/src/menu/app_menu_bar.rs b/src/menu/app_menu_bar.rs
                      .open(is_open)
                      .on_mouse_down(
 diff -ruN a/src/menu/menu_item.rs b/src/menu/menu_item.rs
---- a/src/menu/menu_item.rs	2026-11-12 22:39:45.272587729 +0100
-+++ b/src/menu/menu_item.rs	2026-11-12 22:39:45.366332036 +0100
+--- a/src/menu/menu_item.rs	2026-11-12 23:15:18.878227318 +0100
++++ b/src/menu/menu_item.rs	2026-11-12 23:15:18.888294912 +0100
 @@ -102,6 +102,10 @@
              .px_2()
              .text_base()
@@ -1315,8 +1324,8 @@ diff -ruN a/src/menu/menu_item.rs b/src/menu/menu_item.rs
                  .when_some(self.on_click, |this, on_click| {
                      this.on_mouse_down(MouseButton::Left, move |_, _, cx| {
 diff -ruN a/src/menu/mod.rs b/src/menu/mod.rs
---- a/src/menu/mod.rs	2026-11-12 22:39:45.272996173 +0100
-+++ b/src/menu/mod.rs	2026-11-12 22:39:45.366853809 +0100
+--- a/src/menu/mod.rs	2026-11-12 23:15:18.878254439 +0100
++++ b/src/menu/mod.rs	2026-11-12 23:15:18.888316783 +0100
 @@ -1,3 +1,6 @@
 +// Modified for PowerCommander: exports MenuBuilder. Changes are marked
 +// "PowerCommander patch".
@@ -1335,8 +1344,8 @@ diff -ruN a/src/menu/mod.rs b/src/menu/mod.rs
  pub use dropdown_menu::DropdownMenu;
  pub use popup_menu::{PopupMenu, PopupMenuItem};
 diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
---- a/src/menu/popup_menu.rs	2026-11-12 22:39:45.274310502 +0100
-+++ b/src/menu/popup_menu.rs	2026-11-12 22:39:45.367524536 +0100
+--- a/src/menu/popup_menu.rs	2026-11-12 23:15:18.878293774 +0100
++++ b/src/menu/popup_menu.rs	2026-11-12 23:15:18.888382328 +0100
 @@ -1,8 +1,13 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a long menu's
 +// scrollbar shows while it scrolls. Changes are marked "WDS patch".
@@ -1441,46 +1450,110 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
      }
  }
  
+diff -ruN a/src/native.rs b/src/native.rs
+--- a/src/native.rs	1970-01-01 01:00:00.000000000 +0100
++++ b/src/native.rs	2026-11-12 23:15:18.892099542 +0100
+@@ -0,0 +1,44 @@
++// PowerCommander patch: this file is new.
++use gpui::{Global, Hsla, Pixels};
++
++/// Controls drawn as the desktop's own style draws them (KDE's Breeze,
++/// Windows 11's): its colours and the sizes that differ; without it, GPUI
++/// Kit's own look.
++#[derive(Clone, Copy, Debug)]
++pub struct NativeControls {
++    /// Check boxes and radio buttons, and a radio button's dot.
++    pub check_size: Pixels,
++    pub radio_dot: Pixels,
++    /// Unchecked, their frame and fill; checked; the mark or dot on them.
++    pub check_frame: Hsla,
++    pub check_fill: Hsla,
++    pub checked_frame: Hsla,
++    pub checked_fill: Hsla,
++    pub mark: Hsla,
++    /// Sliders' and progress bars' groove, and what fills it.
++    pub groove: Hsla,
++    pub fill: Hsla,
++    /// A slider's groove; a progress bar's groove and fill.
++    pub slider_groove: Pixels,
++    pub progress: [Pixels; 2],
++    /// A slider's 20 px handle, its middle, and the rim around the middle.
++    pub handle: Hsla,
++    pub handle_middle: Hsla,
++    pub handle_rim: Pixels,
++    /// Windows': the handle's frame.
++    pub handle_frame: Option<Hsla>,
++    /// Push buttons' fill and frame, normal, hovered and pressed; the default
++    /// button's (a dialog's OK); their text.
++    pub button: [(Hsla, Hsla); 3],
++    pub default_button: [(Hsla, Hsla); 3],
++    pub button_text: Hsla,
++    pub default_button_text: Hsla,
++    /// Windows': the bottom edge of a button's frame, of the default button's.
++    pub button_edge: Option<[Hsla; 2]>,
++    /// Breeze's document-mode tabs: the selected one, the others, the selected one's line.
++    pub tabs: Option<[Hsla; 3]>,
++    /// Windows': a text field's bottom line; focused, the checked fill.
++    pub field_line: Option<Hsla>,
++}
++
++impl Global for NativeControls {}
 diff -ruN a/src/progress/progress.rs b/src/progress/progress.rs
---- a/src/progress/progress.rs	2026-11-12 22:39:45.274737820 +0100
-+++ b/src/progress/progress.rs	2026-11-12 22:39:45.314836586 +0100
-@@ -93,7 +93,13 @@
+--- a/src/progress/progress.rs	2026-11-12 23:15:18.878768626 +0100
++++ b/src/progress/progress.rs	2026-11-12 23:15:18.888890594 +0100
+@@ -93,12 +93,18 @@
          let mut inner_style = StyleRefinement::default();
          inner_style.corner_radii = radius;
  
-+        // PowerCommander patch: Breeze's 6 px groove and fill, see `BreezeControls`.
-+        let breeze = cx.try_global::<crate::BreezeControls>().copied();
+-        let (height, pill_radius) = match self.size {
+-            Size::XSmall => (px(4.), px(2.)),
+-            Size::Small => (px(6.), px(3.)),
+-            Size::Medium => (px(8.), px(4.)),
+-            Size::Large => (px(10.), px(5.)),
+-            Size::Size(s) => (s, s / 2.),
++        // PowerCommander patch: the desktop style's groove and fill, see `NativeControls`.
++        let native = cx.try_global::<crate::NativeControls>().copied();
 +        // AppKit's 8 px groove, rimmed, see `MacControls`.
-+        let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| breeze.is_none());
-         let (height, pill_radius) = match self.size {
-+            _ if breeze.is_some() => (px(6.), px(3.)),
++        let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| native.is_none());
++        let (height, pill_radius) = match (native, self.size) {
++            (Some(native), _) => (native.progress[1], native.progress[1] / 2.),
 +            _ if mac.is_some() => (px(8.), px(4.)),
-             Size::XSmall => (px(4.), px(2.)),
-             Size::Small => (px(6.), px(3.)),
-             Size::Medium => (px(8.), px(4.)),
-@@ -132,7 +138,8 @@
++            (None, Size::XSmall) => (px(4.), px(2.)),
++            (None, Size::Small) => (px(6.), px(3.)),
++            (None, Size::Medium) => (px(8.), px(4.)),
++            (None, Size::Large) => (px(10.), px(5.)),
++            (None, Size::Size(s)) => (s, s / 2.),
+         };
+         // The bar reads as a pill of half its own height, and squares off with
+         // the rest of the UI when the theme has no radius.
+@@ -132,7 +138,13 @@
                  ProgressTrack::new()
                      .absolute()
                      .size_full()
 -                    .bg(bg.opacity(0.2))
-+                    .bg(breeze.map_or(bg.opacity(0.2), |breeze| breeze.groove.into()))
++                    // A groove thinner than the fill, centred under it (Windows').
++                    .when_some(native, |this, native| {
++                        let [groove, fill] = native.progress;
++                        this.h(groove).top((fill - groove) / 2.)
++                    })
++                    .bg(native.map_or(bg.opacity(0.2), |native| native.groove.into()))
 +                    .when_some(mac, |this, mac| this.bg(mac.groove).border(px(0.5)).border_color(mac.groove_rim))
                      .rounded(radius)
                      .refine_style(&inner_style),
              )
-@@ -142,7 +149,8 @@
+@@ -142,7 +154,8 @@
                      .top_0()
                      .left_0()
                      .h_full()
 -                    .bg(bg)
-+                    .bg(breeze.map_or(bg, |breeze| breeze.fill.into()))
++                    .bg(native.map_or(bg, |native| native.fill.into()))
 +                    .when_some(mac, |this, mac| this.bg(mac.accent))
                      .rounded(radius)
                      .refine_style(&inner_style)
                      .map(|this| {
 diff -ruN a/src/qt.rs b/src/qt.rs
 --- a/src/qt.rs	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/qt.rs	2026-11-12 22:39:45.315990337 +0100
++++ b/src/qt.rs	2026-11-12 23:15:18.892121444 +0100
 @@ -0,0 +1,103 @@
 +// PowerCommander patch: this file is new.
 +use std::sync::Arc;
@@ -1492,7 +1565,7 @@ diff -ruN a/src/qt.rs b/src/qt.rs
 +
 +/// Controls drawn by the desktop's own Qt style (KDE's Application Style):
 +/// images of each state, shown in place of GPUI Kit's drawing, or of
-+/// `BreezeControls`'. Images are in device pixels, `scale` to a pixel.
++/// `NativeControls`'. Images are in device pixels, `scale` to a pixel.
 +#[derive(Clone)]
 +pub struct QtControls {
 +    pub scale: f32,
@@ -1586,8 +1659,8 @@ diff -ruN a/src/qt.rs b/src/qt.rs
 +    div().size_full().child(canvas.absolute().inset_0())
 +}
 diff -ruN a/src/radio.rs b/src/radio.rs
---- a/src/radio.rs	2026-11-12 22:39:45.275774326 +0100
-+++ b/src/radio.rs	2026-11-12 22:39:45.382339393 +0100
+--- a/src/radio.rs	2026-11-12 23:15:18.878927218 +0100
++++ b/src/radio.rs	2026-11-12 23:15:18.892258384 +0100
 @@ -8,7 +8,7 @@
  use gpui::{
      AnyElement, App, Axis, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
@@ -1610,8 +1683,8 @@ diff -ruN a/src/radio.rs b/src/radio.rs
 -                    .child(checkbox_check_icon(
 -                        self.id, self.size, checked, disabled, window, cx,
 -                    )),
-+                    // PowerCommander patch: Breeze's circle and dot, see `BreezeControls`; AppKit's, see `MacControls`.
-+                    .map(|this| match (cx.try_global::<crate::BreezeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
++                    // PowerCommander patch: the desktop style's circle and dot, see `NativeControls`; AppKit's, see `MacControls`.
++                    .map(|this| match (cx.try_global::<crate::NativeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
 +                        (None, Some(mac)) => {
 +                            let fill = if checked && !disabled { mac.accent } else { mac.well };
 +                            let dot = if disabled { mac.disabled_text } else { mac.on_accent };
@@ -1623,20 +1696,20 @@ diff -ruN a/src/radio.rs b/src/radio.rs
 +                                .bg(if disabled { fill.opacity(0.5) } else { fill })
 +                                .when(checked, |this| this.child(div().size(px(5.)).rounded_full().bg(dot)))
 +                        }
-+                        (Some(breeze), _) => {
++                        (Some(native), _) => {
 +                            let (border, fill) = match checked {
-+                                true => (breeze.highlight, breeze.checked),
-+                                false => (breeze.frame, breeze.button),
++                                true => (native.checked_frame, native.checked_fill),
++                                false => (native.check_frame, native.check_fill),
 +                            };
 +                            let dim = if disabled { 0.5 } else { 1. };
-+                            this.size(px(16.))
++                            this.size(native.check_size)
 +                                .flex()
 +                                .items_center()
 +                                .justify_center()
 +                                .border_color(border.opacity(dim))
 +                                .bg(fill.opacity(dim))
 +                                .when(checked, |this| {
-+                                    this.child(div().size(px(6.)).rounded_full().bg(breeze.mark.opacity(dim)))
++                                    this.child(div().size(native.radio_dot).rounded_full().bg(native.mark.opacity(dim)))
 +                                })
 +                        }
 +                        (None, None) => this
@@ -1654,8 +1727,8 @@ diff -ruN a/src/radio.rs b/src/radio.rs
              .when(!self.children.is_empty() || self.label.is_some(), |this| {
                  this.child(
 diff -ruN a/src/root.rs b/src/root.rs
---- a/src/root.rs	2026-11-12 22:39:45.276450802 +0100
-+++ b/src/root.rs	2026-11-12 22:39:45.363145147 +0100
+--- a/src/root.rs	2026-11-12 23:15:18.879001749 +0100
++++ b/src/root.rs	2026-11-12 23:15:18.889077289 +0100
 @@ -1,3 +1,6 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): notifications paint
 +// above dialogs. Changes are marked "WDS patch".
@@ -1736,8 +1809,8 @@ diff -ruN a/src/root.rs b/src/root.rs
      }
  }
 diff -ruN a/src/select.rs b/src/select.rs
---- a/src/select.rs	2026-11-12 22:31:13.000000000 +0100
-+++ b/src/select.rs	2026-11-12 22:39:45.363522717 +0100
+--- a/src/select.rs	2026-11-12 23:15:18.879313923 +0100
++++ b/src/select.rs	2026-11-12 23:15:18.892209712 +0100
 @@ -518,6 +518,12 @@
          let outline_visible = self.state.open || (is_focused && !self.state.disabled);
  
@@ -1747,7 +1820,7 @@ diff -ruN a/src/select.rs b/src/select.rs
 +        let mac = cx
 +            .try_global::<crate::MacControls>()
 +            .copied()
-+            .filter(|_| !cx.has_global::<crate::BreezeControls>() && self.state.appearance);
++            .filter(|_| !cx.has_global::<crate::NativeControls>() && self.state.appearance);
  
          self.state.list.update(cx, |list, cx| {
              list.set_searchable(searchable, cx);
@@ -1784,8 +1857,8 @@ diff -ruN a/src/select.rs b/src/select.rs
                                              .text_color(cx.theme().muted_foreground)
                                              .into_any_element(),
 diff -ruN a/src/slider.rs b/src/slider.rs
---- a/src/slider.rs	2026-11-12 22:39:45.277061364 +0100
-+++ b/src/slider.rs	2026-11-12 22:39:45.386312713 +0100
+--- a/src/slider.rs	2026-11-12 23:15:18.879949080 +0100
++++ b/src/slider.rs	2026-11-12 23:15:18.892147203 +0100
 @@ -5,10 +5,10 @@
  use gpui_base::{Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack, spring};
  
@@ -1799,22 +1872,24 @@ diff -ruN a/src/slider.rs b/src/slider.rs
  };
  
  /// Width of the translucent ring that grows outside a hovered thumb.
-@@ -155,6 +155,10 @@
+@@ -155,6 +155,12 @@
              (relative(percentage.start), relative(1. - percentage.end))
          };
          let rem_size = window.rem_size();
-+        // PowerCommander patch: Breeze's groove and handle, see `BreezeControls`;
++        // PowerCommander patch: the desktop style's groove and handle, see `NativeControls`;
 +        // AppKit's groove and pill-shaped knob, see `MacControls`.
-+        let breeze = cx.try_global::<crate::BreezeControls>().copied();
-+        let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| breeze.is_none());
++        let native = cx.try_global::<crate::NativeControls>().copied();
++        let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| native.is_none());
++        // The native 20 px handle centred on the groove.
++        let handle_top = native.map(|native| (native.slider_groove - px(20.)) / 2.);
  
          let bar_color = self
              .style
-@@ -162,12 +166,16 @@
+@@ -162,12 +168,16 @@
              .clone()
              .and_then(|bg| bg.color())
              .unwrap_or(cx.theme().tokens.slider_bar.into());
-+        let bar_color = breeze.map_or(bar_color, |breeze| breeze.fill.into());
++        let bar_color = native.map_or(bar_color, |native| native.fill.into());
 +        let bar_color = mac.map_or(bar_color, |mac| mac.accent.into());
          let thumb_bg: Background = self
              .style
@@ -1822,26 +1897,26 @@ diff -ruN a/src/slider.rs b/src/slider.rs
              .color
              .map(Into::into)
              .unwrap_or_else(|| cx.theme().tokens.slider_thumb.into());
-+        let thumb_bg = breeze.map_or(thumb_bg, |breeze| breeze.button.into());
++        let thumb_bg = native.map_or(thumb_bg, |native| native.handle_middle.into());
 +        let thumb_bg = mac.map_or(thumb_bg, |mac| mac.knob.into());
          let corner_radii = self.style.corner_radii.clone();
          // The track is a pill by default, and square when the theme squares its
          // corners. A caller's own corner radii still win.
-@@ -203,20 +211,38 @@
+@@ -203,20 +213,42 @@
                  .disabled(self.disabled)
                  .when(!self.disabled, |this| {
                      this.absolute()
 -                        .when(axis.is_horizontal(), |this| {
 -                            this.top(px(-5.)).left(position).ml(-px(8.))
-+                        .when(axis.is_horizontal(), |this| match (breeze, mac) {
-+                            (Some(_), _) => this.top(px(-7.)).left(position).ml(-px(10.)),
++                        .when(axis.is_horizontal(), |this| match (handle_top, mac) {
++                            (Some(top), _) => this.top(top).left(position).ml(-px(10.)),
 +                            (None, Some(_)) => this.top(px(-5.)).left(position).ml(-px(10.)),
 +                            (None, None) => this.top(px(-5.)).left(position).ml(-px(8.)),
                          })
 -                        .when(axis.is_vertical(), |this| {
 -                            this.bottom(position).left(px(-5.)).mb(-px(8.))
-+                        .when(axis.is_vertical(), |this| match (breeze, mac) {
-+                            (Some(_), _) => this.bottom(position).left(px(-7.)).mb(-px(10.)),
++                        .when(axis.is_vertical(), |this| match (handle_top, mac) {
++                            (Some(left), _) => this.bottom(position).left(left).mb(-px(10.)),
 +                            (None, Some(_)) => this.bottom(position).left(px(-5.)).mb(-px(10.)),
 +                            (None, None) => this.bottom(position).left(px(-5.)).mb(-px(8.)),
                          })
@@ -1853,8 +1928,12 @@ diff -ruN a/src/slider.rs b/src/slider.rs
 -                        .bg(bar_color.opacity(0.5))
 -                        .size_4()
 -                        .p(px(1.))
-+                        .map(|this| match (breeze, mac) {
-+                            (Some(breeze), _) => this.bg(breeze.handle_frame).size(px(20.)).p(px(1.)),
++                        .map(|this| match (native, mac) {
++                            (Some(native), _) => this
++                                .bg(native.handle)
++                                .size(px(20.))
++                                .p(native.handle_rim)
++                                .when_some(native.handle_frame, |this, frame| this.border_1().border_color(frame)),
 +                            (None, Some(mac)) => this
 +                                .bg(mac.knob)
 +                                .map(|this| match axis.is_horizontal() {
@@ -1873,7 +1952,7 @@ diff -ruN a/src/slider.rs b/src/slider.rs
                          .on_hover({
                              let interaction = ring.interaction.clone();
                              move |entered, _, cx| {
-@@ -236,7 +262,7 @@
+@@ -236,7 +268,7 @@
                          .on_mouse_up_out(MouseButton::Left, ring.press_listener(false))
                          // The ring grows outward from the thumb's edge: inset by
                          // its own width so its inner edge sits flush against it.
@@ -1882,7 +1961,7 @@ diff -ruN a/src/slider.rs b/src/slider.rs
                              div()
                                  .flex_none()
                                  .absolute()
-@@ -247,7 +273,7 @@
+@@ -247,7 +279,7 @@
                                  .rounded_full_style(cx)
                                  .border(ring.width)
                                  .border_color(ring.color),
@@ -1891,21 +1970,25 @@ diff -ruN a/src/slider.rs b/src/slider.rs
                          .child(
                              div()
                                  .flex_shrink_0()
-@@ -287,8 +313,9 @@
+@@ -287,8 +319,13 @@
                              .relative()
                              .when(axis.is_horizontal(), |this| this.w_full().h_1p5())
                              .when(axis.is_vertical(), |this| this.h_full().w_1p5())
 -                            .bg(bar_color.opacity(0.2))
 -                            .active(|this| this.bg(bar_color.opacity(0.4)))
-+                            .bg(breeze.map_or(bar_color.opacity(0.2), |breeze| breeze.groove.into()))
-+                            .active(|this| this.bg(breeze.map_or(bar_color.opacity(0.4), |breeze| breeze.groove.into())))
++                            .when_some(native, |this, native| match axis.is_horizontal() {
++                                true => this.h(native.slider_groove),
++                                false => this.w(native.slider_groove),
++                            })
++                            .bg(native.map_or(bar_color.opacity(0.2), |native| native.groove.into()))
++                            .active(|this| this.bg(native.map_or(bar_color.opacity(0.4), |native| native.groove.into())))
 +                            .when_some(mac, |this, mac| this.bg(mac.well).active(|this| this.bg(mac.well)))
                              .corner_radii(radius)
                              .child(
                                  div()
 diff -ruN a/src/styled.rs b/src/styled.rs
---- a/src/styled.rs	2026-11-12 22:39:45.277654968 +0100
-+++ b/src/styled.rs	2026-11-12 22:39:45.369688544 +0100
+--- a/src/styled.rs	2026-11-12 23:15:18.880461353 +0100
++++ b/src/styled.rs	2026-11-12 23:15:18.890476307 +0100
 @@ -25,6 +25,7 @@
  /// as part of one grounded surface rather than as an outline with a separate
  /// shadow below it. An opaque border cannot reproduce that — a border composites
@@ -1924,81 +2007,9 @@ diff -ruN a/src/styled.rs b/src/styled.rs
  }
  
  /// shadcn/ui's popup surface shadow — a hairline `ring` plus `shadow-md` — at
-diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
---- a/src/tab/tab.rs	2026-11-12 22:39:45.280000887 +0100
-+++ b/src/tab/tab.rs	2026-11-12 22:39:45.341247788 +0100
-@@ -634,6 +634,36 @@
-                 hover_style.borders.left = px(0.);
-             }
-         }
-+        // PowerCommander patch: Breeze's document-mode tabs, see `BreezeControls`:
-+        // the selected one tinted by the selection, the others in the view colour.
-+        let breeze = match self.variant {
-+            TabVariant::Tab => cx.try_global::<crate::BreezeControls>().copied(),
-+            _ => None,
-+        };
-+        if let Some(breeze) = breeze {
-+            normal_style.bg = breeze.tab_inactive.into();
-+            normal_style.fg = breeze.mark;
-+            selected_style.bg = breeze.tab.into();
-+            selected_style.fg = breeze.mark;
-+        }
-+        // PowerCommander patch: AppKit's window tabs, see `MacControls`: pills in
-+        // the bar's track, the selected one lighter and rimmed.
-+        let mac = match self.variant {
-+            TabVariant::Tab if breeze.is_none() => cx.try_global::<crate::MacControls>().copied(),
-+            _ => None,
-+        };
-+        if let Some(mac) = mac {
-+            let transparent = cx.theme().transparent;
-+            for style in [&mut normal_style, &mut hover_style, &mut disabled_style] {
-+                style.bg = transparent.into();
-+                style.borders = Edges::default();
-+                style.border_color = transparent;
-+            }
-+            hover_style.bg = mac.group.into();
-+            selected_style.bg = mac.tab.into();
-+            selected_style.borders = Edges::all(px(0.5));
-+            selected_style.border_color = mac.tab_rim;
-+        }
-         let tab_style = if self.disabled {
-             &disabled_style
-         } else if self.selected {
-@@ -641,12 +671,17 @@
-         } else {
-             &normal_style
-         };
--        let radius = self.variant.radius(self.size, cx);
-+        let radius = if mac.is_some() { px(12.) } else { self.variant.radius(self.size, cx) };
-         let inner_radius = self.variant.inner_radius(self.size, cx);
-         let inner_paddings = self.variant.inner_paddings(self.size);
-         let inner_margins = self.variant.inner_margins(self.size);
-         let inner_height = self.variant.inner_height(self.size);
--        let height = self.variant.height(self.size);
-+        // Breeze's: a 3 px line over 31 px.
-+        let height = match (breeze, mac) {
-+            (Some(_), _) => px(34.),
-+            (None, Some(_)) => px(24.),
-+            (None, None) => self.variant.height(self.size),
-+        };
-         let aria_label = self.a11y_label();
- 
-         let segmented_indicator_active =
-@@ -861,6 +896,11 @@
-                 )
-             })
-             .child(inner_element)
-+            // PowerCommander patch: the selected tab's accent line on top, as Breeze draws it.
-+            .when(self.selected && !self.disabled && self.variant == TabVariant::Tab && mac.is_none(), |this| {
-+                let (line, color) = breeze.map_or((px(2.), cx.theme().primary), |breeze| (px(3.), breeze.highlight));
-+                this.child(div().absolute().top_0().left_0().right_0().h(line).bg(color))
-+            })
-             .when_some(self.suffix, |this, suffix| {
-                 this.child(
-                     div()
 diff -ruN a/src/tab/tab_bar.rs b/src/tab/tab_bar.rs
---- a/src/tab/tab_bar.rs	2026-11-12 22:39:45.278954548 +0100
-+++ b/src/tab/tab_bar.rs	2026-11-12 22:39:45.340881926 +0100
+--- a/src/tab/tab_bar.rs	2026-11-12 23:15:18.880611649 +0100
++++ b/src/tab/tab_bar.rs	2026-11-12 23:15:18.890630200 +0100
 @@ -1,3 +1,6 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the segmented
 +// indicator uses the active tab colour. Changes are marked "WDS patch".
@@ -2023,7 +2034,7 @@ diff -ruN a/src/tab/tab_bar.rs b/src/tab/tab_bar.rs
 +        // PowerCommander patch: AppKit's window tab bar, see `MacControls`: a
 +        // rounded track holding tabs of equal width.
 +        let mac = match self.variant {
-+            TabVariant::Tab if !cx.has_global::<crate::BreezeControls>() => {
++            TabVariant::Tab if !cx.has_global::<crate::NativeControls>() => {
 +                cx.try_global::<crate::MacControls>().copied()
 +            }
 +            _ => None,
@@ -2061,9 +2072,82 @@ diff -ruN a/src/tab/tab_bar.rs b/src/tab/tab_bar.rs
              .paddings(paddings)
              .refine_style(&self.style)
              .when_some(self.prefix, |this, prefix| this.child(prefix))
+diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
+--- a/src/tab/tab.rs	2026-11-12 23:15:18.880567235 +0100
++++ b/src/tab/tab.rs	2026-11-12 23:15:18.890580596 +0100
+@@ -634,6 +634,37 @@
+                 hover_style.borders.left = px(0.);
+             }
+         }
++        // PowerCommander patch: Breeze's document-mode tabs, see `NativeControls`:
++        // the selected one tinted by the selection, the others in the view colour.
++        let native = cx.try_global::<crate::NativeControls>().copied();
++        let breeze = match self.variant {
++            TabVariant::Tab => native.and_then(|native| native.tabs.map(|tabs| (tabs, native.button_text))),
++            _ => None,
++        };
++        if let Some(([selected, others, _], text)) = breeze {
++            normal_style.bg = others.into();
++            normal_style.fg = text;
++            selected_style.bg = selected.into();
++            selected_style.fg = text;
++        }
++        // PowerCommander patch: AppKit's window tabs, see `MacControls`: pills in
++        // the bar's track, the selected one lighter and rimmed.
++        let mac = match self.variant {
++            TabVariant::Tab if breeze.is_none() => cx.try_global::<crate::MacControls>().copied(),
++            _ => None,
++        };
++        if let Some(mac) = mac {
++            let transparent = cx.theme().transparent;
++            for style in [&mut normal_style, &mut hover_style, &mut disabled_style] {
++                style.bg = transparent.into();
++                style.borders = Edges::default();
++                style.border_color = transparent;
++            }
++            hover_style.bg = mac.group.into();
++            selected_style.bg = mac.tab.into();
++            selected_style.borders = Edges::all(px(0.5));
++            selected_style.border_color = mac.tab_rim;
++        }
+         let tab_style = if self.disabled {
+             &disabled_style
+         } else if self.selected {
+@@ -641,12 +672,17 @@
+         } else {
+             &normal_style
+         };
+-        let radius = self.variant.radius(self.size, cx);
++        let radius = if mac.is_some() { px(12.) } else { self.variant.radius(self.size, cx) };
+         let inner_radius = self.variant.inner_radius(self.size, cx);
+         let inner_paddings = self.variant.inner_paddings(self.size);
+         let inner_margins = self.variant.inner_margins(self.size);
+         let inner_height = self.variant.inner_height(self.size);
+-        let height = self.variant.height(self.size);
++        // Breeze's: a 3 px line over 31 px.
++        let height = match (breeze, mac) {
++            (Some(_), _) => px(34.),
++            (None, Some(_)) => px(24.),
++            (None, None) => self.variant.height(self.size),
++        };
+         let aria_label = self.a11y_label();
+ 
+         let segmented_indicator_active =
+@@ -861,6 +897,11 @@
+                 )
+             })
+             .child(inner_element)
++            // PowerCommander patch: the selected tab's accent line on top, as Breeze draws it.
++            .when(self.selected && !self.disabled && self.variant == TabVariant::Tab && mac.is_none(), |this| {
++                let (line, color) = breeze.map_or((px(2.), cx.theme().primary), |([_, _, line], _)| (px(3.), line));
++                this.child(div().absolute().top_0().left_0().right_0().h(line).bg(color))
++            })
+             .when_some(self.suffix, |this, suffix| {
+                 this.child(
+                     div()
 diff -ruN a/src/table/data_table.rs b/src/table/data_table.rs
---- a/src/table/data_table.rs	2026-11-12 22:39:45.280469745 +0100
-+++ b/src/table/data_table.rs	2026-11-12 22:39:45.361393458 +0100
+--- a/src/table/data_table.rs	2026-11-12 23:15:18.880693394 +0100
++++ b/src/table/data_table.rs	2026-11-12 23:15:18.890711464 +0100
 @@ -1,5 +1,10 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): optional lines
 +// between columns; shift and an arrow extends a range of cells; no focus
@@ -2158,8 +2242,8 @@ diff -ruN a/src/table/data_table.rs b/src/table/data_table.rs
      }
  }
 diff -ruN a/src/table/delegate.rs b/src/table/delegate.rs
---- a/src/table/delegate.rs	2026-11-12 22:39:45.281028059 +0100
-+++ b/src/table/delegate.rs	2026-11-12 22:39:45.360125419 +0100
+--- a/src/table/delegate.rs	2026-11-12 23:15:18.880716899 +0100
++++ b/src/table/delegate.rs	2026-11-12 23:15:18.890811825 +0100
 @@ -1,7 +1,10 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a cell can have a
 +// context menu and a background of its own. Changes are marked "WDS patch".
@@ -2199,8 +2283,8 @@ diff -ruN a/src/table/delegate.rs b/src/table/delegate.rs
      fn render_td(
          &mut self,
 diff -ruN a/src/table/state.rs b/src/table/state.rs
---- a/src/table/state.rs	2026-11-12 22:39:45.283571553 +0100
-+++ b/src/table/state.rs	2026-11-12 22:39:45.361097844 +0100
+--- a/src/table/state.rs	2026-11-12 23:15:18.880817651 +0100
++++ b/src/table/state.rs	2026-11-12 23:15:18.890873673 +0100
 @@ -1,3 +1,11 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): in cell selection,
 +// the row header shows row numbers, and the selected cell's row number and
@@ -2732,8 +2816,8 @@ diff -ruN a/src/table/state.rs b/src/table/state.rs
                  }
              })
 diff -ruN a/src/title_bar.rs b/src/title_bar.rs
---- a/src/title_bar.rs	2026-11-12 22:39:45.284232905 +0100
-+++ b/src/title_bar.rs	2026-11-12 22:39:45.352903255 +0100
+--- a/src/title_bar.rs	2026-11-12 23:15:18.881788937 +0100
++++ b/src/title_bar.rs	2026-11-12 23:15:18.892000093 +0100
 @@ -1,3 +1,7 @@
 +// Modified for PowerCommander (Apache-2.0, section 4b): the window's buttons
 +// are those the desktop's layout names, and may be the icon theme's pictures
@@ -2863,8 +2947,8 @@ diff -ruN a/src/title_bar.rs b/src/title_bar.rs
          h_flex()
              .id("window-controls")
 diff -ruN a/src/tree.rs b/src/tree.rs
---- a/src/tree.rs	2026-11-12 22:39:45.284620767 +0100
-+++ b/src/tree.rs	2026-11-12 22:39:45.347193996 +0100
+--- a/src/tree.rs	2026-11-12 23:15:18.881996030 +0100
++++ b/src/tree.rs	2026-11-12 23:15:18.891861610 +0100
 @@ -1,3 +1,8 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a context menu
 +// builder gets the menu's context, so it can add submenus; the row renderer
@@ -2939,8 +3023,8 @@ diff -ruN a/src/tree.rs b/src/tree.rs
                              .into_any_element()
                      })
 diff -ruN a/src/window_border.rs b/src/window_border.rs
---- a/src/window_border.rs	2026-11-12 22:39:45.285349283 +0100
-+++ b/src/window_border.rs	2026-11-12 22:39:45.386658492 +0100
+--- a/src/window_border.rs	2026-11-12 23:15:18.882050133 +0100
++++ b/src/window_border.rs	2026-11-12 23:15:18.891911445 +0100
 @@ -21,6 +21,24 @@
  /// corners, so keep the generic window wrapper square until rounded content masks exist.
  pub(crate) const BORDER_RADIUS: Pixels = px(0.0);
@@ -3005,8 +3089,8 @@ diff -ruN a/src/window_border.rs b/src/window_border.rs
                      .when(!tiling.top, |div| div.border_t(BORDER_SIZE))
                      .when(!tiling.bottom, |div| div.border_b(BORDER_SIZE))
 diff -ruN a/src/window_ext.rs b/src/window_ext.rs
---- a/src/window_ext.rs	2026-11-12 22:39:45.285882098 +0100
-+++ b/src/window_ext.rs	2026-11-12 22:39:45.387555628 +0100
+--- a/src/window_ext.rs	2026-11-12 23:15:18.882077675 +0100
++++ b/src/window_ext.rs	2026-11-12 23:15:18.891944377 +0100
 @@ -11,6 +11,10 @@
  
  /// Extension trait for [`Window`] to add dialog, sheet .. functionality.

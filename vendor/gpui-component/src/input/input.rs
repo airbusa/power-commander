@@ -708,7 +708,7 @@ impl RenderOnce for Input {
         let mac = cx
             .try_global::<crate::MacControls>()
             .copied()
-            .filter(|_| !cx.has_global::<crate::BreezeControls>() && !presentation.is_code_editor());
+            .filter(|_| !cx.has_global::<crate::NativeControls>() && !presentation.is_code_editor());
         let bg = if presentation.is_code_editor() {
             cx.theme().editor_background()
         } else {
@@ -718,6 +718,18 @@ impl RenderOnce for Input {
             bg.opacity(0.5)
         } else {
             bg
+        };
+        // PowerCommander patch: Windows' fields, see `NativeControls`: a button's
+        // fill, the page's when focused, and a bottom line, the accent's when focused.
+        let field_line = cx
+            .try_global::<crate::NativeControls>()
+            .and_then(|native| native.field_line.map(|line| (line, native.checked_fill, native.button[0].0)))
+            .filter(|_| self.appearance && self.bordered);
+        let bg = match field_line {
+            Some(_) if presentation.is_disabled() || presentation.is_code_editor() => bg,
+            Some(_) if focused => cx.theme().background,
+            Some((_, _, fill)) => fill,
+            None => bg,
         };
         let prefix = self.prefix;
         let suffix = self.suffix;
@@ -761,7 +773,7 @@ impl RenderOnce for Input {
             .styles(|styles| {
                 styles.focused(|style| {
                     style.when(
-                        self.appearance && self.bordered && self.focus_bordered,
+                        self.appearance && self.bordered && self.focus_bordered && field_line.is_none(),
                         |style| style.border_1().border_color(mac.map_or(cx.theme().ring, |mac| mac.accent)),
                     )
                 })
@@ -808,6 +820,14 @@ impl RenderOnce for Input {
                             .when(self.bordered, |this| this.border_color(mac.field_frame))
                             .when(!is_multi_line && matches!(self.size, Size::Medium), |this| this.h(px(24.)).py_0())
                     })
+            })
+            // In place of the bottom border: the field clips what is on its border.
+            .when_some(field_line, |this, (line, accent, _)| {
+                let (height, color) = if focused { (px(2.), accent) } else { (px(1.), line) };
+                let inset = cx.theme().radius;
+                this.relative()
+                    .border_b_0()
+                    .child(div().absolute().left(inset).right(inset).bottom_0().h(height).bg(color))
             })
             .items_center()
             .gap(gap_x)

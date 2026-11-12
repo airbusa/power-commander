@@ -197,11 +197,11 @@ pub(crate) fn checkbox_check_icon(
         window,
         cx,
     );
-    // PowerCommander patch: Breeze marks in the text colour, see `BreezeControls`;
+    // PowerCommander patch: the desktop style's mark, see `NativeControls`;
     // AppKit's, bolder, on the accent, see `MacControls`.
     let mac = cx.try_global::<crate::MacControls>().copied();
-    let color = match (cx.try_global::<crate::BreezeControls>(), mac) {
-        (Some(breeze), _) => breeze.mark,
+    let color = match (cx.try_global::<crate::NativeControls>(), mac) {
+        (Some(native), _) => native.mark,
         (None, Some(mac)) if disabled => mac.disabled_text,
         (None, Some(mac)) => mac.on_accent,
         (None, None) => cx.theme().primary_foreground,
@@ -309,9 +309,9 @@ impl RenderOnce for Checkbox {
                     .when(has_content, |this| this.mt(indicator_size * 0.125))
                     .flex_shrink_0()
                     .border_1()
-                    // PowerCommander patch: the Qt style's box, else Breeze's, see `QtControls`, `BreezeControls`;
+                    // PowerCommander patch: the Qt style's box, else the desktop style's, see `QtControls`, `NativeControls`;
                     // AppKit's, see `MacControls`.
-                    .map(|this| match (&qt, cx.try_global::<crate::BreezeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
+                    .map(|this| match (&qt, cx.try_global::<crate::NativeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
                         (Some(qt), _, _) => {
                             let images = &qt.checkbox[checked as usize];
                             let (width, height) = qt.size(&images.0[crate::qt::NORMAL]);
@@ -328,13 +328,13 @@ impl RenderOnce for Checkbox {
                                 .border_color(cx.theme().transparent)
                                 .bg(if self.disabled { fill.opacity(0.5) } else { fill })
                         }
-                        (None, Some(breeze), _) => {
+                        (None, Some(native), _) => {
                             let (border, fill) = match checked {
-                                true => (breeze.highlight, breeze.checked),
-                                false => (breeze.frame, breeze.button),
+                                true => (native.checked_frame, native.checked_fill),
+                                false => (native.check_frame, native.check_fill),
                             };
                             let dim = if self.disabled { 0.5 } else { 1. };
-                            this.size(px(16.))
+                            this.size(native.check_size)
                                 .rounded(px(4.))
                                 .border_color(border.opacity(dim))
                                 .bg(fill.opacity(dim))

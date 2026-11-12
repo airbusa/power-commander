@@ -8,7 +8,7 @@ use gpui::{
 
 /// Controls drawn by the desktop's own Qt style (KDE's Application Style):
 /// images of each state, shown in place of GPUI Kit's drawing, or of
-/// `BreezeControls`'. Images are in device pixels, `scale` to a pixel.
+/// `NativeControls`'. Images are in device pixels, `scale` to a pixel.
 #[derive(Clone)]
 pub struct QtControls {
     pub scale: f32,

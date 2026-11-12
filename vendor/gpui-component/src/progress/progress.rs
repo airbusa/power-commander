@@ -93,18 +93,18 @@ impl RenderOnce for Progress {
         let mut inner_style = StyleRefinement::default();
         inner_style.corner_radii = radius;
 
-        // PowerCommander patch: Breeze's 6 px groove and fill, see `BreezeControls`.
-        let breeze = cx.try_global::<crate::BreezeControls>().copied();
+        // PowerCommander patch: the desktop style's groove and fill, see `NativeControls`.
+        let native = cx.try_global::<crate::NativeControls>().copied();
         // AppKit's 8 px groove, rimmed, see `MacControls`.
-        let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| breeze.is_none());
-        let (height, pill_radius) = match self.size {
-            _ if breeze.is_some() => (px(6.), px(3.)),
+        let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| native.is_none());
+        let (height, pill_radius) = match (native, self.size) {
+            (Some(native), _) => (native.progress[1], native.progress[1] / 2.),
             _ if mac.is_some() => (px(8.), px(4.)),
-            Size::XSmall => (px(4.), px(2.)),
-            Size::Small => (px(6.), px(3.)),
-            Size::Medium => (px(8.), px(4.)),
-            Size::Large => (px(10.), px(5.)),
-            Size::Size(s) => (s, s / 2.),
+            (None, Size::XSmall) => (px(4.), px(2.)),
+            (None, Size::Small) => (px(6.), px(3.)),
+            (None, Size::Medium) => (px(8.), px(4.)),
+            (None, Size::Large) => (px(10.), px(5.)),
+            (None, Size::Size(s)) => (s, s / 2.),
         };
         // The bar reads as a pill of half its own height, and squares off with
         // the rest of the UI when the theme has no radius.
@@ -138,7 +138,12 @@ impl RenderOnce for Progress {
                 ProgressTrack::new()
                     .absolute()
                     .size_full()
-                    .bg(breeze.map_or(bg.opacity(0.2), |breeze| breeze.groove.into()))
+                    // A groove thinner than the fill, centred under it (Windows').
+                    .when_some(native, |this, native| {
+                        let [groove, fill] = native.progress;
+                        this.h(groove).top((fill - groove) / 2.)
+                    })
+                    .bg(native.map_or(bg.opacity(0.2), |native| native.groove.into()))
                     .when_some(mac, |this, mac| this.bg(mac.groove).border(px(0.5)).border_color(mac.groove_rim))
                     .rounded(radius)
                     .refine_style(&inner_style),
@@ -149,7 +154,7 @@ impl RenderOnce for Progress {
                     .top_0()
                     .left_0()
                     .h_full()
-                    .bg(breeze.map_or(bg, |breeze| breeze.fill.into()))
+                    .bg(native.map_or(bg, |native| native.fill.into()))
                     .when_some(mac, |this, mac| this.bg(mac.accent))
                     .rounded(radius)
                     .refine_style(&inner_style)

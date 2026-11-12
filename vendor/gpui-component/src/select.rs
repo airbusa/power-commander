@@ -523,7 +523,7 @@ where
         let mac = cx
             .try_global::<crate::MacControls>()
             .copied()
-            .filter(|_| !cx.has_global::<crate::BreezeControls>() && self.state.appearance);
+            .filter(|_| !cx.has_global::<crate::NativeControls>() && self.state.appearance);
 
         self.state.list.update(cx, |list, cx| {
             list.set_searchable(searchable, cx);

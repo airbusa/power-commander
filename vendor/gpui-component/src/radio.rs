@@ -238,8 +238,8 @@ impl RenderOnce for Radio {
                     .flex_shrink_0()
                     .rounded_full_style(cx)
                     .border_1()
-                    // PowerCommander patch: Breeze's circle and dot, see `BreezeControls`; AppKit's, see `MacControls`.
-                    .map(|this| match (cx.try_global::<crate::BreezeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
+                    // PowerCommander patch: the desktop style's circle and dot, see `NativeControls`; AppKit's, see `MacControls`.
+                    .map(|this| match (cx.try_global::<crate::NativeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
                         (None, Some(mac)) => {
                             let fill = if checked && !disabled { mac.accent } else { mac.well };
                             let dot = if disabled { mac.disabled_text } else { mac.on_accent };
@@ -251,20 +251,20 @@ impl RenderOnce for Radio {
                                 .bg(if disabled { fill.opacity(0.5) } else { fill })
                                 .when(checked, |this| this.child(div().size(px(5.)).rounded_full().bg(dot)))
                         }
-                        (Some(breeze), _) => {
+                        (Some(native), _) => {
                             let (border, fill) = match checked {
-                                true => (breeze.highlight, breeze.checked),
-                                false => (breeze.frame, breeze.button),
+                                true => (native.checked_frame, native.checked_fill),
+                                false => (native.check_frame, native.check_fill),
                             };
                             let dim = if disabled { 0.5 } else { 1. };
-                            this.size(px(16.))
+                            this.size(native.check_size)
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .border_color(border.opacity(dim))
                                 .bg(fill.opacity(dim))
                                 .when(checked, |this| {
-                                    this.child(div().size(px(6.)).rounded_full().bg(breeze.mark.opacity(dim)))
+                                    this.child(div().size(native.radio_dot).rounded_full().bg(native.mark.opacity(dim)))
                                 })
                         }
                         (None, None) => this

@@ -634,17 +634,18 @@ impl RenderOnce for Tab {
                 hover_style.borders.left = px(0.);
             }
         }
-        // PowerCommander patch: Breeze's document-mode tabs, see `BreezeControls`:
+        // PowerCommander patch: Breeze's document-mode tabs, see `NativeControls`:
         // the selected one tinted by the selection, the others in the view colour.
+        let native = cx.try_global::<crate::NativeControls>().copied();
         let breeze = match self.variant {
-            TabVariant::Tab => cx.try_global::<crate::BreezeControls>().copied(),
+            TabVariant::Tab => native.and_then(|native| native.tabs.map(|tabs| (tabs, native.button_text))),
             _ => None,
         };
-        if let Some(breeze) = breeze {
-            normal_style.bg = breeze.tab_inactive.into();
-            normal_style.fg = breeze.mark;
-            selected_style.bg = breeze.tab.into();
-            selected_style.fg = breeze.mark;
+        if let Some(([selected, others, _], text)) = breeze {
+            normal_style.bg = others.into();
+            normal_style.fg = text;
+            selected_style.bg = selected.into();
+            selected_style.fg = text;
         }
         // PowerCommander patch: AppKit's window tabs, see `MacControls`: pills in
         // the bar's track, the selected one lighter and rimmed.
@@ -898,7 +899,7 @@ impl RenderOnce for Tab {
             .child(inner_element)
             // PowerCommander patch: the selected tab's accent line on top, as Breeze draws it.
             .when(self.selected && !self.disabled && self.variant == TabVariant::Tab && mac.is_none(), |this| {
-                let (line, color) = breeze.map_or((px(2.), cx.theme().primary), |breeze| (px(3.), breeze.highlight));
+                let (line, color) = breeze.map_or((px(2.), cx.theme().primary), |([_, _, line], _)| (px(3.), line));
                 this.child(div().absolute().top_0().left_0().right_0().h(line).bg(color))
             })
             .when_some(self.suffix, |this, suffix| {

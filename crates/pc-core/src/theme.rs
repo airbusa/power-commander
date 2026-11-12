@@ -197,57 +197,170 @@ pub fn sidebar_see_through() -> bool {
     cfg!(any(target_os = "macos", windows)) || kwin
 }
 
-/// The controls' colours as KDE's Breeze style mixes them from the scheme
-/// (`breezehelper.cpp`, `breezestyle.cpp`).
+/// The desktop style whose controls the app draws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlStyle {
+    /// KDE's Breeze, whatever its widget style, Breeze being the closest we draw.
+    Breeze,
+    /// Windows 11's (WinUI's Fluent controls).
+    Fluent,
+}
+
+/// This desktop's control style; none where GPUI Kit's own look stands.
+pub fn control_style() -> Option<ControlStyle> {
+    match () {
+        _ if cfg!(windows) => Some(ControlStyle::Fluent),
+        _ if cfg!(any(target_os = "linux", target_os = "freebsd")) && on_kde() => Some(ControlStyle::Breeze),
+        _ => None,
+    }
+}
+
+/// The controls' colours as the desktop's style draws them.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct BreezeColors {
-    pub button: u32,
-    /// Frames: a fifth of the text over the window.
-    pub frame: u32,
-    /// A checked box's or radio button's fill: the button under 30% of the selection.
-    pub checked: u32,
-    pub highlight: u32,
-    /// Marks and dots: the text.
+pub struct ControlColors {
+    /// Check boxes and radio buttons: unchecked, their frame and fill; checked; the mark on them.
+    pub check_frame: u32,
+    pub check_fill: u32,
+    pub checked_frame: u32,
+    pub checked_fill: u32,
     pub mark: u32,
-    /// A slider's or progress bar's groove: the text at 14% over the window.
+    /// Sliders and progress bars: the groove, what fills it; a slider's handle and its middle.
     pub groove: u32,
-    /// What fills it: the selection at 70% over the window.
     pub fill: u32,
-    /// A slider handle's frame, a button's: a fifth of the text over the button.
-    pub handle_frame: u32,
-    /// The default button's fill (a dialog's OK): the button under 20% of the selection.
-    pub default_fill: u32,
-    /// Its frame: halfway between the selection and a button's frame.
-    pub default_frame: u32,
-    /// The selected tab: the window under 20% of the selection.
-    pub tab: u32,
-    /// The others: the view.
-    pub tab_inactive: u32,
+    pub handle: u32,
+    pub handle_middle: u32,
+    /// Windows': the handle's frame.
+    pub handle_frame: Option<u32>,
+    /// Push buttons' fill and frame, normal, hovered and pressed; the default
+    /// button's (a dialog's OK); their text.
+    pub button: [[u32; 2]; 3],
+    pub default_button: [[u32; 2]; 3],
+    pub button_text: u32,
+    pub default_button_text: u32,
+    /// Windows': the bottom edge of a button's frame, of the default button's.
+    pub button_edge: Option<[u32; 2]>,
+    /// Breeze's tabs: the selected one, the others, the selected one's line.
+    pub tabs: Option<[u32; 3]>,
+    /// Windows': a text field's bottom line, the checked fill when focused.
+    pub field_line: Option<u32>,
 }
 
 impl Palette {
-    pub fn breeze(&self) -> BreezeColors {
-        BreezeColors {
-            button: self.button,
-            frame: self.border,
-            checked: mix(self.button, self.selection, 0.3),
-            highlight: self.selection,
+    pub fn controls(&self, style: ControlStyle) -> ControlColors {
+        match style {
+            ControlStyle::Breeze => self.breeze(),
+            ControlStyle::Fluent => self.fluent(windows_accents()),
+        }
+    }
+
+    /// As KDE's Breeze style mixes them from the scheme (`breezehelper.cpp`, `breezestyle.cpp`).
+    fn breeze(&self) -> ControlColors {
+        // Frames: a fifth of the text over the button.
+        let frame = mix(self.button, self.text, 0.2);
+        let checked = mix(self.button, self.selection, 0.3);
+        let default_fill = mix(self.button, self.selection, 0.2);
+        ControlColors {
+            check_frame: self.border,
+            check_fill: self.button,
+            checked_frame: self.selection,
+            checked_fill: checked,
             mark: self.text,
             groove: mix(self.window, self.text, 0.14),
             fill: mix(self.window, self.selection, 0.7),
-            handle_frame: mix(self.button, self.text, 0.2),
-            default_fill: mix(self.button, self.selection, 0.2),
-            default_frame: mix(self.selection, mix(self.button, self.text, 0.2), 0.5),
-            tab: mix(self.window, self.selection, 0.2),
-            tab_inactive: self.view,
+            handle: frame,
+            handle_middle: self.button,
+            handle_frame: None,
+            button: [[self.button, frame], [self.button, self.selection], [checked, self.selection]],
+            default_button: [
+                [default_fill, mix(self.selection, frame, 0.5)],
+                [default_fill, self.selection],
+                [checked, self.selection],
+            ],
+            button_text: self.text,
+            default_button_text: self.text,
+            button_edge: None,
+            tabs: Some([mix(self.window, self.selection, 0.2), self.view, self.selection]),
+            field_line: None,
+        }
+    }
+
+    /// Windows 11's (WinUI's theme resources), its translucent colours laid
+    /// over the window; `accents` the user's, light to dark.
+    fn fluent(&self, accents: [u32; 7]) -> ControlColors {
+        let over = |under: u32, argb: u32| mix(under, argb & 0xffffff, (argb >> 24) as f32 / 255.);
+        let on = |argb: u32| over(self.window, argb);
+        // AccentFillColorDefault: lighter on dark, darker on light; hovered 90%, pressed 80%.
+        let accent = if self.dark { accents[1] } else { accents[4] };
+        let accent_at = |share: f32| mix(self.window, accent, share);
+        let (stroke, strong, text, on_accent) = match self.dark {
+            true => (0x12ffffff, 0x8bffffff, 0xffffff, 0x000000),
+            false => (0x0f000000, 0x72000000, on(0xe4000000), 0xffffff),
+        };
+        let fills: [u32; 3] = match self.dark {
+            true => [0x0fffffff, 0x15ffffff, 0x08ffffff],
+            false => [0xb3ffffff, 0x80f9f9f9, 0x4df9f9f9],
+        };
+        let accent_frame = over(accent, 0x14ffffff);
+        ControlColors {
+            check_frame: on(strong),
+            check_fill: on(if self.dark { 0x19000000 } else { 0x06000000 }),
+            checked_frame: accent,
+            checked_fill: accent,
+            mark: on_accent,
+            groove: on(strong),
+            fill: accent,
+            handle: if self.dark { 0x454545 } else { 0xffffff },
+            handle_middle: accent,
+            // ControlElevationBorder: its darker edge on light, which a white handle needs.
+            handle_frame: Some(on(if self.dark { stroke } else { 0x29000000 })),
+            button: fills.map(|fill| [on(fill), on(stroke)]),
+            default_button: [[accent, accent_frame], [accent_at(0.9), accent_frame], [accent_at(0.8), accent_at(0.8)]],
+            button_text: text,
+            default_button_text: on_accent,
+            // The bottom of the frame: darker on light; dark has its lighter edge on top.
+            button_edge: Some(match self.dark {
+                true => [on(stroke), over(accent, 0x23000000)],
+                false => [on(0x29000000), over(accent, 0x66000000)],
+            }),
+            tabs: None,
+            field_line: Some(on(strong)),
         }
     }
 }
 
-/// Whether the controls are drawn as KDE's Breeze style draws them: on KDE,
-/// whatever its widget style, Breeze being the closest we draw.
-pub fn breeze_controls() -> bool {
-    cfg!(any(target_os = "linux", target_os = "freebsd")) && on_kde()
+/// Windows' accent and its shades, light to dark (Light3 … Dark3), as the
+/// Explorer keeps them; Windows' default blue elsewhere, or unread.
+fn windows_accents() -> [u32; 7] {
+    #[cfg(windows)]
+    if let Some(accents) = registry_binary(ACCENT_KEY, "AccentPalette").and_then(|bytes| accent_palette(&bytes)) {
+        return accents;
+    }
+    [0x99ebff, 0x4cc2ff, 0x0091f8, 0x0078d4, 0x0067c0, 0x003e92, 0x001a68]
+}
+
+#[cfg(windows)]
+const ACCENT_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Accent";
+
+/// The Explorer's AccentPalette: R, G, B and an unused byte for each shade.
+#[cfg(any(windows, test))]
+fn accent_palette(bytes: &[u8]) -> Option<[u32; 7]> {
+    (bytes.len() >= 28).then(|| std::array::from_fn(|i| u32::from_be_bytes([0, bytes[i * 4], bytes[i * 4 + 1], bytes[i * 4 + 2]])))
+}
+
+/// A binary value of the user's registry.
+#[cfg(windows)]
+fn registry_binary(key: &str, value: &str) -> Option<Vec<u8>> {
+    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_BINARY, RegGetValueW};
+    use windows::core::HSTRING;
+    let (key, value) = (HSTRING::from(key), HSTRING::from(value));
+    let mut data = vec![0u8; 64];
+    let mut size = data.len() as u32;
+    let flags = RRF_RT_REG_BINARY;
+    let read = unsafe { RegGetValueW(HKEY_CURRENT_USER, &key, &value, flags, None, Some(data.as_mut_ptr().cast()), Some(&mut size)) };
+    read.is_ok().then(|| {
+        data.truncate(size as usize);
+        data
+    })
 }
 
 /// GTK's header bar as the GTK theme draws it (measured with GTK 3, which
@@ -500,7 +613,7 @@ fn adwaita(dark: bool) -> Palette {
 
 /// Windows 11's, with its default accent.
 fn windows(dark: bool) -> Palette {
-    // shortcut: the default accent; read the user's from the registry with the Windows build.
+    let accent = windows_accents()[3];
     match dark {
         true => Palette {
             dark,
@@ -511,7 +624,7 @@ fn windows(dark: bool) -> Palette {
             text: 0xffffff,
             dim: 0xc5c5c5,
             border: 0x3d3d3d,
-            selection: 0x0078d4,
+            selection: accent,
             selection_text: 0xffffff,
             marked: 0xff99a4,
             font: Some("Segoe UI".into()),
@@ -526,7 +639,7 @@ fn windows(dark: bool) -> Palette {
             text: 0x1a1a1a,
             dim: 0x5d5d5d,
             border: 0xe5e5e5,
-            selection: 0x0078d4,
+            selection: accent,
             selection_text: 0xffffff,
             marked: 0xc42b1c,
             font: Some("Segoe UI".into()),
@@ -590,6 +703,32 @@ fn luminance(rgb: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_11_controls() {
+        // Windows' default blue, as its registry has it.
+        let bytes = [
+            0x99, 0xeb, 0xff, 0, 0x4c, 0xc2, 0xff, 0, 0x00, 0x91, 0xf8, 0, 0x00, 0x78, 0xd4, 0, 0x00, 0x67, 0xc0, 0, 0x00, 0x3e,
+            0x92, 0, 0x00, 0x1a, 0x68, 0, 0xf7, 0x63, 0x0c, 0,
+        ];
+        let accents = accent_palette(&bytes).unwrap();
+        assert_eq!((accents[1], accents[3], accents[4]), (0x4cc2ff, 0x0078d4, 0x0067c0));
+        assert_eq!(accent_palette(&bytes[..20]), None);
+        // The lighter shade on dark, the darker on light; marks in black, white.
+        let dark = windows(true).fluent(accents);
+        assert_eq!((dark.checked_fill, dark.mark, dark.default_button_text), (0x4cc2ff, 0x000000, 0x000000));
+        let light = windows(false).fluent(accents);
+        assert_eq!((light.checked_fill, light.mark), (0x0067c0, 0xffffff));
+        // ControlFillColorDefault, 6% white, over dark's #202020.
+        assert_eq!(dark.button[0][0], 0x2d2d2d);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reads_the_accent_from_the_registry() {
+        let bytes = registry_binary(ACCENT_KEY, "AccentPalette").expect("AccentPalette");
+        assert!(accent_palette(&bytes).is_some());
+    }
 
     #[test]
     fn qt_font_sizes() {

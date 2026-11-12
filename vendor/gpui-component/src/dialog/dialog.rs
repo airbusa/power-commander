@@ -717,7 +717,7 @@ impl RenderOnce for Dialog {
         let mac = cx
             .try_global::<crate::MacControls>()
             .copied()
-            .filter(|_| !cx.has_global::<crate::BreezeControls>());
+            .filter(|_| !cx.has_global::<crate::NativeControls>());
         let band = px(if mac.is_some() { 32. } else { TITLE_BAND_HEIGHT });
         let corner = mac.map_or(cx.theme().radius_lg, |_| px(16.));
         let active = window.is_window_active();

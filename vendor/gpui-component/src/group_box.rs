@@ -145,7 +145,7 @@ impl RenderOnce for GroupBox {
         let mac = cx
             .try_global::<crate::MacControls>()
             .copied()
-            .filter(|_| !cx.has_global::<crate::BreezeControls>());
+            .filter(|_| !cx.has_global::<crate::NativeControls>());
         let (bg, border, has_paddings): (Option<Background>, _, _) = match self.variant {
             GroupBoxVariant::Normal => (None, None, false),
             _ if mac.is_some() => (mac.map(|mac| mac.group.into()), None, true),

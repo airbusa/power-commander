@@ -372,7 +372,7 @@ impl RenderOnce for TabBar {
         // PowerCommander patch: AppKit's window tab bar, see `MacControls`: a
         // rounded track holding tabs of equal width.
         let mac = match self.variant {
-            TabVariant::Tab if !cx.has_global::<crate::BreezeControls>() => {
+            TabVariant::Tab if !cx.has_global::<crate::NativeControls>() => {
                 cx.try_global::<crate::MacControls>().copied()
             }
             _ => None,

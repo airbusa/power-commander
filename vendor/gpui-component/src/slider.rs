@@ -155,10 +155,12 @@ impl RenderOnce for Slider {
             (relative(percentage.start), relative(1. - percentage.end))
         };
         let rem_size = window.rem_size();
-        // PowerCommander patch: Breeze's groove and handle, see `BreezeControls`;
+        // PowerCommander patch: the desktop style's groove and handle, see `NativeControls`;
         // AppKit's groove and pill-shaped knob, see `MacControls`.
-        let breeze = cx.try_global::<crate::BreezeControls>().copied();
-        let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| breeze.is_none());
+        let native = cx.try_global::<crate::NativeControls>().copied();
+        let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| native.is_none());
+        // The native 20 px handle centred on the groove.
+        let handle_top = native.map(|native| (native.slider_groove - px(20.)) / 2.);
 
         let bar_color = self
             .style
@@ -166,7 +168,7 @@ impl RenderOnce for Slider {
             .clone()
             .and_then(|bg| bg.color())
             .unwrap_or(cx.theme().tokens.slider_bar.into());
-        let bar_color = breeze.map_or(bar_color, |breeze| breeze.fill.into());
+        let bar_color = native.map_or(bar_color, |native| native.fill.into());
         let bar_color = mac.map_or(bar_color, |mac| mac.accent.into());
         let thumb_bg: Background = self
             .style
@@ -174,7 +176,7 @@ impl RenderOnce for Slider {
             .color
             .map(Into::into)
             .unwrap_or_else(|| cx.theme().tokens.slider_thumb.into());
-        let thumb_bg = breeze.map_or(thumb_bg, |breeze| breeze.button.into());
+        let thumb_bg = native.map_or(thumb_bg, |native| native.handle_middle.into());
         let thumb_bg = mac.map_or(thumb_bg, |mac| mac.knob.into());
         let corner_radii = self.style.corner_radii.clone();
         // The track is a pill by default, and square when the theme squares its
@@ -211,13 +213,13 @@ impl RenderOnce for Slider {
                 .disabled(self.disabled)
                 .when(!self.disabled, |this| {
                     this.absolute()
-                        .when(axis.is_horizontal(), |this| match (breeze, mac) {
-                            (Some(_), _) => this.top(px(-7.)).left(position).ml(-px(10.)),
+                        .when(axis.is_horizontal(), |this| match (handle_top, mac) {
+                            (Some(top), _) => this.top(top).left(position).ml(-px(10.)),
                             (None, Some(_)) => this.top(px(-5.)).left(position).ml(-px(10.)),
                             (None, None) => this.top(px(-5.)).left(position).ml(-px(8.)),
                         })
-                        .when(axis.is_vertical(), |this| match (breeze, mac) {
-                            (Some(_), _) => this.bottom(position).left(px(-7.)).mb(-px(10.)),
+                        .when(axis.is_vertical(), |this| match (handle_top, mac) {
+                            (Some(left), _) => this.bottom(position).left(left).mb(-px(10.)),
                             (None, Some(_)) => this.bottom(position).left(px(-5.)).mb(-px(10.)),
                             (None, None) => this.bottom(position).left(px(-5.)).mb(-px(8.)),
                         })
@@ -226,8 +228,12 @@ impl RenderOnce for Slider {
                         .justify_center()
                         .flex_shrink_0()
                         .rounded_full_style(cx)
-                        .map(|this| match (breeze, mac) {
-                            (Some(breeze), _) => this.bg(breeze.handle_frame).size(px(20.)).p(px(1.)),
+                        .map(|this| match (native, mac) {
+                            (Some(native), _) => this
+                                .bg(native.handle)
+                                .size(px(20.))
+                                .p(native.handle_rim)
+                                .when_some(native.handle_frame, |this, frame| this.border_1().border_color(frame)),
                             (None, Some(mac)) => this
                                 .bg(mac.knob)
                                 .map(|this| match axis.is_horizontal() {
@@ -313,8 +319,12 @@ impl RenderOnce for Slider {
                             .relative()
                             .when(axis.is_horizontal(), |this| this.w_full().h_1p5())
                             .when(axis.is_vertical(), |this| this.h_full().w_1p5())
-                            .bg(breeze.map_or(bar_color.opacity(0.2), |breeze| breeze.groove.into()))
-                            .active(|this| this.bg(breeze.map_or(bar_color.opacity(0.4), |breeze| breeze.groove.into())))
+                            .when_some(native, |this, native| match axis.is_horizontal() {
+                                true => this.h(native.slider_groove),
+                                false => this.w(native.slider_groove),
+                            })
+                            .bg(native.map_or(bar_color.opacity(0.2), |native| native.groove.into()))
+                            .active(|this| this.bg(native.map_or(bar_color.opacity(0.4), |native| native.groove.into())))
                             .when_some(mac, |this, mac| this.bg(mac.well).active(|this| this.bg(mac.well)))
                             .corner_radii(radius)
                             .child(
