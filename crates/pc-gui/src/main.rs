@@ -87,7 +87,7 @@ actions!(
 include!(concat!(env!("OUT_DIR"), "/material_icons.rs"));
 
 // Lucide icons beyond GPUI Kit's own set.
-gpui_kit::assets::icon_assets!(ExtraIcons, [Server, Smartphone, Tablet, Laptop, Monitor, Tv, Usb, Menu]);
+gpui_kit::assets::icon_assets!(ExtraIcons, [Server, Smartphone, Tablet, Laptop, Monitor, Tv, Usb, Menu, Cloud]);
 
 /// GPUI Kit's icons, the file icons as `material/<name>.svg`, the player's as `media/`.
 struct AppAssets;
@@ -1489,7 +1489,11 @@ impl Commander {
                     .gap_1()
                     .child(icon)
                     .child(div().flex_1().min_w_0().truncate().child(name))
-                    .child(tag_dots(&entry.tags, cx.theme().background)),
+                    .child(tag_dots(&entry.tags, cx.theme().background))
+                    .when(entry.online, |el| {
+                        let cloud = Icon::new(gpui_kit::assets::IconName::Cloud).xsmall();
+                        el.child(cloud.text_color(cx.theme().muted_foreground))
+                    }),
             )
             .child(div().w(ext).flex_none().px_1().truncate().child(extension))
             .child(
@@ -1577,8 +1581,12 @@ impl Commander {
                     MouseButton::Right,
                     cx.listener(move |this, _, window, cx| {
                         this.right_click(ix, row, window, cx);
-                        this.show_file_menu(ix, window, cx);
-                        cx.stop_propagation();
+                        // Elsewhere the panel's own menu opens as the click goes on.
+                        #[cfg(target_os = "macos")]
+                        {
+                            this.show_file_menu(ix, window, cx);
+                            cx.stop_propagation();
+                        }
                     }),
                 );
                 #[cfg(windows)]

@@ -538,6 +538,7 @@ impl Commander {
         let icon = match volume.kind {
             VolumeKind::System | VolumeKind::Drive => Icon::new(IconName::HardDrive),
             VolumeKind::Removable => Icon::new(Lucide::Usb),
+            VolumeKind::Cloud => Icon::new(Lucide::Cloud),
             VolumeKind::Network => Icon::new(IconName::Network),
             VolumeKind::Phone => Icon::new(Lucide::Smartphone),
         };
@@ -625,10 +626,17 @@ impl Commander {
         };
         let drives = of(&[VolumeKind::System, VolumeKind::Drive, VolumeKind::Removable]);
         let (phones, network) = (of(&[VolumeKind::Phone]), of(&[VolumeKind::Network]));
+        let cloud = of(&[VolumeKind::Cloud]);
         if !drives.is_empty() {
             list = list.child(section("Drives", cx));
         }
         for (ix, volume) in &drives {
+            list = list.child(self.render_volume(*ix, volume, inside.as_deref(), cx));
+        }
+        if !cloud.is_empty() {
+            list = list.child(section("Cloud", cx));
+        }
+        for (ix, volume) in &cloud {
             list = list.child(self.render_volume(*ix, volume, inside.as_deref(), cx));
         }
         if !phones.is_empty() || !self.sidebar.devices.is_empty() {

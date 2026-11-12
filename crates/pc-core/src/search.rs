@@ -455,7 +455,7 @@ impl<'a> Search<'a> {
             // Links to folders are not followed: they may loop.
             if hit.is_dir && !hit.is_link && !associations::matches(&self.folders_left_out, &name.to_string_lossy()) {
                 folders.push(path);
-            } else if self.archives && !hit.is_dir && archive::is_archive(&name) {
+            } else if self.archives && !hit.is_dir && !hit.online && archive::is_archive(&name) {
                 self.in_archive(&path, out);
             }
         }
@@ -480,6 +480,7 @@ impl<'a> Search<'a> {
             size: if meta.is_dir() { 0 } else { meta.len() },
             modified: meta.modified().ok(),
             mode,
+            online: crate::online_only(&meta),
         })
     }
 
@@ -503,7 +504,7 @@ impl<'a> Search<'a> {
             return None;
         }
         if let Some(text) = &self.text
-            && !text.in_file(path, self.stop)
+            && (stat.online || !text.in_file(path, self.stop))
         {
             return None;
         }
@@ -650,6 +651,8 @@ struct Stat {
     size: u64,
     modified: Option<SystemTime>,
     mode: Option<u32>,
+    /// A cloud file only online: its text is not read, which would download it.
+    online: bool,
 }
 
 /// A name without wildcards is any name with it in.
@@ -869,6 +872,9 @@ fn duplicates(found: Vec<Found>, how: Duplicates, stop: &AtomicBool) -> Vec<Foun
 }
 
 fn md5_of(path: &Path) -> io::Result<[u8; 16]> {
+    if fs::metadata(path).is_ok_and(|meta| crate::online_only(&meta)) {
+        return Err(io::ErrorKind::Unsupported.into());
+    }
     let mut file = File::open(path)?;
     let mut hasher = md5::Md5::new();
     io::copy(&mut file, &mut hasher)?;

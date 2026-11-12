@@ -1,5 +1,5 @@
 //! The sidebar's devices: disks, cards, sticks and network shares as the
-//! system mounts them, and phones paired through KDE Connect. A phone's
+//! system mounts them, the cloud apps' folders, and phones paired through KDE Connect. A phone's
 //! files, once mounted, are ordinary folders: KDE Connect mounts them with
 //! sshfs under the runtime folder, as its own `kdeconnect:/` does.
 
@@ -12,6 +12,8 @@ pub enum VolumeKind {
     System,
     Drive,
     Removable,
+    /// A cloud app's folder (OneDrive, iCloud Drive…), or a mount of one.
+    Cloud,
     Network,
     /// GNOME's phones and cameras (MTP, PTP, AFC).
     Phone,
@@ -31,7 +33,9 @@ pub struct Volume {
 /// What is mounted or mountable, by kind, then by name.
 pub fn volumes() -> Vec<Volume> {
     let mut volumes = platform_volumes();
+    volumes.extend(dirs::home_dir().map(|home| cloud_folders(&home)).unwrap_or_default());
     volumes.sort_by_cached_key(|volume| (volume.kind, volume.name.to_lowercase()));
+    volumes.dedup_by(|a, b| a.path == b.path);
     volumes
 }
 
@@ -98,6 +102,38 @@ fn platform_volumes() -> Vec<Volume> {
     Vec::new()
 }
 
+/// The cloud apps' folders in the home folder (OneDrive, Dropbox, Box, iCloud
+/// for Windows), and macOS's: iCloud Drive and File Provider's `CloudStorage`.
+fn cloud_folders(home: &Path) -> Vec<Volume> {
+    let cloud = |name: String, path: PathBuf| Volume { name, kind: VolumeKind::Cloud, path: Some(path), udisks: None };
+    let in_home = std::fs::read_dir(home).into_iter().flatten().flatten().filter_map(|entry| {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let known = name.starts_with("OneDrive") || name.starts_with("Dropbox") || ["Box", "iCloudDrive"].contains(&name.as_str());
+        let name = if name == "iCloudDrive" { "iCloud Drive".to_owned() } else { name };
+        (known && entry.path().is_dir()).then(|| cloud(name, entry.path()))
+    });
+    // OneDrive's own, wherever it was moved to.
+    let moved = ["OneDriveConsumer", "OneDriveCommercial"].into_iter().filter(|_| cfg!(windows)).filter_map(std::env::var_os);
+    let moved = moved.map(PathBuf::from).filter(|path| path.is_dir());
+    let moved = moved.map(|path| cloud(path.file_name().unwrap_or_default().to_string_lossy().into_owned(), path));
+    let storage = std::fs::read_dir(home.join("Library/CloudStorage")).into_iter().flatten().flatten();
+    let storage = storage.map(|entry| cloud(provider_name(&entry.file_name().to_string_lossy()), entry.path()));
+    let icloud = home.join("Library/Mobile Documents/com~apple~CloudDocs");
+    let icloud = icloud.is_dir().then(|| cloud("iCloud Drive".to_owned(), icloud));
+    in_home.chain(moved).chain(storage).chain(icloud).collect()
+}
+
+/// `GoogleDrive-me@gmail.com` is "Google Drive (me@gmail.com)", `Box-Box` "Box".
+fn provider_name(folder: &str) -> String {
+    let (app, account) = folder.split_once('-').unwrap_or((folder, ""));
+    let app = if app == "GoogleDrive" { "Google Drive" } else { app };
+    match account {
+        "" => app.to_owned(),
+        account if account == app => app.to_owned(),
+        account => format!("{app} ({account})"),
+    }
+}
+
 /// Network file systems of `/proc/self/mounts`, but KDE Connect's phones,
 /// which it mounts right in the runtime folder.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -110,7 +146,7 @@ fn network_mounts(mounts: &str, runtime: Option<&Path>) -> Vec<Volume> {
         let phone = runtime.is_some_and(|runtime| path.parent() == Some(runtime));
         (NETWORK.contains(&kind) && !phone).then(|| Volume {
             name: path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned()),
-            kind: VolumeKind::Network,
+            kind: if kind == "fuse.rclone" { VolumeKind::Cloud } else { VolumeKind::Network },
             path: Some(path),
             udisks: None,
         })
@@ -147,15 +183,25 @@ fn gvfs_mounts(dir: &Path) -> Vec<Volume> {
         let raw = entry.file_name().to_string_lossy().into_owned();
         let (scheme, rest) = raw.split_once(':').unwrap_or(("", &raw));
         let field = |key: &str| rest.split(',').find_map(|pair| pair.strip_prefix(key)?.strip_prefix('='));
-        let name = match (field("share"), field("server").or(field("host"))) {
-            (Some(share), Some(server)) => format!("{share} on {server}"),
-            (None, Some(server)) => server.replace('_', " "),
+        let app = match scheme {
+            "google-drive" => Some("Google Drive"),
+            "onedrive" => Some("OneDrive"),
+            _ => None,
+        };
+        let name = match (app, field("share"), field("server").or(field("host"))) {
+            (Some(app), ..) => match (field("user"), field("host")) {
+                (Some(user), Some(host)) => format!("{app} ({user}@{host})"),
+                _ => app.to_owned(),
+            },
+            (None, Some(share), Some(server)) => format!("{share} on {server}"),
+            (None, None, Some(server)) => server.replace('_', " "),
             _ => raw.clone(),
         };
         Volume {
             name,
             kind: match scheme {
                 "mtp" | "gphoto2" | "afc" => VolumeKind::Phone,
+                _ if app.is_some() => VolumeKind::Cloud,
                 _ => VolumeKind::Network,
             },
             path: Some(entry.path()),
@@ -400,14 +446,30 @@ mod tests {
     #[test]
     fn names_gnome_mounts() {
         let dir = std::env::temp_dir().join(format!("pc-gvfs-{}", std::process::id()));
-        for name in ["smb-share:server=nas,share=media", "mtp:host=SAMSUNG_Galaxy_S23"] {
+        let mounts = ["smb-share:server=nas,share=media", "mtp:host=SAMSUNG_Galaxy_S23", "google-drive:host=gmail.com,user=me"];
+        for name in mounts {
             std::fs::create_dir_all(dir.join(name)).unwrap();
         }
         let mut found = gvfs_mounts(&dir);
         found.sort_by_key(|volume| volume.kind);
         let names: Vec<_> = found.iter().map(|volume| (volume.name.as_str(), volume.kind)).collect();
-        assert_eq!(names, [("media on nas", VolumeKind::Network), ("SAMSUNG Galaxy S23", VolumeKind::Phone)]);
+        let cloud = ("Google Drive (me@gmail.com)", VolumeKind::Cloud);
+        assert_eq!(names, [cloud, ("media on nas", VolumeKind::Network), ("SAMSUNG Galaxy S23", VolumeKind::Phone)]);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn finds_cloud_folders() {
+        let home = std::env::temp_dir().join(format!("pc-cloud-{}", std::process::id()));
+        let folders = ["OneDrive - Contoso", "Dropbox", "Boxes", "iCloudDrive", "Library/CloudStorage/GoogleDrive-me@gmail.com"];
+        for folder in folders.iter().chain(&["Library/CloudStorage/Box-Box", "Library/Mobile Documents/com~apple~CloudDocs"]) {
+            std::fs::create_dir_all(home.join(folder)).unwrap();
+        }
+        let mut names: Vec<String> = cloud_folders(&home).into_iter().map(|volume| volume.name).collect();
+        names.sort();
+        let wanted = ["Box", "Dropbox", "Google Drive (me@gmail.com)", "OneDrive - Contoso", "iCloud Drive", "iCloud Drive"];
+        assert_eq!(names, wanted);
+        std::fs::remove_dir_all(&home).unwrap();
     }
 
     /// Reads this computer's volumes; run by hand with `--ignored`.

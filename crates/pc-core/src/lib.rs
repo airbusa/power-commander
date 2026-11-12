@@ -76,6 +76,8 @@ pub struct Entry {
     pub attributes: String,
     /// macOS: its Finder tags' colours.
     pub tags: Vec<u8>,
+    /// A cloud file that is only online: reading it downloads it.
+    pub online: bool,
 }
 
 /// Which entries a panel lists besides the usual ones.
@@ -1024,6 +1026,7 @@ impl Panel {
                 system,
                 attributes,
                 tags: tags::colours(path),
+                online: online_only(&meta),
             });
         }
         entries
@@ -1348,6 +1351,7 @@ fn read_dir(path: &Path) -> io::Result<Vec<Entry>> {
             let (hidden, system, attributes) = attributes(&name, meta.as_ref());
             Entry {
                 tags: tags::colours(&item.path()),
+                online: meta.as_ref().is_some_and(online_only),
                 name,
                 is_dir: meta.as_ref().is_some_and(fs::Metadata::is_dir),
                 size: meta.as_ref().map_or(0, fs::Metadata::len),
@@ -1390,6 +1394,29 @@ fn parent_entry(modified: Option<SystemTime>) -> Entry {
         system: false,
         attributes: String::new(),
         tags: Vec::new(),
+        online: false,
+    }
+}
+
+/// A cloud file whose data is not here (OneDrive's, iCloud's…): reading it downloads it.
+pub fn online_only(meta: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const OFFLINE: u32 = 0x1000;
+        const RECALL_ON_DATA_ACCESS: u32 = 0x40_0000;
+        !meta.is_dir() && meta.file_attributes() & (OFFLINE | RECALL_ON_DATA_ACCESS) != 0
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::MetadataExt;
+        const SF_DATALESS: u32 = 0x4000_0000;
+        !meta.is_dir() && meta.st_flags() & SF_DATALESS != 0
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = meta;
+        false
     }
 }
 
@@ -1821,6 +1848,7 @@ mod tests {
             system: false,
             attributes: String::new(),
             tags: Vec::new(),
+            online: false,
         };
         let parts = |name, is_dir| entry(name, is_dir).name_and_extension();
         assert_eq!(
@@ -1869,6 +1897,7 @@ mod tests {
             system: false,
             attributes: String::new(),
             tags: Vec::new(),
+            online: false,
         };
         assert_eq!(entry(1234567).size_text(), "1 234 567");
         assert_eq!(entry(123456).size_text(), "123 456");

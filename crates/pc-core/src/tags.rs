@@ -1,4 +1,6 @@
 //! macOS: Finder's tags, as its extended attribute keeps them.
+// Elsewhere only the tests read tags.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use std::path::Path;
 

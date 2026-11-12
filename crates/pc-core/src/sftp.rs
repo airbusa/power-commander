@@ -506,6 +506,7 @@ impl Remote for Sftp {
                         system: false,
                         attributes: mode_text(attrs.permissions),
                         tags: Vec::new(),
+                        online: false,
                         is_dir: attrs.is_dir(),
                         size: attrs.size.unwrap_or(0),
                         modified: time(attrs.mtime),
