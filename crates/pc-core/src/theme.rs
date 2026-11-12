@@ -2,6 +2,10 @@
 //! and, where the desktop names one, its font. On KDE the user's own
 //! colour scheme (kdeglobals); elsewhere the platform's standard colours.
 
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::OnceLock;
+
 use serde::{Deserialize, Serialize};
 
 /// Settings' choice: the system's light or dark, or always one.
@@ -106,8 +110,31 @@ pub fn system(dark: bool) -> Palette {
             let text = globals.and_then(|file| std::fs::read_to_string(file).ok());
             kde_or_breeze(text.as_deref(), dark)
         }
-        false => adwaita(dark),
+        // GTK's apps write in the desktop's font.
+        false => Palette {
+            font: on_gnome().then(gnome_font).flatten(),
+            ..adwaita(dark)
+        },
     }
+}
+
+/// One of GNOME's interface settings.
+fn gnome_setting(key: &str) -> Option<String> {
+    let output = Command::new("gsettings").args(["get", "org.gnome.desktop.interface", key]).output().ok()?;
+    let value = String::from_utf8(output.stdout).ok()?;
+    Some(value.trim().trim_matches('\'').to_owned()).filter(|value| !value.is_empty())
+}
+
+fn gnome_font() -> Option<String> {
+    static FONT: OnceLock<Option<String>> = OnceLock::new();
+    FONT.get_or_init(|| gnome_setting("font-name").map(|name| font_family(&name))).clone()
+}
+
+/// The family of a Pango font name: "Noto Sans,  10", "Ubuntu Sans 11".
+fn font_family(pango: &str) -> String {
+    let family = pango.split(',').next().unwrap_or(pango).trim();
+    let sized = family.rsplit_once(' ').filter(|(_, size)| size.parse::<f32>().is_ok());
+    sized.map_or(family, |(name, _)| name.trim_end()).to_owned()
 }
 
 /// GNOME, Ubuntu's own desktop among them (`ubuntu:GNOME`).
@@ -126,6 +153,48 @@ fn on_kde() -> bool {
 /// Linux, where only the compositor could blur what is behind.
 pub fn sidebar_tint() -> Option<f32> {
     cfg!(any(target_os = "macos", windows)).then_some(0.)
+}
+
+/// The window buttons GTK draws, from the desktop's icon theme: minimize,
+/// maximize, restore and close, as SVG files. None without GNOME's settings.
+pub fn window_buttons() -> Option<&'static [PathBuf; 4]> {
+    static BUTTONS: OnceLock<Option<[PathBuf; 4]>> = OnceLock::new();
+    let find = || {
+        if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
+            return None;
+        }
+        let theme = gnome_setting("icon-theme")?;
+        let bases = icon_bases();
+        // GTK's own fallback is Adwaita.
+        let themes = [theme.as_str(), "Adwaita", "hicolor"];
+        let icon = |name: &str| themes.iter().find_map(|theme| find_icon(&bases, theme, name, 5));
+        let [minimize, maximize, restore, close] =
+            ["minimize", "maximize", "restore", "close"].map(|button| icon(&format!("window-{button}-symbolic")));
+        Some([minimize?, maximize?, restore?, close?])
+    };
+    BUTTONS.get_or_init(find).as_ref()
+}
+
+/// Where icon themes live, the user's first.
+fn icon_bases() -> Vec<PathBuf> {
+    let system = std::env::var("XDG_DATA_DIRS").ok().filter(|dirs| !dirs.is_empty());
+    let system = system.unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    let user = [dirs::data_dir().map(|dir| dir.join("icons")), dirs::home_dir().map(|home| home.join(".icons"))];
+    user.into_iter().flatten().chain(system.split(':').map(|dir| Path::new(dir).join("icons"))).collect()
+}
+
+/// An SVG icon of a theme, or of the themes it inherits from.
+fn find_icon(bases: &[PathBuf], theme: &str, name: &str, depth: u8) -> Option<PathBuf> {
+    let index = bases.iter().find_map(|base| std::fs::read_to_string(base.join(theme).join("index.theme")).ok())?;
+    let value = |key: &str| index.lines().find_map(|line| line.strip_prefix(key)).unwrap_or_default();
+    let file = name.to_owned() + ".svg";
+    let dirs = value("Directories=").split(',').map(str::trim);
+    let found = dirs.flat_map(|dir| bases.iter().map(move |base| base.join(theme).join(dir)));
+    if let Some(found) = found.map(|dir| dir.join(&file)).find(|path| path.is_file()) {
+        return Some(found);
+    }
+    let mut parents = value("Inherits=").split(',').map(str::trim).filter(|parent| !parent.is_empty() && depth > 0);
+    parents.find_map(|parent| find_icon(bases, parent, name, depth - 1))
 }
 
 /// The user's KDE colour scheme when it is as dark as asked; else Breeze,
@@ -363,5 +432,26 @@ mod tests {
         let menu = scheme.menu();
         assert_eq!((menu.popup, menu.frame), (0x1c1f22, 0x4c4e51));
         assert_eq!((menu.hover, menu.hover_frame), (0x264a5e, 0x5abaec));
+    }
+
+    #[test]
+    fn finds_icons_in_inherited_themes() {
+        let root = std::env::temp_dir().join(format!("pc-icons-{}", std::process::id()));
+        let theme = |name: &str, index: &str| {
+            std::fs::create_dir_all(root.join(name).join("actions/symbolic")).unwrap();
+            std::fs::write(root.join(name).join("index.theme"), index).unwrap();
+        };
+        theme("child", "[Icon Theme]\nInherits=parent\nDirectories=actions/16,actions/symbolic\n");
+        theme("parent", "[Icon Theme]\nDirectories=actions/symbolic\n");
+        let close = root.join("parent/actions/symbolic/window-close-symbolic.svg");
+        std::fs::write(&close, "<svg/>").unwrap();
+        let bases = [root.join("missing"), root.clone()];
+        assert_eq!(find_icon(&bases, "child", "window-close-symbolic", 5), Some(close));
+        assert_eq!(find_icon(&bases, "child", "window-close-symbolic", 0), None, "no inheriting");
+        assert_eq!(find_icon(&bases, "child", "go-up", 5), None);
+        assert_eq!(font_family("Noto Sans,  10"), "Noto Sans");
+        assert_eq!(font_family("Ubuntu Sans 11"), "Ubuntu Sans");
+        assert_eq!(font_family("Cantarell"), "Cantarell");
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -1,5 +1,6 @@
 // Modified for PowerCommander (Apache-2.0, section 4b): the window's buttons
-// are those the desktop's layout names. Changes are marked "PowerCommander patch".
+// are those the desktop's layout names, and may be the icon theme's pictures
+// in round buttons, as GTK draws them. Changes are marked "PowerCommander patch".
 
 use std::rc::Rc;
 
@@ -9,9 +10,9 @@ use crate::{
 use gpui::{
     AnyElement, App, Background, ClickEvent, Context, Decorations, Hsla, InteractiveElement,
     IntoElement, MouseButton, ParentElement, Pixels, Render, RenderOnce, Rgba,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, TitlebarOptions, Window,
-    WindowControlArea, WindowOptions, div, linear_color_stop, linear_gradient,
-    prelude::FluentBuilder as _, px,
+    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, TitlebarOptions,
+    Window, WindowControlArea, WindowOptions, div, linear_color_stop, linear_gradient,
+    prelude::FluentBuilder as _, px, svg,
 };
 use gpui_base::TestSupportExt as _;
 use smallvec::SmallVec;
@@ -107,6 +108,12 @@ impl TitleBar {
     }
 }
 
+/// PowerCommander patch: the window buttons' pictures (minimize, maximize,
+/// restore, close), SVG files drawn as GTK does, in round buttons.
+pub struct WindowButtonPictures(pub [SharedString; 4]);
+
+impl gpui::Global for WindowButtonPictures {}
+
 // The Windows control buttons have a fixed width of 35px.
 //
 // We don't need implementation the click event for the control buttons.
@@ -154,6 +161,16 @@ impl ControlIcon {
             Self::Maximize => IconName::WindowMaximize,
             Self::Close { .. } => IconName::WindowClose,
         }
+    }
+
+    fn picture(&self, cx: &App) -> Option<SharedString> {
+        let at = match self {
+            Self::Minimize => 0,
+            Self::Maximize => 1,
+            Self::Restore => 2,
+            Self::Close { .. } => 3,
+        };
+        cx.try_global::<WindowButtonPictures>().map(|pictures| pictures.0[at].clone())
     }
 
     fn window_control_area(&self) -> WindowControlArea {
@@ -204,6 +221,8 @@ impl RenderOnce for ControlIcon {
         let hover_bg = self.hover_bg(cx);
         let active_bg = self.active_bg(cx);
         let icon = self.clone();
+        let picture = self.picture(cx);
+        let fg = cx.theme().foreground;
         let on_close_window = match &self {
             ControlIcon::Close { on_close_window } => on_close_window.clone(),
             _ => None,
@@ -213,15 +232,25 @@ impl RenderOnce for ControlIcon {
             .id(self.id())
             .test_support()
             .flex()
-            .w(TITLE_BAR_HEIGHT)
-            .h_full()
             .flex_shrink_0()
             .justify_center()
             .content_center()
             .items_center()
-            .text_color(cx.theme().foreground)
-            .hover(|style| style.bg(hover_bg).text_color(hover_fg))
-            .active(|style| style.bg(active_bg).text_color(hover_fg))
+            .text_color(fg)
+            .map(|this| match picture.is_some() {
+                // PowerCommander patch: GTK's, a round button shaded under the pointer.
+                true => this
+                    .size(px(24.))
+                    .mx(px(5.))
+                    .rounded_full()
+                    .hover(|style| style.bg(fg.opacity(0.1)))
+                    .active(|style| style.bg(fg.opacity(0.2))),
+                false => this
+                    .w(TITLE_BAR_HEIGHT)
+                    .h_full()
+                    .hover(|style| style.bg(hover_bg).text_color(hover_fg))
+                    .active(|style| style.bg(active_bg).text_color(hover_fg)),
+            })
             .when(is_windows, |this| {
                 this.window_control_area(self.window_control_area())
             })
@@ -245,7 +274,10 @@ impl RenderOnce for ControlIcon {
                     }
                 })
             })
-            .child(Icon::new(self.icon()).small())
+            .map(|this| match picture {
+                Some(path) => this.child(svg().external_path(path).size_4().text_color(fg)),
+                None => this.child(Icon::new(self.icon()).small()),
+            })
     }
 }
 

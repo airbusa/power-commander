@@ -1712,7 +1712,7 @@ impl Render for Commander {
             .size_full()
             .text_color(cx.theme().foreground)
             .text_sm()
-            .children(self.render_header(window))
+            .children(self.render_header(window, cx))
             .when(menu_bar, |el| {
                 el.child(
                     div()

@@ -5,7 +5,7 @@
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::DropdownMenu;
-use gpui_kit::component::{GlobalState, Icon, Sizable, TitleBar, h_flex};
+use gpui_kit::component::{GlobalState, Icon, Sizable, TitleBar, WindowButtonPictures, h_flex};
 use gpui_kit::*;
 
 use crate::Commander;
@@ -27,11 +27,19 @@ impl Commander {
     }
 
     /// The title bar, where the window draws its own frame.
-    pub(crate) fn render_header(&self, window: &Window) -> Option<AnyElement> {
+    pub(crate) fn render_header(&self, window: &Window, cx: &mut App) -> Option<AnyElement> {
         if !own_frame(window) {
             return None;
         }
-        let title = div().absolute().inset_0().flex().items_center().justify_center().child("Power Commander");
+        // The window buttons as GTK draws them, from the desktop's icon theme.
+        if !cx.has_global::<WindowButtonPictures>()
+            && let Some(pictures) = pc_core::theme::window_buttons()
+        {
+            let pictures = pictures.clone().map(|path| path.to_string_lossy().into_owned().into());
+            cx.set_global(WindowButtonPictures(pictures));
+        }
+        let title = div().absolute().inset_0().flex().items_center().justify_center();
+        let title = title.font_weight(FontWeight::BOLD).child("Power Commander");
         let focus = self.focus.clone();
         let menu = Button::new("app-menu")
             .ghost()
