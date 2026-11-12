@@ -1,6 +1,6 @@
 diff -ruN a/src/breeze.rs b/src/breeze.rs
 --- a/src/breeze.rs	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/breeze.rs	2026-11-12 20:21:48.076113026 +0100
++++ b/src/breeze.rs	2026-11-12 22:30:56.237340031 +0100
 @@ -0,0 +1,32 @@
 +// PowerCommander patch: this file is new.
 +use gpui::{Global, Hsla};
@@ -35,8 +35,8 @@ diff -ruN a/src/breeze.rs b/src/breeze.rs
 +
 +impl Global for BreezeControls {}
 diff -ruN a/src/button/button.rs b/src/button/button.rs
---- a/src/button/button.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/button/button.rs	2026-11-12 20:24:00.403830645 +0100
+--- a/src/button/button.rs	2026-11-12 22:30:56.217716806 +0100
++++ b/src/button/button.rs	2026-11-12 22:30:56.228779361 +0100
 @@ -159,6 +159,29 @@
  }
  
@@ -67,26 +67,69 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
      #[inline]
      pub fn is_link(&self) -> bool {
          matches!(self, Self::Link)
-@@ -608,6 +631,8 @@
+@@ -608,6 +631,14 @@
  impl RenderOnce for Button {
      fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
          let style: ButtonVariant = self.variant;
 +        let breeze_framed = cx.has_global::<crate::BreezeControls>()
 +            && matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Secondary);
++        // PowerCommander patch: push buttons as the Qt style draws them, see `QtControls`.
++        let qt = matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Default | ButtonVariant::Secondary)
++            && !self.outline
++            && !self.shows_selected_style();
++        let qt = qt.then(|| cx.try_global::<crate::QtControls>().cloned()).flatten();
++        let qt_default = self.variant == ButtonVariant::Primary;
          let interactive = self.interactive();
          let hoverable = self.hoverable();
          let disabled = self.disabled;
-@@ -707,7 +732,8 @@
+@@ -707,13 +738,15 @@
              .when(self.border_corners.bottom_right, |this| {
                  this.rounded_br(rounding)
              })
 -            .when(self.variant.is_default() || self.outline, |this| {
 +            // PowerCommander patch: every Breeze push button is framed, see `BreezeControls`.
-+            .when(self.variant.is_default() || self.outline || breeze_framed, |this| {
++            .when(qt.is_none() && (self.variant.is_default() || self.outline || breeze_framed), |this| {
                  this.when(self.border_edges.left, |this| this.border_l_1())
                      .when(self.border_edges.right, |this| this.border_r_1())
                      .when(self.border_edges.top, |this| this.border_t_1())
-@@ -1115,6 +1141,9 @@
+                     .when(self.border_edges.bottom, |this| this.border_b_1())
+             })
+-            .when(!self.disabled && !selected, |this| {
++            .when_some(qt.as_ref(), |this, _| this.relative().group(crate::qt::BUTTON).text_color(normal_style.fg))
++            .when(!self.disabled && !selected && qt.is_none(), |this| {
+                 this.border_color(normal_style.border)
+                     .bg(normal_style.bg)
+                     .text_color(normal_style.fg)
+@@ -806,10 +839,13 @@
+                         .refine_style(&instance_style)
+                 })
+                 .disabled(|style| {
++                    // PowerCommander patch: the Qt style's disabled button has its own fill.
++                    let style = match qt.is_some() {
++                        true => style,
++                        false => style.bg(disabled_style.bg).border_color(disabled_style.border),
++                    };
+                     style
+-                        .bg(disabled_style.bg)
+                         .text_color(disabled_style.fg)
+-                        .border_color(disabled_style.border)
+                         .shadow_none()
+                         .refine_style(&instance_style)
+                 })
+@@ -827,6 +863,12 @@
+         .track_focus(&focus_handle)
+         .tab_index(self.tab_index)
+         .tab_stop(self.tab_stop)
++        .when_some(qt.as_ref(), |this, qt| {
++            let parts = &qt.button[qt_default as usize];
++            this.child(crate::qt::layers(crate::qt::BUTTON, disabled, |state| {
++                crate::qt::button_layer(qt, parts, state)
++            }))
++        })
+         .child(content)
+         // Fade the whole button while loading, so every variant is dimmed by
+         // the same amount. Fading `bg`, `border` and `fg` one by one instead
+@@ -1115,6 +1157,9 @@
      }
  
      fn normal(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
@@ -96,7 +139,7 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
          let bg = self.bg_color(outline, cx);
          let border = self.border_color(outline, cx);
          let fg = self.text_color(outline, cx);
-@@ -1131,6 +1160,9 @@
+@@ -1131,6 +1176,9 @@
      }
  
      fn hovered(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
@@ -106,7 +149,7 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
          let bg: Background = match self {
              Self::Default => {
                  if outline {
-@@ -1215,6 +1247,9 @@
+@@ -1215,6 +1263,9 @@
      }
  
      fn active(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
@@ -117,8 +160,8 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
              Self::Default => {
                  if outline {
 diff -ruN a/src/checkbox.rs b/src/checkbox.rs
---- a/src/checkbox.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/checkbox.rs	2026-11-12 19:51:07.792841677 +0100
+--- a/src/checkbox.rs	2026-11-12 22:30:56.218494294 +0100
++++ b/src/checkbox.rs	2026-11-12 22:30:56.229542491 +0100
 @@ -197,11 +197,11 @@
          window,
          cx,
@@ -136,7 +179,18 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
  
      svg()
          .absolute()
-@@ -299,23 +299,38 @@
+@@ -253,7 +253,10 @@
+         let radius = cx.theme().radius.min(px(4.));
+         let disabled_text_color = cx.theme().muted_foreground;
+         let instance_style = self.style.clone();
++        // PowerCommander patch: see `QtControls`.
++        let qt = cx.try_global::<crate::QtControls>().cloned();
+         base.role(self.role)
++            .group(crate::qt::CHECKBOX)
+             .checked(checked)
+             .disabled(self.disabled)
+             .styles(|styles| {
+@@ -299,32 +302,58 @@
                      .when(has_content, |this| this.mt(indicator_size * 0.125))
                      .flex_shrink_0()
                      .border_1()
@@ -156,9 +210,18 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
 -                                style
 -                                    .border_color(disabled_indicator_color)
 -                                    .when(checked, |style| style.bg(disabled_indicator_color))
-+                    // PowerCommander patch: Breeze's box, see `BreezeControls`.
-+                    .map(|this| match cx.try_global::<crate::BreezeControls>().copied() {
-+                        Some(breeze) => {
++                    // PowerCommander patch: the Qt style's box, else Breeze's, see `QtControls`, `BreezeControls`.
++                    .map(|this| match (&qt, cx.try_global::<crate::BreezeControls>().copied()) {
++                        (Some(qt), _) => {
++                            let images = &qt.checkbox[checked as usize];
++                            let (width, height) = qt.size(&images.0[crate::qt::NORMAL]);
++                            this.w(width).h(height).border_0().child(crate::qt::layers(
++                                crate::qt::CHECKBOX,
++                                self.disabled,
++                                |state| crate::qt::picture(images.0[state].clone()),
++                            ))
++                        }
++                        (None, Some(breeze)) => {
 +                            let (border, fill) = match checked {
 +                                true => (breeze.highlight, breeze.checked),
 +                                false => (breeze.frame, breeze.button),
@@ -169,7 +232,7 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
 +                                .border_color(border.opacity(dim))
 +                                .bg(fill.opacity(dim))
 +                        }
-+                        None => this
++                        (None, None) => this
 +                            .rounded(radius)
 +                            .when(!checked, |this| {
 +                                this.bg(cx.theme().input_background())
@@ -189,11 +252,30 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
 +                                    })
 +                            }),
                      })
-                     .child(checkbox_check_icon(
-                         self.id,
+-                    .child(checkbox_check_icon(
+-                        self.id,
+-                        self.size,
+-                        checked,
+-                        self.disabled,
+-                        window,
+-                        cx,
+-                    )),
++                    .when(qt.is_none(), |this| {
++                        this.child(checkbox_check_icon(
++                            self.id,
++                            self.size,
++                            checked,
++                            self.disabled,
++                            window,
++                            cx,
++                        ))
++                    }),
+             )
+             .when(self.label.is_some() || !children.is_empty(), |this| {
+                 this.child(
 diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
---- a/src/dialog/dialog.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/dialog/dialog.rs	2026-11-11 07:40:05.965584961 +0100
+--- a/src/dialog/dialog.rs	2026-11-12 22:30:56.219019171 +0100
++++ b/src/dialog/dialog.rs	2026-11-12 22:30:56.230060806 +0100
 @@ -1,13 +1,20 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a dialog moves by
 +// its title, can open centred over a part of the window, and fades in
@@ -470,8 +552,8 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
  pub(crate) mod tests {
      use super::*;
 diff -ruN a/src/highlighter/input_adapter.rs b/src/highlighter/input_adapter.rs
---- a/src/highlighter/input_adapter.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/highlighter/input_adapter.rs	2026-11-10 08:48:57.490700524 +0100
+--- a/src/highlighter/input_adapter.rs	2026-11-12 22:30:56.220375689 +0100
++++ b/src/highlighter/input_adapter.rs	2026-11-12 22:30:56.232003799 +0100
 @@ -1,3 +1,7 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the highlighter
 +// factory is public, and a background parse leaves the fold candidates alone
@@ -507,8 +589,8 @@ diff -ruN a/src/highlighter/input_adapter.rs b/src/highlighter/input_adapter.rs
          });
          parse_task.borrow_mut().replace(task);
 diff -ruN a/src/highlighter/mod.rs b/src/highlighter/mod.rs
---- a/src/highlighter/mod.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/highlighter/mod.rs	2026-11-10 08:48:57.490700524 +0100
+--- a/src/highlighter/mod.rs	2026-11-12 22:30:56.221149660 +0100
++++ b/src/highlighter/mod.rs	2026-11-12 22:30:56.231914429 +0100
 @@ -1,3 +1,7 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the editor's
 +// highlighter factory is public, so an app can wrap it. Changes are marked
@@ -533,8 +615,8 @@ diff -ruN a/src/highlighter/mod.rs b/src/highlighter/mod.rs
  }
  
 diff -ruN a/src/input/popovers/completion_menu.rs b/src/input/popovers/completion_menu.rs
---- a/src/input/popovers/completion_menu.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/input/popovers/completion_menu.rs	2026-11-10 08:48:57.491408567 +0100
+--- a/src/input/popovers/completion_menu.rs	2026-11-12 22:30:56.221918511 +0100
++++ b/src/input/popovers/completion_menu.rs	2026-11-12 22:30:56.232613237 +0100
 @@ -1,3 +1,7 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the completion
 +// menu is as wide as the editor's configured width. Changes are marked
@@ -556,8 +638,8 @@ diff -ruN a/src/input/popovers/completion_menu.rs b/src/input/popovers/completio
                      )
                      .when_some(selected_documentation, |this, documentation| {
 diff -ruN a/src/kbd.rs b/src/kbd.rs
---- a/src/kbd.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/kbd.rs	2026-11-10 09:11:23.004519613 +0100
+--- a/src/kbd.rs	2026-11-12 22:30:56.222258267 +0100
++++ b/src/kbd.rs	2026-11-12 22:30:56.237277963 +0100
 @@ -1,3 +1,8 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a binding of
 +// several keystrokes shows them all. Changes are marked "WDS patch".
@@ -653,19 +735,22 @@ diff -ruN a/src/kbd.rs b/src/kbd.rs
      }
  }
 diff -ruN a/src/lib.rs b/src/lib.rs
---- a/src/lib.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/lib.rs	2026-11-12 19:50:54.430300582 +0100
-@@ -20,6 +20,9 @@
+--- a/src/lib.rs	2026-11-12 22:30:56.222318632 +0100
++++ b/src/lib.rs	2026-11-12 22:30:56.232923747 +0100
+@@ -20,6 +20,12 @@
  mod touch_selection;
  mod virtual_list;
  mod window_border;
 +// PowerCommander patch: see `BreezeControls`.
 +mod breeze;
 +pub use breeze::BreezeControls;
++// PowerCommander patch: see `QtControls`.
++mod qt;
++pub use qt::{QtControls, StateImages};
  mod window_ext;
  
  pub(crate) mod actions {
-@@ -121,7 +124,7 @@
+@@ -121,7 +127,7 @@
  pub use time::{calendar, date_picker, time_field};
  pub use title_bar::*;
  pub use virtual_list::{VirtualList, VirtualListScrollHandle, h_virtual_list, v_virtual_list};
@@ -675,8 +760,8 @@ diff -ruN a/src/lib.rs b/src/lib.rs
  
  rust_i18n::i18n!("locales", fallback = "en");
 diff -ruN a/src/list/list.rs b/src/list/list.rs
---- a/src/list/list.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/list/list.rs	2026-11-10 08:48:57.491860684 +0100
+--- a/src/list/list.rs	2026-11-12 22:30:56.222459790 +0100
++++ b/src/list/list.rs	2026-11-12 22:30:56.233054756 +0100
 @@ -1,3 +1,6 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a list can take
 +// a single click as selecting only. Changes are marked "WDS patch".
@@ -728,8 +813,8 @@ diff -ruN a/src/list/list.rs b/src/list/list.rs
                          &Confirm {
                              secondary: e.modifiers().secondary(),
 diff -ruN a/src/menu/app_menu_bar.rs b/src/menu/app_menu_bar.rs
---- a/src/menu/app_menu_bar.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/menu/app_menu_bar.rs	2026-11-11 15:48:49.059153530 +0100
+--- a/src/menu/app_menu_bar.rs	2026-11-12 22:30:56.222645934 +0100
++++ b/src/menu/app_menu_bar.rs	2026-11-12 22:30:56.233349627 +0100
 @@ -1,7 +1,13 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): menu-bar menus may
 +// use the window's height. Changes are marked "WDS patch".
@@ -887,8 +972,8 @@ diff -ruN a/src/menu/app_menu_bar.rs b/src/menu/app_menu_bar.rs
                      .open(is_open)
                      .on_mouse_down(
 diff -ruN a/src/menu/menu_item.rs b/src/menu/menu_item.rs
---- a/src/menu/menu_item.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/menu/menu_item.rs	2026-11-11 15:48:42.455936658 +0100
+--- a/src/menu/menu_item.rs	2026-11-12 22:30:56.222768797 +0100
++++ b/src/menu/menu_item.rs	2026-11-12 22:30:56.233304080 +0100
 @@ -102,6 +102,10 @@
              .px_2()
              .text_base()
@@ -914,8 +999,8 @@ diff -ruN a/src/menu/menu_item.rs b/src/menu/menu_item.rs
                  .when_some(self.on_click, |this, on_click| {
                      this.on_mouse_down(MouseButton::Left, move |_, _, cx| {
 diff -ruN a/src/menu/mod.rs b/src/menu/mod.rs
---- a/src/menu/mod.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/menu/mod.rs	2026-11-11 07:56:50.895948099 +0100
+--- a/src/menu/mod.rs	2026-11-12 22:30:56.222792392 +0100
++++ b/src/menu/mod.rs	2026-11-12 22:30:56.233325481 +0100
 @@ -1,3 +1,6 @@
 +// Modified for PowerCommander: exports MenuBuilder. Changes are marked
 +// "PowerCommander patch".
@@ -934,8 +1019,8 @@ diff -ruN a/src/menu/mod.rs b/src/menu/mod.rs
  pub use dropdown_menu::DropdownMenu;
  pub use popup_menu::{PopupMenu, PopupMenuItem};
 diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
---- a/src/menu/popup_menu.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/menu/popup_menu.rs	2026-11-11 23:22:12.892360269 +0100
+--- a/src/menu/popup_menu.rs	2026-11-12 22:30:56.222840313 +0100
++++ b/src/menu/popup_menu.rs	2026-11-12 22:30:56.233390595 +0100
 @@ -1,8 +1,13 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a long menu's
 +// scrollbar shows while it scrolls. Changes are marked "WDS patch".
@@ -1041,8 +1126,8 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
  }
  
 diff -ruN a/src/progress/progress.rs b/src/progress/progress.rs
---- a/src/progress/progress.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/progress/progress.rs	2026-11-12 19:54:46.778633113 +0100
+--- a/src/progress/progress.rs	2026-11-12 22:30:56.223368577 +0100
++++ b/src/progress/progress.rs	2026-11-12 22:30:56.233874945 +0100
 @@ -93,7 +93,10 @@
          let mut inner_style = StyleRefinement::default();
          inner_style.corner_radii = radius;
@@ -1072,9 +1157,116 @@ diff -ruN a/src/progress/progress.rs b/src/progress/progress.rs
                      .rounded(radius)
                      .refine_style(&inner_style)
                      .map(|this| {
+diff -ruN a/src/qt.rs b/src/qt.rs
+--- a/src/qt.rs	1970-01-01 01:00:00.000000000 +0100
++++ b/src/qt.rs	2026-11-12 22:30:56.237392360 +0100
+@@ -0,0 +1,103 @@
++// PowerCommander patch: this file is new.
++use std::sync::Arc;
++
++use gpui::{
++    Bounds, Corners, Div, Global, InteractiveElement, ParentElement, Pixels, RenderImage,
++    StatefulInteractiveElement, Styled, canvas, div, point, px,
++};
++
++/// Controls drawn by the desktop's own Qt style (KDE's Application Style):
++/// images of each state, shown in place of GPUI Kit's drawing, or of
++/// `BreezeControls`'. Images are in device pixels, `scale` to a pixel.
++#[derive(Clone)]
++pub struct QtControls {
++    pub scale: f32,
++    /// Check boxes, unchecked and checked.
++    pub checkbox: [StateImages; 2],
++    /// Push buttons: their left end, a strip of the middle, the right end;
++    /// plain, and the default button (a dialog's OK).
++    pub button: [[StateImages; 3]; 2],
++}
++
++/// A control's look when normal, hovered, pressed and disabled.
++#[derive(Clone)]
++pub struct StateImages(pub [Arc<RenderImage>; 4]);
++
++impl Global for QtControls {}
++
++impl QtControls {
++    /// An image's size in the window's pixels.
++    pub fn size(&self, image: &RenderImage) -> (Pixels, Pixels) {
++        let size = image.size(0);
++        let logical = |pixels: i32| px(pixels as f32 / self.scale);
++        (logical(size.width.0), logical(size.height.0))
++    }
++}
++
++/// The groups whose hover and press the layers follow.
++pub(crate) const CHECKBOX: &str = "qt-checkbox";
++pub(crate) const BUTTON: &str = "qt-button";
++
++pub(crate) const NORMAL: usize = 0;
++pub(crate) const HOVERED: usize = 1;
++pub(crate) const PRESSED: usize = 2;
++pub(crate) const DISABLED: usize = 3;
++
++/// A control's layers in `group`, `layer` making each state's: the normal
++/// one, the hovered and pressed ones shown while the pointer is over it or
++/// presses it; only the disabled one when disabled.
++pub(crate) fn layers(
++    group: &'static str,
++    disabled: bool,
++    layer: impl Fn(usize) -> Div,
++) -> Div {
++    let base = div().absolute().inset_0();
++    if disabled {
++        return base.child(layer(DISABLED));
++    }
++    let over = |state| layer(state).absolute().inset_0().opacity(0.);
++    base.child(layer(NORMAL))
++        .child(over(HOVERED).group_hover(group, |style| style.opacity(1.)))
++        .child(
++            over(PRESSED)
++                .id("qt-pressed")
++                // A cursor gives it a hitbox, without which GPUI tracks no press.
++                .cursor_default()
++                .group_active(group, |style| style.opacity(1.)),
++        )
++}
++
++/// An image filling its place.
++pub(crate) fn picture(image: Arc<RenderImage>) -> Div {
++    painted(move |bounds| vec![(image, bounds)])
++}
++
++/// A button's background in `state`: its ends as drawn, the middle stretched between.
++pub(crate) fn button_layer(controls: &QtControls, parts: &[StateImages; 3], state: usize) -> Div {
++    let [left, middle, right] = parts.clone().map(|part| part.0[state].clone());
++    let (left_width, _) = controls.size(&left);
++    let (right_width, _) = controls.size(&right);
++    painted(move |Bounds { origin, size }| {
++        let middle_width = (size.width - left_width - right_width).max(px(0.));
++        let part = |x: Pixels, width: Pixels| Bounds::new(point(origin.x + x, origin.y), gpui::size(width, size.height));
++        vec![
++            (left, part(px(0.), left_width)),
++            (middle, part(left_width, middle_width)),
++            (right, part(left_width + middle_width, right_width)),
++        ]
++    })
++}
++
++/// Images painted where `place` puts them in the element's bounds: an
++/// `img` would take its height from its own shape.
++fn painted(place: impl FnOnce(Bounds<Pixels>) -> Vec<(Arc<RenderImage>, Bounds<Pixels>)> + 'static) -> Div {
++    let canvas = canvas(
++        |_, _, _| {},
++        move |bounds, _, window, _| {
++            for (image, at) in place(bounds) {
++                let _ = window.paint_image(at, at, Corners::default(), image, 0, false);
++            }
++        },
++    );
++    div().size_full().child(canvas.absolute().inset_0())
++}
 diff -ruN a/src/radio.rs b/src/radio.rs
---- a/src/radio.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/radio.rs	2026-11-12 19:51:28.034693661 +0100
+--- a/src/radio.rs	2026-11-12 22:30:56.223530735 +0100
++++ b/src/radio.rs	2026-11-12 22:30:56.237368034 +0100
 @@ -8,7 +8,7 @@
  use gpui::{
      AnyElement, App, Axis, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
@@ -1130,8 +1322,8 @@ diff -ruN a/src/radio.rs b/src/radio.rs
              .when(!self.children.is_empty() || self.label.is_some(), |this| {
                  this.child(
 diff -ruN a/src/root.rs b/src/root.rs
---- a/src/root.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/root.rs	2026-11-12 19:17:41.116555135 +0100
+--- a/src/root.rs	2026-11-12 22:30:56.223609996 +0100
++++ b/src/root.rs	2026-11-12 22:30:56.234092208 +0100
 @@ -1,3 +1,6 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): notifications paint
 +// above dialogs. Changes are marked "WDS patch".
@@ -1212,8 +1404,8 @@ diff -ruN a/src/root.rs b/src/root.rs
      }
  }
 diff -ruN a/src/slider.rs b/src/slider.rs
---- a/src/slider.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/slider.rs	2026-11-12 19:54:56.929652399 +0100
+--- a/src/slider.rs	2026-11-12 22:30:56.224696331 +0100
++++ b/src/slider.rs	2026-11-12 22:30:56.235097278 +0100
 @@ -155,6 +155,8 @@
              (relative(percentage.start), relative(1. - percentage.end))
          };
@@ -1280,8 +1472,8 @@ diff -ruN a/src/slider.rs b/src/slider.rs
                              .child(
                                  div()
 diff -ruN a/src/styled.rs b/src/styled.rs
---- a/src/styled.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/styled.rs	2026-11-11 15:50:39.421115469 +0100
+--- a/src/styled.rs	2026-11-12 22:30:56.225225446 +0100
++++ b/src/styled.rs	2026-11-12 22:30:56.235638387 +0100
 @@ -25,6 +25,7 @@
  /// as part of one grounded surface rather than as an outline with a separate
  /// shadow below it. An opaque border cannot reproduce that — a border composites
@@ -1301,8 +1493,8 @@ diff -ruN a/src/styled.rs b/src/styled.rs
  
  /// shadcn/ui's popup surface shadow — a hairline `ring` plus `shadow-md` — at
 diff -ruN a/src/tab/tab_bar.rs b/src/tab/tab_bar.rs
---- a/src/tab/tab_bar.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/tab/tab_bar.rs	2026-11-10 08:48:57.494531671 +0100
+--- a/src/tab/tab_bar.rs	2026-11-12 22:30:56.225396001 +0100
++++ b/src/tab/tab_bar.rs	2026-11-12 22:30:56.235792319 +0100
 @@ -1,3 +1,6 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the segmented
 +// indicator uses the active tab colour. Changes are marked "WDS patch".
@@ -1321,8 +1513,8 @@ diff -ruN a/src/tab/tab_bar.rs b/src/tab/tab_bar.rs
                          .shadow(raised_shadow()),
                  ),
 diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
---- a/src/tab/tab.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/tab/tab.rs	2026-11-12 20:22:28.720900499 +0100
+--- a/src/tab/tab.rs	2026-11-12 22:30:56.225343902 +0100
++++ b/src/tab/tab.rs	2026-11-12 22:30:56.235743046 +0100
 @@ -634,6 +634,18 @@
                  hover_style.borders.left = px(0.);
              }
@@ -1365,8 +1557,8 @@ diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
                  this.child(
                      div()
 diff -ruN a/src/table/data_table.rs b/src/table/data_table.rs
---- a/src/table/data_table.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/table/data_table.rs	2026-11-10 08:48:57.494640337 +0100
+--- a/src/table/data_table.rs	2026-11-12 22:30:56.225510047 +0100
++++ b/src/table/data_table.rs	2026-11-12 22:30:56.235878513 +0100
 @@ -1,5 +1,10 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): optional lines
 +// between columns; shift and an arrow extends a range of cells; no focus
@@ -1461,8 +1653,8 @@ diff -ruN a/src/table/data_table.rs b/src/table/data_table.rs
      }
  }
 diff -ruN a/src/table/delegate.rs b/src/table/delegate.rs
---- a/src/table/delegate.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/table/delegate.rs	2026-11-10 08:48:57.494640337 +0100
+--- a/src/table/delegate.rs	2026-11-12 22:30:56.225537750 +0100
++++ b/src/table/delegate.rs	2026-11-12 22:30:56.236004001 +0100
 @@ -1,7 +1,10 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a cell can have a
 +// context menu and a background of its own. Changes are marked "WDS patch".
@@ -1502,8 +1694,8 @@ diff -ruN a/src/table/delegate.rs b/src/table/delegate.rs
      fn render_td(
          &mut self,
 diff -ruN a/src/table/state.rs b/src/table/state.rs
---- a/src/table/state.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/table/state.rs	2026-11-10 08:48:57.494640337 +0100
+--- a/src/table/state.rs	2026-11-12 22:30:56.225654101 +0100
++++ b/src/table/state.rs	2026-11-12 22:30:56.236085005 +0100
 @@ -1,3 +1,11 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): in cell selection,
 +// the row header shows row numbers, and the selected cell's row number and
@@ -2035,8 +2227,8 @@ diff -ruN a/src/table/state.rs b/src/table/state.rs
                  }
              })
 diff -ruN a/src/title_bar.rs b/src/title_bar.rs
---- a/src/title_bar.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/title_bar.rs	2026-11-12 05:44:08.348953607 +0100
+--- a/src/title_bar.rs	2026-11-12 22:30:56.226604357 +0100
++++ b/src/title_bar.rs	2026-11-12 22:30:56.237313590 +0100
 @@ -1,3 +1,7 @@
 +// Modified for PowerCommander (Apache-2.0, section 4b): the window's buttons
 +// are those the desktop's layout names, and may be the icon theme's pictures
@@ -2166,8 +2358,8 @@ diff -ruN a/src/title_bar.rs b/src/title_bar.rs
          h_flex()
              .id("window-controls")
 diff -ruN a/src/tree.rs b/src/tree.rs
---- a/src/tree.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/tree.rs	2026-11-10 08:48:57.495643280 +0100
+--- a/src/tree.rs	2026-11-12 22:30:56.226803255 +0100
++++ b/src/tree.rs	2026-11-12 22:30:56.237157644 +0100
 @@ -1,3 +1,8 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a context menu
 +// builder gets the menu's context, so it can add submenus; the row renderer
@@ -2242,8 +2434,8 @@ diff -ruN a/src/tree.rs b/src/tree.rs
                              .into_any_element()
                      })
 diff -ruN a/src/window_border.rs b/src/window_border.rs
---- a/src/window_border.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/window_border.rs	2026-11-12 19:17:41.116294289 +0100
+--- a/src/window_border.rs	2026-11-12 22:30:56.226858340 +0100
++++ b/src/window_border.rs	2026-11-12 22:30:56.237206286 +0100
 @@ -21,6 +21,24 @@
  /// corners, so keep the generic window wrapper square until rounded content masks exist.
  pub(crate) const BORDER_RADIUS: Pixels = px(0.0);
@@ -2308,8 +2500,8 @@ diff -ruN a/src/window_border.rs b/src/window_border.rs
                      .when(!tiling.top, |div| div.border_t(BORDER_SIZE))
                      .when(!tiling.bottom, |div| div.border_b(BORDER_SIZE))
 diff -ruN a/src/window_ext.rs b/src/window_ext.rs
---- a/src/window_ext.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/window_ext.rs	2026-11-11 17:36:29.321728788 +0100
+--- a/src/window_ext.rs	2026-11-12 22:30:56.226889729 +0100
++++ b/src/window_ext.rs	2026-11-12 22:30:56.237249629 +0100
 @@ -11,6 +11,10 @@
  
  /// Extension trait for [`Window`] to add dialog, sheet .. functionality.

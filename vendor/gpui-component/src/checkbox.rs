@@ -253,7 +253,10 @@ impl RenderOnce for Checkbox {
         let radius = cx.theme().radius.min(px(4.));
         let disabled_text_color = cx.theme().muted_foreground;
         let instance_style = self.style.clone();
+        // PowerCommander patch: see `QtControls`.
+        let qt = cx.try_global::<crate::QtControls>().cloned();
         base.role(self.role)
+            .group(crate::qt::CHECKBOX)
             .checked(checked)
             .disabled(self.disabled)
             .styles(|styles| {
@@ -299,9 +302,18 @@ impl RenderOnce for Checkbox {
                     .when(has_content, |this| this.mt(indicator_size * 0.125))
                     .flex_shrink_0()
                     .border_1()
-                    // PowerCommander patch: Breeze's box, see `BreezeControls`.
-                    .map(|this| match cx.try_global::<crate::BreezeControls>().copied() {
-                        Some(breeze) => {
+                    // PowerCommander patch: the Qt style's box, else Breeze's, see `QtControls`, `BreezeControls`.
+                    .map(|this| match (&qt, cx.try_global::<crate::BreezeControls>().copied()) {
+                        (Some(qt), _) => {
+                            let images = &qt.checkbox[checked as usize];
+                            let (width, height) = qt.size(&images.0[crate::qt::NORMAL]);
+                            this.w(width).h(height).border_0().child(crate::qt::layers(
+                                crate::qt::CHECKBOX,
+                                self.disabled,
+                                |state| crate::qt::picture(images.0[state].clone()),
+                            ))
+                        }
+                        (None, Some(breeze)) => {
                             let (border, fill) = match checked {
                                 true => (breeze.highlight, breeze.checked),
                                 false => (breeze.frame, breeze.button),
@@ -312,7 +324,7 @@ impl RenderOnce for Checkbox {
                                 .border_color(border.opacity(dim))
                                 .bg(fill.opacity(dim))
                         }
-                        None => this
+                        (None, None) => this
                             .rounded(radius)
                             .when(!checked, |this| {
                                 this.bg(cx.theme().input_background())
@@ -332,14 +344,16 @@ impl RenderOnce for Checkbox {
                                     })
                             }),
                     })
-                    .child(checkbox_check_icon(
-                        self.id,
-                        self.size,
-                        checked,
-                        self.disabled,
-                        window,
-                        cx,
-                    )),
+                    .when(qt.is_none(), |this| {
+                        this.child(checkbox_check_icon(
+                            self.id,
+                            self.size,
+                            checked,
+                            self.disabled,
+                            window,
+                            cx,
+                        ))
+                    }),
             )
             .when(self.label.is_some() || !children.is_empty(), |this| {
                 this.child(

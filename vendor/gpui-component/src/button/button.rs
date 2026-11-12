@@ -633,6 +633,12 @@ impl RenderOnce for Button {
         let style: ButtonVariant = self.variant;
         let breeze_framed = cx.has_global::<crate::BreezeControls>()
             && matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Secondary);
+        // PowerCommander patch: push buttons as the Qt style draws them, see `QtControls`.
+        let qt = matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Default | ButtonVariant::Secondary)
+            && !self.outline
+            && !self.shows_selected_style();
+        let qt = qt.then(|| cx.try_global::<crate::QtControls>().cloned()).flatten();
+        let qt_default = self.variant == ButtonVariant::Primary;
         let interactive = self.interactive();
         let hoverable = self.hoverable();
         let disabled = self.disabled;
@@ -733,13 +739,14 @@ impl RenderOnce for Button {
                 this.rounded_br(rounding)
             })
             // PowerCommander patch: every Breeze push button is framed, see `BreezeControls`.
-            .when(self.variant.is_default() || self.outline || breeze_framed, |this| {
+            .when(qt.is_none() && (self.variant.is_default() || self.outline || breeze_framed), |this| {
                 this.when(self.border_edges.left, |this| this.border_l_1())
                     .when(self.border_edges.right, |this| this.border_r_1())
                     .when(self.border_edges.top, |this| this.border_t_1())
                     .when(self.border_edges.bottom, |this| this.border_b_1())
             })
-            .when(!self.disabled && !selected, |this| {
+            .when_some(qt.as_ref(), |this, _| this.relative().group(crate::qt::BUTTON).text_color(normal_style.fg))
+            .when(!self.disabled && !selected && qt.is_none(), |this| {
                 this.border_color(normal_style.border)
                     .bg(normal_style.bg)
                     .text_color(normal_style.fg)
@@ -832,10 +839,13 @@ impl RenderOnce for Button {
                         .refine_style(&instance_style)
                 })
                 .disabled(|style| {
+                    // PowerCommander patch: the Qt style's disabled button has its own fill.
+                    let style = match qt.is_some() {
+                        true => style,
+                        false => style.bg(disabled_style.bg).border_color(disabled_style.border),
+                    };
                     style
-                        .bg(disabled_style.bg)
                         .text_color(disabled_style.fg)
-                        .border_color(disabled_style.border)
                         .shadow_none()
                         .refine_style(&instance_style)
                 })
@@ -853,6 +863,12 @@ impl RenderOnce for Button {
         .track_focus(&focus_handle)
         .tab_index(self.tab_index)
         .tab_stop(self.tab_stop)
+        .when_some(qt.as_ref(), |this, qt| {
+            let parts = &qt.button[qt_default as usize];
+            this.child(crate::qt::layers(crate::qt::BUTTON, disabled, |state| {
+                crate::qt::button_layer(qt, parts, state)
+            }))
+        })
         .child(content)
         // Fade the whole button while loading, so every variant is dimmed by
         // the same amount. Fading `bg`, `border` and `fg` one by one instead

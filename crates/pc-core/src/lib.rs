@@ -29,6 +29,8 @@ pub mod origin;
 pub mod packing;
 pub mod pdf;
 pub mod properties;
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub mod qt_style;
 pub mod remote;
 pub mod rename;
 pub mod resume;

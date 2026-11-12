@@ -1,5 +1,12 @@
 use gpui_kit::component::scroll::ScrollbarMode;
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+use std::sync::Arc;
+
 use gpui_kit::component::{BreezeControls, Theme as KitTheme, ThemeMode};
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+use gpui_kit::component::{ActiveTheme, QtControls, StateImages};
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+use gpui_kit::{Global, RenderImage, Window};
 use gpui_kit::{App, Hsla, hsla, px, rgb};
 use pc_core::theme::Palette;
 
@@ -89,6 +96,13 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
             tab_inactive: color(breeze.tab_inactive),
         });
     }
+    // Qt's drawings are in the scheme's colours: not for the other look.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    match cx.try_global::<QtDrawn>().filter(|drawn| drawn.dark == palette.dark) {
+        Some(drawn) => cx.set_global(drawn.controls.clone()),
+        None if cx.has_global::<QtControls>() => drop(cx.remove_global::<QtControls>()),
+        None => {}
+    }
     // macOS's cursor is the accent, filled, as Finder's; elsewhere a tint, framed.
     let filled = cfg!(target_os = "macos");
     PanelColors {
@@ -133,4 +147,70 @@ pub fn mac_selection(dark: bool) -> Option<u32> {
     NSAppearance::appearanceNamed(name)?.performAsCurrentDrawingAppearance(&resolve);
     let [r, g, b] = rgb.get()?.map(|channel| (channel * 255.).round() as u32);
     Some(r << 16 | g << 8 | b)
+}
+
+/// The controls as the user's Qt style drew them, and whether in dark colours.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+struct QtDrawn {
+    dark: bool,
+    controls: QtControls,
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+impl Global for QtDrawn {}
+
+/// On KDE, the controls as the user's Qt style draws them (`pc-qtstyle`),
+/// once drawn; until then, and without it, Breeze's.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub fn draw_qt_controls(window: &Window, cx: &mut App) {
+    if !pc_core::theme::breeze_controls() {
+        return;
+    }
+    let scale = window.scale_factor();
+    // Buttons are 2 rem high.
+    let height = (f32::from(cx.theme().font_size) * 2.).round() as u32;
+    let dark = cx.theme().mode.is_dark();
+    cx.spawn(async move |cx| {
+        let drawn = cx.background_executor().spawn(async move { pc_core::qt_style::draw(scale, height) }).await;
+        let controls = match drawn {
+            Ok(mut drawn) => qt_controls(&mut drawn.images, scale).map(|controls| (drawn.dark, controls)),
+            Err(err) => {
+                eprintln!("{err}");
+                None
+            }
+        };
+        let Some((drawn_dark, controls)) = controls else {
+            return;
+        };
+        cx.update(|cx| {
+            if drawn_dark == dark {
+                cx.set_global(controls.clone());
+                cx.refresh_windows();
+            }
+            cx.set_global(QtDrawn { dark: drawn_dark, controls });
+        });
+    })
+    .detach();
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn qt_controls(images: &mut std::collections::HashMap<String, pc_core::qt_style::Picture>, scale: f32) -> Option<QtControls> {
+    let mut states = |name: &str| -> Option<StateImages> {
+        let [normal, hovered, pressed, disabled] = ["normal", "hovered", "pressed", "disabled"].map(|state| {
+            let picture = images.remove(&name.replace("{}", state))?;
+            // GPUI takes images as BGRA.
+            let mut bgra = picture.rgba;
+            bgra.chunks_exact_mut(4).for_each(|pixel| pixel.swap(0, 2));
+            let image = image::RgbaImage::from_raw(picture.width, picture.height, bgra)?;
+            Some(Arc::new(RenderImage::new([image::Frame::new(image)])))
+        });
+        Some(StateImages([normal?, hovered?, pressed?, disabled?]))
+    };
+    let mut button = |kind: &str| -> Option<[StateImages; 3]> {
+        let [left, middle, right] = ["left", "middle", "right"].map(|part| states(&format!("button.{kind}.{{}}.{part}")));
+        Some([left?, middle?, right?])
+    };
+    let button = [button("plain")?, button("default")?];
+    let checkbox = [states("checkbox.off.{}")?, states("checkbox.on.{}")?];
+    Some(QtControls { scale, checkbox, button })
 }

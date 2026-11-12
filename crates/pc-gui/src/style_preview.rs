@@ -32,6 +32,8 @@ pub(crate) fn open(cx: &mut App) {
     let opened = gpui_kit::open_window(options, cx, |window, cx| {
         let settings = Settings::load().unwrap_or_default();
         crate::appearance::apply(&crate::palette(&settings, window), cx);
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        crate::appearance::draw_qt_controls(window, cx);
         let combo = cx.new(|cx| SelectState::new(vec!["Combo box"], Some(IndexPath::new(0)), window, cx));
         let spin = cx.new(|cx| InputState::new(window, cx).default_value("0"));
         let text = cx.new(|cx| InputState::new(window, cx).placeholder("Text Field"));
