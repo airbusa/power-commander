@@ -4,6 +4,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::archive::Member;
@@ -35,9 +36,14 @@ impl Origin {
 
     /// A file to view: a copy of a server's or an archive's. Blocks.
     pub fn view(&self) -> io::Result<PathBuf> {
+        self.view_until(&AtomicBool::new(false))
+    }
+
+    /// As `view`; a server's download is given up once `stop` is set.
+    pub fn view_until(&self, stop: &AtomicBool) -> io::Result<PathBuf> {
         match self {
             Origin::Local(path) => Ok(path.clone()),
-            Origin::Server(fs, path) => vfs::fetch(&**fs, path),
+            Origin::Server(fs, path) => vfs::fetch_until(&**fs, path, stop),
             Origin::Archive(member, _) => member.extract(),
         }
     }

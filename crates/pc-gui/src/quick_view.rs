@@ -1,7 +1,7 @@
 //! Quick View (Total Commander's Ctrl+Q): the panel opposite the active one
 //! shows what the active one's cursor is on, as the viewer does; a folder,
-//! or `..`, shows the space it occupies. An archive's file is taken out
-//! first, once the cursor rests on it. Tab takes the keys to the viewer.
+//! or `..`, shows the space it occupies. A server's or an archive's file is
+//! copied here first, once the cursor rests on it. Tab takes the keys to the viewer.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,15 +25,15 @@ pub(crate) struct QuickView {
     shown: Option<(PathBuf, bool)>,
     viewer: Option<viewer::Quick>,
     folder: Option<Folder>,
-    /// Shown instead of the viewer: an archive's file being taken out, or why not.
+    /// Shown instead of the viewer: a file being copied here, or why not.
     note: Option<String>,
-    /// Taking the archive's file out; dropped, it is not shown.
-    taking: Option<Task<()>>,
-    /// The folder the shown archive file was taken out to, removed once it goes.
+    /// Copying the server's or archive's file; dropped, it stops and is not shown.
+    taking: Option<Taking>,
+    /// The folder the shown file was copied to, removed once it goes.
     copy: Option<PathBuf>,
 }
 
-/// Larger files of archives are not taken out to look at in passing: F3 does.
+/// Larger files of servers and archives are not copied to look at in passing: F3 does.
 const TAKEN_OUT_MAX: u64 = 256 << 20;
 
 impl Drop for QuickView {
@@ -41,6 +41,17 @@ impl Drop for QuickView {
         if let Some(copy) = self.copy.take() {
             let _ = std::fs::remove_dir_all(copy);
         }
+    }
+}
+
+struct Taking {
+    stop: Arc<AtomicBool>,
+    _task: Task<()>,
+}
+
+impl Drop for Taking {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
     }
 }
 
@@ -118,21 +129,29 @@ impl Commander {
         if wanted == quick.shown {
             return;
         }
-        let archived = panel.in_archive().then(|| panel.origin().zip(panel.current_entry().map(|entry| entry.size))).flatten();
+        let copied = panel.origin().filter(|origin| !origin.is_local()).zip(panel.current_entry().map(|entry| entry.size));
+        let elsewhere = panel.in_archive() || panel.remote().is_some();
         quick.shown = wanted.clone();
         (quick.folder, quick.note, quick.taking) = (None, None, None);
         if let Some(copy) = quick.copy.take() {
             let _ = std::fs::remove_dir_all(copy);
         }
         match wanted {
-            Some((_, false)) if let Some((_, size)) = archived.as_ref().filter(|(_, size)| *size > TAKEN_OUT_MAX) => {
-                quick.note = Some(format!("{} is too large to take out of the archive here: F3 views it.", pc_core::human_size(*size)));
+            Some((_, false)) if let Some((origin, size)) = copied.as_ref().filter(|(_, size)| *size > TAKEN_OUT_MAX) => {
+                let copy = match origin {
+                    Origin::Server(..) => "download",
+                    _ => "take out of the archive",
+                };
+                quick.note = Some(format!("{} is too large to {copy} here: F3 views it.", pc_core::human_size(*size)));
             }
-            Some((_, false)) if let Some((origin, _)) = archived => {
-                quick.note = Some("Taking it out of the archive…".into());
+            Some((_, false)) if let Some((origin, _)) = copied => {
+                quick.note = Some(match origin {
+                    Origin::Server(..) => "Downloading…".into(),
+                    _ => "Taking it out of the archive…".into(),
+                });
                 quick.taking = Some(take_out(origin, window, cx));
             }
-            Some((_, true)) if panel.in_archive() => quick.note = Some("Inside archives, Quick View shows files.".into()),
+            Some((_, true)) if elsewhere => quick.note = Some("On servers and inside archives, Quick View shows files.".into()),
             Some((path, false)) => match &quick.viewer {
                 Some(viewer) => viewer.show(path, window, cx),
                 None => quick.viewer = Some(viewer::Quick::new(path, self.settings.viewer.clone(), window, cx)),
@@ -154,7 +173,7 @@ impl Commander {
             (Some((path, _)), _, _, Some(text)) => (name(path), note(text.clone(), cx)),
             (Some((path, false)), Some(viewer), _, _) => (name(path), viewer.view().into_any_element()),
             (Some((path, true)), _, Some(folder), _) => (path.display().to_string(), folder_text(path, folder.space, cx)),
-            _ => (String::new(), note("Quick View shows the files of this computer and of archives.".into(), cx)),
+            _ => (String::new(), note("Quick View shows what the other panel's cursor is on.".into(), cx)),
         };
         let (title_bg, title_fg, stripe) = match quick_focused {
             true => (self.colors.active_path, theme.foreground, theme.primary),
@@ -236,12 +255,25 @@ fn folder_text(path: &std::path::Path, space: Option<Space>, cx: &App) -> AnyEle
     text.children(lines.into_iter().map(|line| div().when(line.is_empty(), |el| el.h_2()).child(line))).into_any_element()
 }
 
-/// Takes the archive's file out once the cursor has rested on it, then shows it.
-fn take_out(origin: Origin, window: &mut Window, cx: &mut Context<Commander>) -> Task<()> {
-    cx.spawn_in(window, async move |this, cx| {
-        // Passing over files takes none out.
+/// Copies the server's or archive's file once the cursor has rested on it, then shows it.
+fn take_out(origin: Origin, window: &mut Window, cx: &mut Context<Commander>) -> Taking {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopping = stop.clone();
+    let task = cx.spawn_in(window, async move |this, cx| {
+        // Passing over files copies none.
         cx.background_executor().timer(Duration::from_millis(200)).await;
-        let file = cx.background_executor().spawn(async move { origin.view() }).await;
+        let file = cx.background_executor().spawn(async move {
+            let file = origin.view_until(&stopping)?;
+            // Moved on while it came: nothing will show it or remove it.
+            if stopping.load(Ordering::Relaxed) && !origin.is_local() {
+                if let Some(dir) = file.parent() {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
+                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "stopped"));
+            }
+            Ok(file)
+        });
+        let file = file.await;
         let _ = this.update_in(cx, |this, window, cx| {
             let settings = this.settings.viewer.clone();
             let Some(quick) = &mut this.quick else {
@@ -260,7 +292,8 @@ fn take_out(origin: Origin, window: &mut Window, cx: &mut Context<Commander>) ->
             }
             cx.notify();
         });
-    })
+    });
+    Taking { stop, _task: task }
 }
 
 fn note(text: String, cx: &App) -> AnyElement {

@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 use crate::Entry;
@@ -97,10 +98,22 @@ pub fn copy_file(
 
 /// A server's file in a temporary folder, for the viewer and editors.
 pub fn fetch(fs: &dyn Fs, path: &Path) -> io::Result<PathBuf> {
+    fetch_until(fs, path, &AtomicBool::new(false))
+}
+
+/// As `fetch`, given up once `stop` is set.
+pub fn fetch_until(fs: &dyn Fs, path: &Path, stop: &AtomicBool) -> io::Result<PathBuf> {
     let meta = fs.metadata(path)?;
-    let local = crate::archive::fresh_scratch()?.join(path.file_name().unwrap_or_default());
-    copy_file(fs, path, &Local, &local, &meta, &mut |_| Ok(()))?;
-    Ok(local)
+    let dir = crate::archive::fresh_scratch()?;
+    let local = dir.join(path.file_name().unwrap_or_default());
+    let copied = copy_file(fs, path, &Local, &local, &meta, &mut |_| match stop.load(Ordering::Relaxed) {
+        true => Err(io::Error::new(io::ErrorKind::Interrupted, "stopped")),
+        false => Ok(()),
+    });
+    if copied.is_err() {
+        let _ = fs::remove_dir_all(&dir);
+    }
+    copied.map(|()| local)
 }
 
 /// The edited temporary file back to the server.
