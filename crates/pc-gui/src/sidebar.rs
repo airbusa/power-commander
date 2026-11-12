@@ -1,5 +1,6 @@
-//! The sidebar: its tabs on a rail, this computer's folders as a tree that
-//! follows the active panel, and the servers by protocol.
+//! The sidebar: its sections as an accordion, one open and filling it;
+//! this computer's folders as a tree that follows the active panel, the
+//! servers by protocol, and devices.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -10,7 +11,6 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::Scrollbar;
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, StyledExt, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -24,13 +24,12 @@ use pc_core::{icons, theme};
 use crate::{Commander, connections_dialog};
 
 pub(crate) const WIDTH: f32 = 260.;
-const RAIL: Pixels = px(44.);
 const ROW: Pixels = px(22.);
+const SECTION: Pixels = px(30.);
 
 pub(crate) struct Sidebar {
-    /// The tab shown; none while hidden.
+    /// The section open; none while hidden.
     pub(crate) tab: Option<SidebarTab>,
-    /// Rail and tab together.
     pub(crate) width: f32,
     /// How much of the window colour it paints over the desktop; none: solid.
     tint: Option<f32>,
@@ -191,48 +190,54 @@ impl Commander {
         if tab == SidebarTab::Tree {
             self.follow_active();
         }
-        let theme = cx.theme();
         let background = self.colors.window.opacity(self.sidebar.tint.unwrap_or(1.));
-        // Material's coloured icons, the tab's name as a tooltip.
-        let rail_item = |id: &'static str, icon: &'static str, name: &'static str, which: SidebarTab| {
-            let selected = tab == which;
-            div()
-                .id(id)
-                .size(px(36.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(theme.radius_lg)
+        let mut sections = vec![
+            (SidebarTab::Tree, "tree.svg", "Folders"),
+            (SidebarTab::Favourites, "folder-server.svg", "Favourites"),
+        ];
+        if self.sidebar.has_devices() {
+            sections.push((SidebarTab::Devices, "folder-mobile.svg", "Devices"));
+        }
+        let mut accordion = v_flex().h_full().flex_1().min_w_0();
+        for (at, (which, icon, name)) in sections.into_iter().enumerate() {
+            let open = tab == which;
+            let buttons = (which == SidebarTab::Favourites).then(|| self.favourite_buttons(cx));
+            let theme = cx.theme();
+            let chevron = match open {
+                true => IconName::ChevronDown,
+                false => IconName::ChevronRight,
+            };
+            // A click opens it; the open one stays: one is always open.
+            let header = h_flex()
+                .id(name)
+                .flex_none()
+                .h(SECTION)
+                .px_2()
+                .gap_2()
                 .cursor_pointer()
-                .map(|el| match selected {
-                    true => el.bg(theme.primary.opacity(0.18)),
-                    false => el.hover(|style| style.bg(theme.foreground.opacity(0.06))),
-                })
-                .child(img(format!("material/{icon}")).size(px(22.)))
-                .tooltip(move |window, cx| Tooltip::new(name).build(window, cx))
+                .when(at > 0, |el| el.border_t_1().border_color(theme.border))
+                .hover(|style| style.bg(theme.foreground.opacity(0.06)))
+                .child(img(format!("material/{icon}")).size(px(16.)).flex_none())
+                .child(div().flex_1().font_medium().child(name))
+                .children(buttons.into_iter().flatten())
+                .child(Icon::new(chevron).xsmall().text_color(theme.muted_foreground))
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.sidebar.tab = Some(which);
-                    this.reload_menus(cx);
-                    cx.notify();
-                }))
-        };
-        let rail = v_flex()
-            .w(RAIL)
-            .h_full()
-            .flex_none()
-            .p_1()
-            .gap_1()
-            .items_center()
-            .child(rail_item("rail-tree", "tree.svg", "Folders", SidebarTab::Tree))
-            .child(rail_item("rail-favourites", "folder-server.svg", "Favourites", SidebarTab::Favourites))
-            .when(self.sidebar.has_devices(), |el| {
-                el.child(rail_item("rail-devices", "folder-mobile.svg", "Devices", SidebarTab::Devices))
-            });
-        let content = match tab {
-            SidebarTab::Tree => self.render_tree(cx).into_any_element(),
-            SidebarTab::Favourites => self.render_favourites(cx).into_any_element(),
-            SidebarTab::Devices => self.render_devices(cx).into_any_element(),
-        };
+                    if this.sidebar.tab != Some(which) {
+                        this.sidebar.tab = Some(which);
+                        this.reload_menus(cx);
+                        cx.notify();
+                    }
+                }));
+            accordion = accordion.child(header);
+            if open {
+                let content = match which {
+                    SidebarTab::Tree => self.render_tree(cx).into_any_element(),
+                    SidebarTab::Favourites => self.render_favourites(cx).into_any_element(),
+                    SidebarTab::Devices => self.render_devices(cx).into_any_element(),
+                };
+                accordion = accordion.child(v_flex().flex_1().min_h_0().pb_1().child(content));
+            }
+        }
         let theme = cx.theme();
         Some(
             h_flex()
@@ -243,8 +248,7 @@ impl Commander {
                 .bg(background)
                 .border_r_1()
                 .border_color(theme.border)
-                .child(rail)
-                .child(v_flex().h_full().flex_1().min_w_0().py_1().child(content))
+                .child(accordion)
                 .child(
                     div()
                         .id("sidebar-edge")
@@ -262,7 +266,7 @@ impl Commander {
 
     /// The sidebar's width, from where its edge is dragged in `row`.
     pub(crate) fn drag_sidebar(&mut self, row: Bounds<Pixels>, x: Pixels, cx: &mut Context<Self>) {
-        self.sidebar.width = f32::from(x - row.left()).clamp(f32::from(RAIL) + 100., 640.);
+        self.sidebar.width = f32::from(x - row.left()).clamp(140., 640.);
         cx.notify();
     }
 
@@ -285,7 +289,7 @@ impl Commander {
             .min_h_0()
             .child(list)
             .child(div().absolute().inset_0().child(Scrollbar::vertical(&self.sidebar.tree_scroll)));
-        v_flex().size_full().child(header("Folders", cx)).child(rows)
+        v_flex().size_full().child(rows)
     }
 
     fn render_tree_row(&self, ix: usize, row: sidebar::Row, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -607,31 +611,32 @@ impl Commander {
         for (ix, volume) in &network {
             list = list.child(self.render_volume(*ix, volume, inside.as_deref(), cx));
         }
-        v_flex().size_full().child(header("Devices", cx)).child(list)
+        v_flex().size_full().child(list)
+    }
+
+    /// On the Favourites header: a new one, and an address to connect to.
+    fn favourite_buttons(&self, cx: &mut Context<Self>) -> [Button; 2] {
+        [
+            Button::new("server-new")
+                .ghost()
+                .xsmall()
+                .icon(IconName::Plus)
+                .tooltip("New favourite...")
+                .on_click(cx.listener(|this, _, window, cx| this.edit_server(None, false, window, cx))),
+            Button::new("server-address")
+                .ghost()
+                .xsmall()
+                .icon(IconName::Globe)
+                .tooltip("Connect to an address...")
+                .on_click(cx.listener(|this, _, window, cx| {
+                    let side = this.active;
+                    connections_dialog::open(cx.entity().downgrade(), side, window, cx)
+                })),
+        ]
     }
 
     fn render_favourites(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme();
-        let header = header("Favourites", cx)
-            .child(
-                Button::new("server-new")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Plus)
-                    .tooltip("New favourite...")
-                    .on_click(cx.listener(|this, _, window, cx| this.edit_server(None, false, window, cx))),
-            )
-            .child(
-                Button::new("server-address")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Globe)
-                    .tooltip("Connect to an address...")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        let side = this.active;
-                        connections_dialog::open(cx.entity().downgrade(), side, window, cx)
-                    })),
-            );
         let groups = sidebar::favourites(&self.sidebar.servers, &self.sidebar.hosts);
         let mut list = v_flex().id("favourites").flex_1().min_h_0().overflow_y_scroll().px_1();
         if groups.is_empty() {
@@ -677,7 +682,7 @@ impl Commander {
                 list = list.child(self.render_server(scheme, ix, server, cx));
             }
         }
-        v_flex().size_full().child(header).child(list)
+        v_flex().size_full().pt_1().child(list)
     }
 
     fn render_server(&self, scheme: Scheme, ix: usize, server: sidebar::Favourite, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -720,11 +725,6 @@ impl Commander {
 }
 
 /// A tab's title line; buttons go after it.
-fn header(title: &'static str, cx: &App) -> Div {
-    let title = div().flex_1().text_color(cx.theme().muted_foreground).child(title);
-    h_flex().h(px(24.)).px_2().pb_1().gap_1().child(title)
-}
-
 /// A group's name in a tab: Drives, Phones, Network.
 fn section(title: &'static str, cx: &App) -> Div {
     let label = div().text_xs().font_semibold().text_color(cx.theme().muted_foreground);
