@@ -331,15 +331,34 @@ pub fn paired() -> Vec<Device> {
 /// Mounts the device's files: its folders with their names, the main one first.
 pub fn mount(id: &str) -> io::Result<Vec<(PathBuf, String)>> {
     let mut folders = main_first(kde_connect::mount(id)?);
-    // A mount left from a lost connection fails every read (EIO): mount it afresh.
-    if folders.first().is_some_and(|(path, _)| std::fs::read_dir(path).is_err()) {
+    // A mount left from a lost connection fails every read: mount it afresh.
+    if let Some((main, _)) = folders.first()
+        && !serves(main)
+    {
         kde_connect::unmount(id)?;
         folders = main_first(kde_connect::mount(id)?);
+        if let Some((main, _)) = folders.first() {
+            serves(main);
+        }
     }
     match folders.is_empty() {
         true => Err(io::Error::other("the device shares no folder")),
         false => Ok(folders),
     }
+}
+
+/// Waits up to 5 s for a fresh mount to serve: KDE Connect answers before
+/// sshfs does. False at once where reads fail as a stale mount's do.
+fn serves(folder: &Path) -> bool {
+    for _ in 0..25 {
+        match std::fs::read_dir(folder) {
+            Ok(_) => return true,
+            // EIO is 5 wherever KDE Connect mounts.
+            Err(err) if err.kind() == io::ErrorKind::NotConnected || err.raw_os_error() == Some(5) => return false,
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(200)),
+        }
+    }
+    false
 }
 
 /// The internal storage holds the camera's folder: the folder holding most
