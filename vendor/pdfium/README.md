@@ -22,7 +22,10 @@ check them against `SHA256SUMS` (GitHub's published digests):
 
 Each folder keeps its package's `LICENSE` (MIT, the builds) and `licenses/`
 (PDFium's BSD-3-Clause and those of the libraries in it); releases ship them
-with the library, in `pdfium/` beside the executable.
+with the library, in `pdfium/` beside the executable. The macOS app has the
+library in `Contents/Frameworks`, signed with the app, and the licenses in
+`Contents/Resources/licenses` (`packaging/macos/bundle.sh`); it needs macOS
+13, as this library does.
 
 The pdfium-render crate is built for this API version (`pdfium_8125`). To
 update: change the version in both scripts, the crate's API feature and

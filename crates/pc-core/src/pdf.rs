@@ -56,23 +56,9 @@ static WORKER: LazyLock<Sender<Job>> = LazyLock::new(|| {
     jobs
 });
 
-/// Beside the executable in releases, in vendor/pdfium when built.
+/// Shipped with releases, in vendor/pdfium when built.
 fn library() -> PathBuf {
-    let name = Pdfium::pdfium_platform_library_name();
-    let beside = std::env::current_exe()
-        .ok()
-        .and_then(|exe| Some(exe.parent()?.join("pdfium").join(&name)));
-    match beside {
-        Some(path) if path.exists() => path,
-        _ => Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../vendor/pdfium")
-            .join(format!(
-                "{}-{}",
-                std::env::consts::OS,
-                std::env::consts::ARCH
-            ))
-            .join(name),
-    }
+    crate::bundled::path("pdfium", Pdfium::pdfium_platform_library_name())
 }
 
 /// PDFium is there to show PDFs with.

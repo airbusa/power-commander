@@ -289,23 +289,10 @@ pub(crate) fn seven_zip(args: &[&str], archive: Option<&Path>) -> Command {
     command
 }
 
-// Releases ship it in `7zip/` beside the executable; source builds use `vendor/7zip`.
+// Releases ship it; source builds use `vendor/7zip`.
 fn executable() -> PathBuf {
     let name = if cfg!(windows) { "7z.exe" } else { "7zz" };
-    let beside = std::env::current_exe()
-        .ok()
-        .and_then(|exe| Some(exe.parent()?.join("7zip").join(name)));
-    match beside {
-        Some(path) if path.exists() => path,
-        _ => Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../vendor/7zip")
-            .join(format!(
-                "{}-{}",
-                std::env::consts::OS,
-                std::env::consts::ARCH
-            ))
-            .join(name),
-    }
+    crate::bundled::path("7zip", name)
 }
 
 pub(crate) fn missing(err: io::Error) -> io::Error {
