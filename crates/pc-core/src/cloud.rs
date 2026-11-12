@@ -111,10 +111,37 @@ pub fn user_config() -> Option<PathBuf> {
     places.into_iter().flatten().find(|path| path.is_file())
 }
 
-/// The user's rclone remotes, name and type, as the connections list them.
+/// The user's rclone remotes, name and type, as the connections list them;
+/// one their rclone mounts says so.
 pub fn user_remotes() -> Vec<(String, String)> {
     let text = user_config().and_then(|config| std::fs::read_to_string(config).ok());
-    text.map(|text| remotes_in(&text)).unwrap_or_default()
+    let mut remotes = text.map(|text| remotes_in(&text)).unwrap_or_default();
+    let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    for (name, kind) in &mut remotes {
+        if mount_of(&mounts, name).is_some() {
+            kind.push_str(", mounted");
+        }
+    }
+    remotes
+}
+
+/// The folder an rclone address is at when the user's rclone mounts its
+/// remote: no second rclone for it then.
+pub fn mounted_at(address: &Address) -> Option<PathBuf> {
+    // shortcut: Linux's mounts only; macOS's and Windows' are in Devices > Cloud all the same.
+    let mounts = std::fs::read_to_string("/proc/self/mounts").ok()?;
+    let root = mount_of(&mounts, &address.host)?;
+    Some(root.join(address.path.as_deref().unwrap_or("").trim_start_matches('/')))
+}
+
+/// Where `/proc/self/mounts` has `remote`'s root mounted by `rclone mount`.
+fn mount_of(mounts: &str, remote: &str) -> Option<PathBuf> {
+    mounts.lines().find_map(|line| {
+        let mut fields = line.split(' ');
+        let (device, path, kind) = (fields.next()?, fields.next()?, fields.next()?);
+        let root = crate::devices::unescape(device).as_os_str() == format!("{remote}:").as_str();
+        (kind == "fuse.rclone" && root).then(|| crate::devices::unescape(path))
+    })
 }
 
 /// A config's `[name]` sections and their `type`.
@@ -218,6 +245,9 @@ mod tests {
         let config = "[work]\ntype = onedrive\ntoken = {}\n\n[photos]\nclient_id = x\ntype = drive\n";
         assert_eq!(remotes_in(config), [("work".into(), "onedrive".into()), ("photos".into(), "drive".into())]);
         assert!(remotes_in("# Encrypted rclone configuration File\n\nRCLONE_ENCRYPT_V0:\nabc\n").is_empty());
+        let mounts = "work: /home/me/Work\\040Drive fuse.rclone rw 0 0\nphotos:Albums /home/me/Albums fuse.rclone rw 0 0\n";
+        assert_eq!(mount_of(mounts, "work"), Some(PathBuf::from("/home/me/Work Drive")));
+        assert_eq!(mount_of(mounts, "photos"), None);
     }
 
     #[test]
