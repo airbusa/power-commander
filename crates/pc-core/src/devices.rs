@@ -155,7 +155,7 @@ fn network_mounts(mounts: &str, runtime: Option<&Path>) -> Vec<Volume> {
 }
 
 /// `/proc/mounts` writes a space as `\040`.
-pub(crate) fn unescape(field: &str) -> PathBuf {
+fn unescape(field: &str) -> PathBuf {
     let mut bytes = Vec::new();
     let mut rest = field.as_bytes();
     while let Some((&first, tail)) = rest.split_first() {

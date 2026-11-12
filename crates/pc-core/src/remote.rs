@@ -25,22 +25,11 @@ pub enum Scheme {
     Nfs,
     /// Amazon's object storage and those speaking it, through rclone (`cloud`).
     S3,
-    /// A remote of the user's own rclone config.
-    Rclone,
 }
 
 impl Scheme {
-    pub const ALL: [Scheme; 9] = [
-        Scheme::Sftp,
-        Scheme::Ftp,
-        Scheme::Ftps,
-        Scheme::Smb,
-        Scheme::Webdav,
-        Scheme::Webdavs,
-        Scheme::Nfs,
-        Scheme::S3,
-        Scheme::Rclone,
-    ];
+    pub const ALL: [Scheme; 8] =
+        [Scheme::Sftp, Scheme::Ftp, Scheme::Ftps, Scheme::Smb, Scheme::Webdav, Scheme::Webdavs, Scheme::Nfs, Scheme::S3];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -52,7 +41,6 @@ impl Scheme {
             Scheme::Webdavs => "webdavs",
             Scheme::Nfs => "nfs",
             Scheme::S3 => "s3",
-            Scheme::Rclone => "rclone",
         }
     }
 
@@ -64,8 +52,6 @@ impl Scheme {
             Scheme::Webdav => 80,
             Scheme::Webdavs | Scheme::S3 => 443,
             Scheme::Nfs => 2049,
-            // Its config has the servers.
-            Scheme::Rclone => 0,
         }
     }
 
@@ -74,15 +60,14 @@ impl Scheme {
         matches!(self, Scheme::Smb | Scheme::Webdav | Scheme::Webdavs | Scheme::Nfs)
     }
 
-    /// Whether it logs in with a user and password; NFS trusts the computer,
-    /// an rclone remote's config has its login.
+    /// Whether it logs in with a user and password; NFS trusts the computer.
     pub fn logs_in(self) -> bool {
-        !matches!(self, Scheme::Nfs | Scheme::Rclone)
+        self != Scheme::Nfs
     }
 }
 
 /// `sftp://[user@]host[:port][/path]`, or `ftp://`, `ftps://`; S3's
-/// `s3://access-key@endpoint/bucket/path`; an rclone remote's `rclone://name/path`.
+/// `s3://access-key@endpoint/bucket/path`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Address {
     pub scheme: Scheme,
@@ -105,7 +90,6 @@ impl Address {
             "webdavs" | "davs" => Scheme::Webdavs,
             "nfs" => Scheme::Nfs,
             "s3" => Scheme::S3,
-            "rclone" => Scheme::Rclone,
             _ => return None,
         };
         let (authority, path) = match rest.find('/') {
@@ -211,11 +195,6 @@ pub fn connect(address: &Address, ask: Ask) -> io::Result<(Arc<dyn Remote>, Path
             let store = crate::cloud::connect(address, &ask)?;
             let start = store.start(address);
             Ok((store, start))
-        }
-        Scheme::Rclone => {
-            let remote = crate::cloud::connect_remote(address, &ask)?;
-            let start = remote.start(address);
-            Ok((remote, start))
         }
         // `mounts` takes these.
         Scheme::Smb | Scheme::Webdav | Scheme::Webdavs | Scheme::Nfs => {

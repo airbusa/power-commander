@@ -36,13 +36,6 @@ impl Commander {
         if address.scheme.mounted() {
             return self.mount_url(side, address.url(), window, cx);
         }
-        if let Some(folder) = pc_core::cloud::mounted_at(&address) {
-            let go = move |panel: &mut pc_core::Panel| match panel.remote() {
-                Some(_) => panel.disconnect(folder),
-                None => panel.go_to_folder(folder),
-            };
-            return self.navigate_on(side, true, go, window, cx);
-        }
         let (prompts, mut asked) = channel::unbounded::<(Prompt, mpsc::Sender<Reply>)>();
         // A password the user asked to keep, once it has logged in.
         let keep: Keep = Arc::default();

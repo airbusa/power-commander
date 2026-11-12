@@ -1,7 +1,6 @@
 //! Saved servers, and the hosts `~/.ssh/config` names.
 
 use std::io;
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -42,8 +41,6 @@ impl Connection {
 #[serde(default)]
 pub struct Connections {
     pub saved: Vec<Connection>,
-    /// The rclone config chosen; none: where rclone itself looks.
-    pub rclone_config: Option<PathBuf>,
 }
 
 impl Connections {
