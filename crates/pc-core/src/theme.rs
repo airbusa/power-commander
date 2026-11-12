@@ -25,6 +25,8 @@ pub struct Palette {
     pub window: u32,
     /// The menu bar and the button bar: KDE's header colour.
     pub bar: u32,
+    /// Buttons' and combo boxes' fill: KDE's button colour.
+    pub button: u32,
     /// The file lists, the viewer's and editor's pages.
     pub view: u32,
     pub text: u32,
@@ -192,6 +194,20 @@ pub fn sidebar_see_through() -> bool {
     cfg!(any(target_os = "macos", windows)) || kwin
 }
 
+impl Palette {
+    /// A checked box's or radio button's fill, as KDE's Breeze style draws it:
+    /// the button's colour under 30% of the selection's.
+    pub fn checked_fill(&self) -> u32 {
+        mix(self.button, self.selection, 0.3)
+    }
+}
+
+/// Whether the controls are drawn as KDE's Breeze style draws them: on KDE,
+/// whatever its widget style, Breeze being the closest we draw.
+pub fn breeze_controls() -> bool {
+    cfg!(any(target_os = "linux", target_os = "freebsd")) && on_kde()
+}
+
 /// GTK's header bar as the GTK theme draws it (measured with GTK 3, which
 /// GNOME Terminal is); libadwaita's, as GNOME's own apps draw it, for a theme
 /// not known.
@@ -334,12 +350,14 @@ fn kde(kdeglobals: &str) -> Option<Palette> {
     };
     let window = color("Colors:Window", "BackgroundNormal")?;
     let bar = color("Colors:Header", "BackgroundNormal").unwrap_or(window);
+    let button = color("Colors:Button", "BackgroundNormal").unwrap_or(window);
     let text = color("Colors:View", "ForegroundNormal")?;
     let font = values.get(&("General", "font")).and_then(|font| font.split(',').next());
     Some(Palette {
         dark: luminance(window) < 0.5,
         window,
         bar,
+        button,
         view: color("Colors:View", "BackgroundNormal")?,
         text,
         dim: color("Colors:View", "ForegroundInactive").unwrap_or(text),
@@ -359,6 +377,7 @@ fn breeze(dark: bool) -> Palette {
             dark,
             window: 0x202326,
             bar: 0x292c30,
+            button: 0x292c30,
             view: 0x141618,
             text: 0xfcfcfc,
             dim: 0xa1a9b1,
@@ -372,6 +391,7 @@ fn breeze(dark: bool) -> Palette {
             dark,
             window: 0xeff0f1,
             bar: 0xdee0e2,
+            button: 0xfcfcfc,
             view: 0xffffff,
             text: 0x232629,
             dim: 0x707d8a,
@@ -391,6 +411,7 @@ fn adwaita(dark: bool) -> Palette {
             dark,
             window: 0x222226,
             bar: 0x2e2e32,
+            button: 0x2e2e32,
             view: 0x1d1d20,
             text: 0xffffff,
             dim: 0x9a9a9e,
@@ -404,6 +425,7 @@ fn adwaita(dark: bool) -> Palette {
             dark,
             window: 0xfafafb,
             bar: 0xebebed,
+            button: 0xebebed,
             view: 0xffffff,
             text: 0x2e2e33,
             dim: 0x6e6e73,
@@ -424,6 +446,7 @@ fn windows(dark: bool) -> Palette {
             dark,
             window: 0x202020,
             bar: 0x202020,
+            button: 0x202020,
             view: 0x1c1c1c,
             text: 0xffffff,
             dim: 0xc5c5c5,
@@ -437,6 +460,7 @@ fn windows(dark: bool) -> Palette {
             dark,
             window: 0xf3f3f3,
             bar: 0xf3f3f3,
+            button: 0xf3f3f3,
             view: 0xffffff,
             text: 0x1a1a1a,
             dim: 0x5d5d5d,
@@ -457,6 +481,7 @@ fn mac(dark: bool) -> Palette {
             dark,
             window: 0x323232,
             bar: 0x2a2a2a,
+            button: 0x2a2a2a,
             view: 0x1e1e1e,
             text: 0xe6e6e6,
             dim: 0x989898,
@@ -470,6 +495,7 @@ fn mac(dark: bool) -> Palette {
             dark,
             window: 0xececec,
             bar: 0xf5f5f5,
+            button: 0xf5f5f5,
             view: 0xffffff,
             text: 0x262626,
             dim: 0x808080,

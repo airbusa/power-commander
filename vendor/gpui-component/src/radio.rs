@@ -8,7 +8,7 @@ use crate::{StyleSized as _, ThemeStyled as _};
 use gpui::{
     AnyElement, App, Axis, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
     SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
-    prelude::FluentBuilder, relative, rems,
+    prelude::FluentBuilder, px, relative, rems,
 };
 use gpui_base::{Radio as BaseRadio, RadioGroup as BaseRadioGroup};
 
@@ -238,15 +238,35 @@ impl RenderOnce for Radio {
                     .flex_shrink_0()
                     .rounded_full_style(cx)
                     .border_1()
-                    .border_color(border_color)
-                    .map(|this| match self.checked {
-                        false => this.bg(cx.theme().input_background()),
-                        true if disabled => this.bg(bg),
-                        true => this.bg(cx.theme().tokens.primary),
-                    })
-                    .child(checkbox_check_icon(
-                        self.id, self.size, checked, disabled, window, cx,
-                    )),
+                    // PowerCommander patch: Breeze's circle and dot, see `BreezeControls`.
+                    .map(|this| match cx.try_global::<crate::BreezeControls>().copied() {
+                        Some(breeze) => {
+                            let (border, fill) = match checked {
+                                true => (breeze.highlight, breeze.checked),
+                                false => (breeze.frame, breeze.button),
+                            };
+                            let dim = if disabled { 0.5 } else { 1. };
+                            this.size(px(16.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .border_color(border.opacity(dim))
+                                .bg(fill.opacity(dim))
+                                .when(checked, |this| {
+                                    this.child(div().size(px(6.)).rounded_full().bg(breeze.mark.opacity(dim)))
+                                })
+                        }
+                        None => this
+                            .border_color(border_color)
+                            .map(|this| match self.checked {
+                                false => this.bg(cx.theme().input_background()),
+                                true if disabled => this.bg(bg),
+                                true => this.bg(cx.theme().tokens.primary),
+                            })
+                            .child(checkbox_check_icon(
+                                self.id, self.size, checked, disabled, window, cx,
+                            )),
+                    }),
             )
             .when(!self.children.is_empty() || self.label.is_some(), |this| {
                 this.child(

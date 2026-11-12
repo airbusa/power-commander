@@ -1,3 +1,102 @@
+diff -ruN a/src/breeze.rs b/src/breeze.rs
+--- a/src/breeze.rs	1970-01-01 01:00:00.000000000 +0100
++++ b/src/breeze.rs	2026-11-12 19:50:54.424126928 +0100
+@@ -0,0 +1,20 @@
++// PowerCommander patch: this file is new.
++use gpui::{Global, Hsla};
++
++/// Controls drawn as KDE's Breeze style draws them (`breezehelper.cpp`), in
++/// these colours of the user's scheme; without it, GPUI Kit's own look.
++#[derive(Clone, Copy, Debug)]
++pub struct BreezeControls {
++    /// Buttons', check boxes' and radio buttons' fill.
++    pub button: Hsla,
++    /// Frames: a fifth of the text over the window.
++    pub frame: Hsla,
++    /// A checked box's or radio button's fill.
++    pub checked: Hsla,
++    /// The selection colour: a checked box's frame, a slider's or progress bar's fill.
++    pub highlight: Hsla,
++    /// Check marks and radio dots: the text colour.
++    pub mark: Hsla,
++}
++
++impl Global for BreezeControls {}
+diff -ruN a/src/checkbox.rs b/src/checkbox.rs
+--- a/src/checkbox.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/checkbox.rs	2026-11-12 19:51:07.792841677 +0100
+@@ -197,11 +197,11 @@
+         window,
+         cx,
+     );
+-    let color = if disabled {
+-        cx.theme().primary_foreground.opacity(0.5)
+-    } else {
+-        cx.theme().primary_foreground
+-    };
++    // PowerCommander patch: Breeze marks in the text colour, see `BreezeControls`.
++    let color = cx
++        .try_global::<crate::BreezeControls>()
++        .map_or(cx.theme().primary_foreground, |breeze| breeze.mark);
++    let color = if disabled { color.opacity(0.5) } else { color };
+ 
+     svg()
+         .absolute()
+@@ -299,23 +299,38 @@
+                     .when(has_content, |this| this.mt(indicator_size * 0.125))
+                     .flex_shrink_0()
+                     .border_1()
+-                    .rounded(radius)
+-                    .when(!checked, |this| {
+-                        this.bg(cx.theme().input_background())
+-                            .when(!self.disabled, |this| this.border_color(unchecked_border))
+-                    })
+-                    .styles(|styles| {
+-                        styles
+-                            .checked(|style| {
+-                                style
+-                                    .border_color(checked_color)
+-                                    .bg(cx.theme().tokens.primary)
+-                            })
+-                            .disabled(|style| {
+-                                style
+-                                    .border_color(disabled_indicator_color)
+-                                    .when(checked, |style| style.bg(disabled_indicator_color))
++                    // PowerCommander patch: Breeze's box, see `BreezeControls`.
++                    .map(|this| match cx.try_global::<crate::BreezeControls>().copied() {
++                        Some(breeze) => {
++                            let (border, fill) = match checked {
++                                true => (breeze.highlight, breeze.checked),
++                                false => (breeze.frame, breeze.button),
++                            };
++                            let dim = if self.disabled { 0.5 } else { 1. };
++                            this.size(px(16.))
++                                .rounded(px(4.))
++                                .border_color(border.opacity(dim))
++                                .bg(fill.opacity(dim))
++                        }
++                        None => this
++                            .rounded(radius)
++                            .when(!checked, |this| {
++                                this.bg(cx.theme().input_background())
++                                    .when(!self.disabled, |this| this.border_color(unchecked_border))
+                             })
++                            .styles(|styles| {
++                                styles
++                                    .checked(|style| {
++                                        style
++                                            .border_color(checked_color)
++                                            .bg(cx.theme().tokens.primary)
++                                    })
++                                    .disabled(|style| {
++                                        style
++                                            .border_color(disabled_indicator_color)
++                                            .when(checked, |style| style.bg(disabled_indicator_color))
++                                    })
++                            }),
+                     })
+                     .child(checkbox_check_icon(
+                         self.id,
 diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
 --- a/src/dialog/dialog.rs	2006-07-24 03:21:28.000000000 +0200
 +++ b/src/dialog/dialog.rs	2026-11-11 07:40:05.965584961 +0100
@@ -461,8 +560,18 @@ diff -ruN a/src/kbd.rs b/src/kbd.rs
  }
 diff -ruN a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs	2006-07-24 03:21:28.000000000 +0200
-+++ b/src/lib.rs	2026-11-12 19:17:41.116460935 +0100
-@@ -121,7 +121,7 @@
++++ b/src/lib.rs	2026-11-12 19:50:54.430300582 +0100
+@@ -20,6 +20,9 @@
+ mod touch_selection;
+ mod virtual_list;
+ mod window_border;
++// PowerCommander patch: see `BreezeControls`.
++mod breeze;
++pub use breeze::BreezeControls;
+ mod window_ext;
+ 
+ pub(crate) mod actions {
+@@ -121,7 +124,7 @@
  pub use time::{calendar, date_picker, time_field};
  pub use title_bar::*;
  pub use virtual_list::{VirtualList, VirtualListScrollHandle, h_virtual_list, v_virtual_list};
@@ -837,6 +946,63 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
      }
  }
  
+diff -ruN a/src/radio.rs b/src/radio.rs
+--- a/src/radio.rs	2006-07-24 03:21:28.000000000 +0200
++++ b/src/radio.rs	2026-11-12 19:51:28.034693661 +0100
+@@ -8,7 +8,7 @@
+ use gpui::{
+     AnyElement, App, Axis, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
+     SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
+-    prelude::FluentBuilder, relative, rems,
++    prelude::FluentBuilder, px, relative, rems,
+ };
+ use gpui_base::{Radio as BaseRadio, RadioGroup as BaseRadioGroup};
+ 
+@@ -238,15 +238,35 @@
+                     .flex_shrink_0()
+                     .rounded_full_style(cx)
+                     .border_1()
+-                    .border_color(border_color)
+-                    .map(|this| match self.checked {
+-                        false => this.bg(cx.theme().input_background()),
+-                        true if disabled => this.bg(bg),
+-                        true => this.bg(cx.theme().tokens.primary),
+-                    })
+-                    .child(checkbox_check_icon(
+-                        self.id, self.size, checked, disabled, window, cx,
+-                    )),
++                    // PowerCommander patch: Breeze's circle and dot, see `BreezeControls`.
++                    .map(|this| match cx.try_global::<crate::BreezeControls>().copied() {
++                        Some(breeze) => {
++                            let (border, fill) = match checked {
++                                true => (breeze.highlight, breeze.checked),
++                                false => (breeze.frame, breeze.button),
++                            };
++                            let dim = if disabled { 0.5 } else { 1. };
++                            this.size(px(16.))
++                                .flex()
++                                .items_center()
++                                .justify_center()
++                                .border_color(border.opacity(dim))
++                                .bg(fill.opacity(dim))
++                                .when(checked, |this| {
++                                    this.child(div().size(px(6.)).rounded_full().bg(breeze.mark.opacity(dim)))
++                                })
++                        }
++                        None => this
++                            .border_color(border_color)
++                            .map(|this| match self.checked {
++                                false => this.bg(cx.theme().input_background()),
++                                true if disabled => this.bg(bg),
++                                true => this.bg(cx.theme().tokens.primary),
++                            })
++                            .child(checkbox_check_icon(
++                                self.id, self.size, checked, disabled, window, cx,
++                            )),
++                    }),
+             )
+             .when(!self.children.is_empty() || self.label.is_some(), |this| {
+                 this.child(
 diff -ruN a/src/root.rs b/src/root.rs
 --- a/src/root.rs	2006-07-24 03:21:28.000000000 +0200
 +++ b/src/root.rs	2026-11-12 19:17:41.116555135 +0100

@@ -1,5 +1,5 @@
 use gpui_kit::component::scroll::ScrollbarMode;
-use gpui_kit::component::{Theme as KitTheme, ThemeMode};
+use gpui_kit::component::{BreezeControls, Theme as KitTheme, ThemeMode};
 use gpui_kit::{App, Hsla, hsla, rgb};
 use pc_core::theme::Palette;
 
@@ -67,6 +67,16 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         kit.tab_foreground = color(palette.dim);
         kit.tab_active_foreground = color(palette.text);
     });
+    // On KDE the controls take Breeze's look, in the scheme's colours.
+    if pc_core::theme::breeze_controls() {
+        cx.set_global(BreezeControls {
+            button: color(palette.button),
+            frame: color(palette.border),
+            checked: color(palette.checked_fill()),
+            highlight: color(palette.selection),
+            mark: color(palette.text),
+        });
+    }
     // macOS's cursor is the accent, filled, as Finder's; elsewhere a tint, framed.
     let filled = cfg!(target_os = "macos");
     PanelColors {

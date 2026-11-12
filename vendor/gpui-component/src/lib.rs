@@ -20,6 +20,9 @@ mod title_bar;
 mod touch_selection;
 mod virtual_list;
 mod window_border;
+// PowerCommander patch: see `BreezeControls`.
+mod breeze;
+pub use breeze::BreezeControls;
 mod window_ext;
 
 pub(crate) mod actions {

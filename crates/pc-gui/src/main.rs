@@ -33,6 +33,8 @@ mod rename_dialog;
 mod search_window;
 mod settings_dialog;
 mod sidebar;
+#[cfg(debug_assertions)]
+mod style_preview;
 mod transfer;
 mod viewer;
 mod views;
@@ -198,6 +200,10 @@ fn main() {
         search_window::bind_keys(cx);
         editor::bind_keys(cx);
         header::round_corners(cx);
+        #[cfg(debug_assertions)]
+        if std::env::var_os("PC_STYLE_PREVIEW").is_some() {
+            return style_preview::open(cx);
+        }
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1200.), px(800.)), cx)),
             titlebar: Some(TitlebarOptions {

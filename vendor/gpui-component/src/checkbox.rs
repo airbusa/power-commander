@@ -197,11 +197,11 @@ pub(crate) fn checkbox_check_icon(
         window,
         cx,
     );
-    let color = if disabled {
-        cx.theme().primary_foreground.opacity(0.5)
-    } else {
-        cx.theme().primary_foreground
-    };
+    // PowerCommander patch: Breeze marks in the text colour, see `BreezeControls`.
+    let color = cx
+        .try_global::<crate::BreezeControls>()
+        .map_or(cx.theme().primary_foreground, |breeze| breeze.mark);
+    let color = if disabled { color.opacity(0.5) } else { color };
 
     svg()
         .absolute()
@@ -299,23 +299,38 @@ impl RenderOnce for Checkbox {
                     .when(has_content, |this| this.mt(indicator_size * 0.125))
                     .flex_shrink_0()
                     .border_1()
-                    .rounded(radius)
-                    .when(!checked, |this| {
-                        this.bg(cx.theme().input_background())
-                            .when(!self.disabled, |this| this.border_color(unchecked_border))
-                    })
-                    .styles(|styles| {
-                        styles
-                            .checked(|style| {
-                                style
-                                    .border_color(checked_color)
-                                    .bg(cx.theme().tokens.primary)
+                    // PowerCommander patch: Breeze's box, see `BreezeControls`.
+                    .map(|this| match cx.try_global::<crate::BreezeControls>().copied() {
+                        Some(breeze) => {
+                            let (border, fill) = match checked {
+                                true => (breeze.highlight, breeze.checked),
+                                false => (breeze.frame, breeze.button),
+                            };
+                            let dim = if self.disabled { 0.5 } else { 1. };
+                            this.size(px(16.))
+                                .rounded(px(4.))
+                                .border_color(border.opacity(dim))
+                                .bg(fill.opacity(dim))
+                        }
+                        None => this
+                            .rounded(radius)
+                            .when(!checked, |this| {
+                                this.bg(cx.theme().input_background())
+                                    .when(!self.disabled, |this| this.border_color(unchecked_border))
                             })
-                            .disabled(|style| {
-                                style
-                                    .border_color(disabled_indicator_color)
-                                    .when(checked, |style| style.bg(disabled_indicator_color))
-                            })
+                            .styles(|styles| {
+                                styles
+                                    .checked(|style| {
+                                        style
+                                            .border_color(checked_color)
+                                            .bg(cx.theme().tokens.primary)
+                                    })
+                                    .disabled(|style| {
+                                        style
+                                            .border_color(disabled_indicator_color)
+                                            .when(checked, |style| style.bg(disabled_indicator_color))
+                                    })
+                            }),
                     })
                     .child(checkbox_check_icon(
                         self.id,
