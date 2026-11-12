@@ -657,11 +657,11 @@ impl RenderOnce for Button {
         let style: ButtonVariant = self.variant;
         let native_framed = cx.has_global::<crate::NativeControls>()
             && matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Secondary);
-        // PowerCommander patch: push buttons as the Qt style draws them, see `QtControls`.
+        // PowerCommander patch: push buttons as the Qt style draws them, see `ToolkitControls`.
         let qt = matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Default | ButtonVariant::Secondary)
             && !self.outline
             && !self.shows_selected_style();
-        let qt = qt.then(|| cx.try_global::<crate::QtControls>().cloned()).flatten();
+        let qt = qt.then(|| cx.try_global::<crate::ToolkitControls>().cloned()).flatten();
         let qt_default = self.variant == ButtonVariant::Primary;
         // PowerCommander patch: AppKit's push buttons are 24 px, see `MacControls`.
         let mac_push = cx.has_global::<crate::MacControls>()
@@ -798,7 +798,7 @@ impl RenderOnce for Button {
                     .when(self.border_edges.top, |this| this.border_t_1())
                     .when(self.border_edges.bottom, |this| this.border_b_1())
             })
-            .when_some(qt.as_ref(), |this, _| this.relative().group(crate::qt::BUTTON).text_color(normal_style.fg))
+            .when_some(qt.as_ref(), |this, _| this.relative().group(crate::toolkit::BUTTON).text_color(cx.theme().foreground))
             .when(!self.disabled && !selected && qt.is_none(), |this| {
                 this.border_color(normal_style.border)
                     .bg(normal_style.bg)
@@ -926,8 +926,8 @@ impl RenderOnce for Button {
         })
         .when_some(qt.as_ref(), |this, qt| {
             let parts = &qt.button[qt_default as usize];
-            this.child(crate::qt::layers(crate::qt::BUTTON, disabled, |state| {
-                crate::qt::button_layer(qt, parts, state)
+            this.child(crate::toolkit::layers(crate::toolkit::BUTTON, disabled, |state| {
+                crate::toolkit::button_layer(qt, parts, state)
             }))
         })
         .child(content)

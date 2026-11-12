@@ -195,7 +195,7 @@ fn on_kde() -> bool {
 }
 
 /// One of XDG_CURRENT_DESKTOP's names.
-fn on_desktop(name: &str) -> bool {
+pub(crate) fn on_desktop(name: &str) -> bool {
     std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().split(':').any(|desktop| desktop == name)
 }
 

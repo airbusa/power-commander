@@ -23,9 +23,9 @@ mod window_border;
 // PowerCommander patch: see `NativeControls`.
 mod native;
 pub use native::NativeControls;
-// PowerCommander patch: see `QtControls`.
-mod qt;
-pub use qt::{QtControls, StateImages};
+// PowerCommander patch: see `ToolkitControls`.
+mod toolkit;
+pub use toolkit::{StateImages, ToolkitControls};
 // PowerCommander patch: see `MacControls`.
 mod mac;
 pub use mac::MacControls;

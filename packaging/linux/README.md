@@ -12,6 +12,7 @@ packaging/linux/package.sh
 |---|---|
 | `powercommander`, `pc-tui` | `cargo build --release`, or `BIN=<folder>` with them built elsewhere (another distribution's glibc, in its container) |
 | `pc-qtstyle` | `crates/pc-qtstyle/build.sh` (needs Qt 6's development files): on KDE the user's Qt style draws the controls; without it, the built-in Breeze look |
+| `pc-gtkstyle` | `crates/pc-gtkstyle/build.sh` (needs GTK 3's development files): on Xfce, MATE and Cinnamon the GTK 3 theme draws the controls |
 | `7zip/` | `vendor/7zip`, with its license |
 | `pdfium/` | `vendor/pdfium`, with its licenses |
 | `rclone/` | `vendor/rclone` (built from source; needs Go), with its license |

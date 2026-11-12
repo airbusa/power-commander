@@ -1,5 +1,7 @@
-//! KDE: the user's Qt style (System Settings' Application Style) draws the
-//! controls, through `pc-qtstyle` beside the app, into images the GUI shows.
+//! The desktop's toolkit draws the controls into images the GUI shows: on
+//! KDE the user's Qt style (System Settings' Application Style), through
+//! `pc-qtstyle`; on Xfce, MATE and Cinnamon their GTK 3 theme, through
+//! `pc-gtkstyle`; both beside the app.
 
 use std::collections::HashMap;
 use std::io;
@@ -21,10 +23,20 @@ pub struct Drawn {
     pub images: HashMap<String, Picture>,
 }
 
-/// The controls as the Qt style draws them, `scale` device pixels to a
-/// pixel, buttons `button_height` pixels high. Blocks, some 70 ms.
+/// This desktop's helper; none where the app draws the controls itself.
+pub fn helper() -> Option<&'static str> {
+    match () {
+        _ if crate::theme::on_desktop("KDE") => Some("pc-qtstyle"),
+        _ if ["XFCE", "MATE", "X-Cinnamon"].into_iter().any(crate::theme::on_desktop) => Some("pc-gtkstyle"),
+        _ => None,
+    }
+}
+
+/// The controls as the toolkit draws them, `scale` device pixels to a pixel,
+/// buttons `button_height` pixels high. Blocks, some 70 ms.
 pub fn draw(scale: f32, button_height: u32) -> io::Result<Drawn> {
-    let helper = std::env::current_exe()?.with_file_name("pc-qtstyle");
+    let name = helper().ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "no toolkit to draw the controls"))?;
+    let helper = std::env::current_exe()?.with_file_name(name);
     let output = Command::new(helper)
         .arg(scale.to_string())
         .arg(button_height.to_string())
@@ -32,14 +44,14 @@ pub fn draw(scale: f32, button_height: u32) -> io::Result<Drawn> {
         .stderr(Stdio::null())
         .output()?;
     if !output.status.success() {
-        return Err(io::Error::other(format!("pc-qtstyle: {}", output.status)));
+        return Err(io::Error::other(format!("{name}: {}", output.status)));
     }
     parse(&output.stdout)
 }
 
 /// Lines, an image's pixels after its line, "end" last.
 fn parse(mut data: &[u8]) -> io::Result<Drawn> {
-    let bad = |what: &str| io::Error::new(io::ErrorKind::InvalidData, format!("pc-qtstyle: {what}"));
+    let bad = |what: &str| io::Error::new(io::ErrorKind::InvalidData, format!("the toolkit's drawing: {what}"));
     let mut drawn = Drawn { style: String::new(), dark: false, images: HashMap::new() };
     while let Some(end) = data.iter().position(|&byte| byte == b'\n') {
         let line = std::str::from_utf8(&data[..end]).map_err(|_| bad("not text"))?;

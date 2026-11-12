@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gpui_kit::component::MacControls;
 use gpui_kit::component::{NativeControls, Theme as KitTheme, ThemeMode};
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-use gpui_kit::component::{ActiveTheme, QtControls, StateImages};
+use gpui_kit::component::{ActiveTheme, StateImages, ToolkitControls};
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use gpui_kit::{Global, RenderImage, Window};
 use gpui_kit::{App, Hsla, hsla, px, rgb};
@@ -98,11 +98,11 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
             });
         }
     }
-    // Qt's drawings are in the scheme's colours: not for the other look.
+    // The toolkit's drawings are in the desktop's colours: not for the other look.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    match cx.try_global::<QtDrawn>().filter(|drawn| drawn.dark == palette.dark) {
+    match cx.try_global::<ToolkitDrawn>().filter(|drawn| drawn.dark == palette.dark) {
         Some(drawn) => cx.set_global(drawn.controls.clone()),
-        None if cx.has_global::<QtControls>() => drop(cx.remove_global::<QtControls>()),
+        None if cx.has_global::<ToolkitControls>() => drop(cx.remove_global::<ToolkitControls>()),
         None => {}
     }
     #[cfg(target_os = "macos")]
@@ -231,21 +231,22 @@ fn mac_color(dark: bool, color: fn() -> objc2::rc::Retained<objc2_app_kit::NSCol
     Some(r << 16 | g << 8 | b)
 }
 
-/// The controls as the user's Qt style drew them, and whether in dark colours.
+/// The controls as the desktop's toolkit drew them, and whether in dark colours.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-struct QtDrawn {
+struct ToolkitDrawn {
     dark: bool,
-    controls: QtControls,
+    controls: ToolkitControls,
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-impl Global for QtDrawn {}
+impl Global for ToolkitDrawn {}
 
-/// On KDE, the controls as the user's Qt style draws them (`pc-qtstyle`),
-/// once drawn; until then, and without it, Breeze's.
+/// The controls as the desktop's toolkit draws them (KDE's Qt style, the
+/// GTK 3 theme of Xfce, MATE and Cinnamon; `pc_core::toolkit_style`),
+/// once drawn; until then, and without it, the app's own.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-pub fn draw_qt_controls(window: &Window, cx: &mut App) {
-    if pc_core::theme::control_style() != Some(ControlStyle::Breeze) {
+pub fn draw_toolkit_controls(window: &Window, cx: &mut App) {
+    if pc_core::toolkit_style::helper().is_none() {
         return;
     }
     let scale = window.scale_factor();
@@ -253,9 +254,9 @@ pub fn draw_qt_controls(window: &Window, cx: &mut App) {
     let height = (f32::from(cx.theme().font_size) * 2.).round() as u32;
     let dark = cx.theme().mode.is_dark();
     cx.spawn(async move |cx| {
-        let drawn = cx.background_executor().spawn(async move { pc_core::qt_style::draw(scale, height) }).await;
+        let drawn = cx.background_executor().spawn(async move { pc_core::toolkit_style::draw(scale, height) }).await;
         let controls = match drawn {
-            Ok(mut drawn) => qt_controls(&mut drawn.images, scale).map(|controls| (drawn.dark, controls)),
+            Ok(mut drawn) => toolkit_controls(&mut drawn.images, scale).map(|controls| (drawn.dark, controls)),
             Err(err) => {
                 eprintln!("{err}");
                 None
@@ -269,14 +270,14 @@ pub fn draw_qt_controls(window: &Window, cx: &mut App) {
                 cx.set_global(controls.clone());
                 cx.refresh_windows();
             }
-            cx.set_global(QtDrawn { dark: drawn_dark, controls });
+            cx.set_global(ToolkitDrawn { dark: drawn_dark, controls });
         });
     })
     .detach();
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-fn qt_controls(images: &mut std::collections::HashMap<String, pc_core::qt_style::Picture>, scale: f32) -> Option<QtControls> {
+fn toolkit_controls(images: &mut std::collections::HashMap<String, pc_core::toolkit_style::Picture>, scale: f32) -> Option<ToolkitControls> {
     let mut states = |name: &str| -> Option<StateImages> {
         let [normal, hovered, pressed, disabled] = ["normal", "hovered", "pressed", "disabled"].map(|state| {
             let picture = images.remove(&name.replace("{}", state))?;
@@ -294,5 +295,5 @@ fn qt_controls(images: &mut std::collections::HashMap<String, pc_core::qt_style:
     };
     let button = [button("plain")?, button("default")?];
     let checkbox = [states("checkbox.off.{}")?, states("checkbox.on.{}")?];
-    Some(QtControls { scale, checkbox, button })
+    Some(ToolkitControls { scale, checkbox, button })
 }

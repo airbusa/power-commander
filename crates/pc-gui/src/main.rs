@@ -413,7 +413,7 @@ impl Commander {
         }
         let colors = appearance::apply(&palette(&settings, window), cx);
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        appearance::draw_qt_controls(window, cx);
+        appearance::draw_toolkit_controls(window, cx);
         menus::bind(&settings.keys, None, cx);
         let opacity = settings.sidebar_opacity.0;
         let blur = settings.sidebar_blur.0;

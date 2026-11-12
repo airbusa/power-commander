@@ -264,10 +264,10 @@ impl RenderOnce for Checkbox {
         let radius = cx.theme().radius.min(px(4.));
         let disabled_text_color = cx.theme().muted_foreground;
         let instance_style = self.style.clone();
-        // PowerCommander patch: see `QtControls`.
-        let qt = cx.try_global::<crate::QtControls>().cloned();
+        // PowerCommander patch: see `ToolkitControls`.
+        let qt = cx.try_global::<crate::ToolkitControls>().cloned();
         base.role(self.role)
-            .group(crate::qt::CHECKBOX)
+            .group(crate::toolkit::CHECKBOX)
             .checked(checked)
             .disabled(self.disabled)
             .styles(|styles| {
@@ -313,16 +313,16 @@ impl RenderOnce for Checkbox {
                     .when(has_content, |this| this.mt(indicator_size * 0.125))
                     .flex_shrink_0()
                     .border_1()
-                    // PowerCommander patch: the Qt style's box, else the desktop style's, see `QtControls`, `NativeControls`;
+                    // PowerCommander patch: the Qt style's box, else the desktop style's, see `ToolkitControls`, `NativeControls`;
                     // AppKit's, see `MacControls`.
                     .map(|this| match (&qt, cx.try_global::<crate::NativeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
                         (Some(qt), _, _) => {
                             let images = &qt.checkbox[checked as usize];
-                            let (width, height) = qt.size(&images.0[crate::qt::NORMAL]);
-                            this.w(width).h(height).border_0().child(crate::qt::layers(
-                                crate::qt::CHECKBOX,
+                            let (width, height) = qt.size(&images.0[crate::toolkit::NORMAL]);
+                            this.w(width).h(height).border_0().child(crate::toolkit::layers(
+                                crate::toolkit::CHECKBOX,
                                 self.disabled,
-                                |state| crate::qt::picture(images.0[state].clone()),
+                                |state| crate::toolkit::picture(images.0[state].clone()),
                             ))
                         }
                         (None, None, Some(mac)) => {

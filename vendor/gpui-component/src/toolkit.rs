@@ -6,11 +6,12 @@ use gpui::{
     StatefulInteractiveElement, Styled, canvas, div, point, px,
 };
 
-/// Controls drawn by the desktop's own Qt style (KDE's Application Style):
-/// images of each state, shown in place of GPUI Kit's drawing, or of
+/// Controls drawn by the desktop's own toolkit: its Qt style (KDE's
+/// Application Style) or GTK 3 theme (Xfce's, MATE's, Cinnamon's); images of
+/// each state, shown in place of GPUI Kit's drawing, or of
 /// `NativeControls`'. Images are in device pixels, `scale` to a pixel.
 #[derive(Clone)]
-pub struct QtControls {
+pub struct ToolkitControls {
     pub scale: f32,
     /// Check boxes, unchecked and checked.
     pub checkbox: [StateImages; 2],
@@ -23,9 +24,9 @@ pub struct QtControls {
 #[derive(Clone)]
 pub struct StateImages(pub [Arc<RenderImage>; 4]);
 
-impl Global for QtControls {}
+impl Global for ToolkitControls {}
 
-impl QtControls {
+impl ToolkitControls {
     /// An image's size in the window's pixels.
     pub fn size(&self, image: &RenderImage) -> (Pixels, Pixels) {
         let size = image.size(0);
@@ -35,8 +36,8 @@ impl QtControls {
 }
 
 /// The groups whose hover and press the layers follow.
-pub(crate) const CHECKBOX: &str = "qt-checkbox";
-pub(crate) const BUTTON: &str = "qt-button";
+pub(crate) const CHECKBOX: &str = "toolkit-checkbox";
+pub(crate) const BUTTON: &str = "toolkit-button";
 
 pub(crate) const NORMAL: usize = 0;
 pub(crate) const HOVERED: usize = 1;
@@ -73,7 +74,7 @@ pub(crate) fn picture(image: Arc<RenderImage>) -> Div {
 }
 
 /// A button's background in `state`: its ends as drawn, the middle stretched between.
-pub(crate) fn button_layer(controls: &QtControls, parts: &[StateImages; 3], state: usize) -> Div {
+pub(crate) fn button_layer(controls: &ToolkitControls, parts: &[StateImages; 3], state: usize) -> Div {
     let [left, middle, right] = parts.clone().map(|part| part.0[state].clone());
     let (left_width, _) = controls.size(&left);
     let (right_width, _) = controls.size(&right);
