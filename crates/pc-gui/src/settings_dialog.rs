@@ -321,54 +321,66 @@ impl SettingsDialog {
         )
     }
 
+    fn render_menus(&self, cx: &mut Context<Self>) -> GroupBox {
+        let styles = [
+            (MenuStyle::Automatic, "Automatic: a ☰ button on GNOME, a menu bar elsewhere"),
+            (MenuStyle::Bar, "Menu bar"),
+            (MenuStyle::Button, "☰ button in the title bar"),
+        ];
+        GroupBox::new().outline().title("Menus").child(
+            RadioGroup::vertical("menu-style")
+                .children(styles.map(|(_, label)| label))
+                .selected_index(styles.iter().position(|(style, _)| *style == self.draft.menu))
+                .on_click(cx.listener(move |this, at: &usize, _, cx| {
+                    this.draft.menu = styles[*at].0;
+                    cx.notify();
+                })),
+        )
+    }
+
+    fn render_sidebar(&self, cx: &mut Context<Self>) -> GroupBox {
+        let opacity = self.draft.sidebar_opacity.0;
+        let shown = match opacity {
+            100 => "100%, solid".to_owned(),
+            0 => "0%, only the desktop".to_owned(),
+            _ => format!("{opacity}%"),
+        };
+        GroupBox::new().outline().title("Sidebar").child(
+            v_flex()
+                .gap_2()
+                .child("How much it covers the desktop behind it:")
+                .child(
+                    h_flex()
+                        .gap_4()
+                        .child(div().flex_1().child(Slider::new(&self.opacity)))
+                        .child(div().w(px(150.)).child(shown)),
+                )
+                .child(
+                    Checkbox::new("sidebar-blur")
+                        .label("Blur the desktop behind it")
+                        .checked(self.draft.sidebar_blur.0)
+                        .on_click(cx.listener(|this, checked: &bool, window, cx| {
+                            this.draft.sidebar_blur = SidebarBlur(*checked);
+                            this.try_backdrop(window, cx);
+                        })),
+                ),
+        )
+    }
+
     fn render_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (_, title) = PAGES[self.page];
         let content = match title {
-            // GNOME's apps have their menus behind a ☰ button in the title bar.
-            "Layout" if cfg!(any(target_os = "linux", target_os = "freebsd")) => {
-                let styles = [
-                    (MenuStyle::Automatic, "Automatic: a ☰ button on GNOME, a menu bar elsewhere"),
-                    (MenuStyle::Bar, "Menu bar"),
-                    (MenuStyle::Button, "☰ button in the title bar"),
-                ];
-                vec![GroupBox::new().outline().title("Menus").child(
-                    RadioGroup::vertical("menu-style")
-                        .children(styles.map(|(_, label)| label))
-                        .selected_index(styles.iter().position(|(style, _)| *style == self.draft.menu))
-                        .on_click(cx.listener(move |this, at: &usize, _, cx| {
-                            this.draft.menu = styles[*at].0;
-                            cx.notify();
-                        })),
-                )]
-            }
-            // Where the desktop can show through it.
-            "Layout" if pc_core::theme::sidebar_see_through() => {
-                let opacity = self.draft.sidebar_opacity.0;
-                let shown = match opacity {
-                    100 => "100%, solid".to_owned(),
-                    0 => "0%, only the desktop".to_owned(),
-                    _ => format!("{opacity}%"),
-                };
-                vec![GroupBox::new().outline().title("Sidebar").child(
-                    v_flex()
-                        .gap_2()
-                        .child("How much it covers the desktop behind it:")
-                        .child(
-                            h_flex()
-                                .gap_4()
-                                .child(div().flex_1().child(Slider::new(&self.opacity)))
-                                .child(div().w(px(150.)).child(shown)),
-                        )
-                        .child(
-                            Checkbox::new("sidebar-blur")
-                                .label("Blur the desktop behind it")
-                                .checked(self.draft.sidebar_blur.0)
-                                .on_click(cx.listener(|this, checked: &bool, window, cx| {
-                                    this.draft.sidebar_blur = SidebarBlur(*checked);
-                                    this.try_backdrop(window, cx);
-                                })),
-                        ),
-                )]
+            "Layout" if cfg!(any(target_os = "linux", target_os = "freebsd")) || pc_core::theme::sidebar_see_through() => {
+                let mut groups = Vec::new();
+                // GNOME's apps have their menus behind a ☰ button in the title bar.
+                if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+                    groups.push(self.render_menus(cx));
+                }
+                // Where the desktop can show through it.
+                if pc_core::theme::sidebar_see_through() {
+                    groups.push(self.render_sidebar(cx));
+                }
+                groups
             }
             "Display" => vec![
                 GroupBox::new().outline().title("File display").child(
