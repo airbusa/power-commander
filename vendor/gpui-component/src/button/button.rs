@@ -159,6 +159,29 @@ pub enum ButtonVariant {
 }
 
 impl ButtonVariant {
+    /// PowerCommander patch: Breeze's push buttons, see `BreezeControls`: the
+    /// default (primary) one tinted by the selection, the others in the button
+    /// colour, framed in the selection colour when hovered or pressed.
+    fn breeze(&self, outline: bool, state: ButtonStyleState, cx: &App) -> Option<ButtonVariantStyle> {
+        let breeze = cx.try_global::<crate::BreezeControls>().copied()?;
+        let primary = match self {
+            Self::Primary => true,
+            Self::Default | Self::Secondary => false,
+            _ => return None,
+        };
+        if outline {
+            return None;
+        }
+        let (bg, border) = match (primary, state) {
+            (_, ButtonStyleState::Active) => (breeze.checked, breeze.highlight),
+            (true, ButtonStyleState::Hovered) => (breeze.default_fill, breeze.highlight),
+            (false, ButtonStyleState::Hovered) => (breeze.button, breeze.highlight),
+            (true, ButtonStyleState::Normal) => (breeze.default_fill, breeze.default_frame),
+            (false, ButtonStyleState::Normal) => (breeze.button, breeze.handle_frame),
+        };
+        Some(ButtonVariantStyle { bg: bg.into(), border, fg: breeze.mark, underline: false, shadow: false })
+    }
+
     #[inline]
     pub fn is_link(&self) -> bool {
         matches!(self, Self::Link)
@@ -608,6 +631,8 @@ impl InteractiveElement for Button {
 impl RenderOnce for Button {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let style: ButtonVariant = self.variant;
+        let breeze_framed = cx.has_global::<crate::BreezeControls>()
+            && matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Secondary);
         let interactive = self.interactive();
         let hoverable = self.hoverable();
         let disabled = self.disabled;
@@ -707,7 +732,8 @@ impl RenderOnce for Button {
             .when(self.border_corners.bottom_right, |this| {
                 this.rounded_br(rounding)
             })
-            .when(self.variant.is_default() || self.outline, |this| {
+            // PowerCommander patch: every Breeze push button is framed, see `BreezeControls`.
+            .when(self.variant.is_default() || self.outline || breeze_framed, |this| {
                 this.when(self.border_edges.left, |this| this.border_l_1())
                     .when(self.border_edges.right, |this| this.border_r_1())
                     .when(self.border_edges.top, |this| this.border_t_1())
@@ -1115,6 +1141,9 @@ impl ButtonVariant {
     }
 
     fn normal(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
+        if let Some(style) = self.breeze(outline, ButtonStyleState::Normal, cx) {
+            return style;
+        }
         let bg = self.bg_color(outline, cx);
         let border = self.border_color(outline, cx);
         let fg = self.text_color(outline, cx);
@@ -1131,6 +1160,9 @@ impl ButtonVariant {
     }
 
     fn hovered(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
+        if let Some(style) = self.breeze(outline, ButtonStyleState::Hovered, cx) {
+            return style;
+        }
         let bg: Background = match self {
             Self::Default => {
                 if outline {
@@ -1215,6 +1247,9 @@ impl ButtonVariant {
     }
 
     fn active(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
+        if let Some(style) = self.breeze(outline, ButtonStyleState::Active, cx) {
+            return style;
+        }
         let bg = match self {
             Self::Default => {
                 if outline {

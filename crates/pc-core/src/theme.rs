@@ -210,8 +210,16 @@ pub struct BreezeColors {
     pub groove: u32,
     /// What fills it: the selection at 70% over the window.
     pub fill: u32,
-    /// A slider handle's frame: a fifth of the text over the button.
+    /// A slider handle's frame, a button's: a fifth of the text over the button.
     pub handle_frame: u32,
+    /// The default button's fill (a dialog's OK): the button under 20% of the selection.
+    pub default_fill: u32,
+    /// Its frame: halfway between the selection and a button's frame.
+    pub default_frame: u32,
+    /// The selected tab: the window under 20% of the selection.
+    pub tab: u32,
+    /// The others: the view.
+    pub tab_inactive: u32,
 }
 
 impl Palette {
@@ -225,6 +233,10 @@ impl Palette {
             groove: mix(self.window, self.text, 0.14),
             fill: mix(self.window, self.selection, 0.7),
             handle_frame: mix(self.button, self.text, 0.2),
+            default_fill: mix(self.button, self.selection, 0.2),
+            default_frame: mix(self.selection, mix(self.button, self.text, 0.2), 0.5),
+            tab: mix(self.window, self.selection, 0.2),
+            tab_inactive: self.view,
         }
     }
 }

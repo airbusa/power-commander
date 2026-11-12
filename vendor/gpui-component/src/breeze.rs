@@ -19,8 +19,14 @@ pub struct BreezeControls {
     pub groove: Hsla,
     /// What fills it.
     pub fill: Hsla,
-    /// A slider handle's frame.
+    /// A slider handle's frame, a button's.
     pub handle_frame: Hsla,
+    /// The default button's fill and frame (a dialog's OK).
+    pub default_fill: Hsla,
+    pub default_frame: Hsla,
+    /// The selected tab's fill, the others'.
+    pub tab: Hsla,
+    pub tab_inactive: Hsla,
 }
 
 impl Global for BreezeControls {}

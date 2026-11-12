@@ -79,6 +79,10 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
             groove: color(breeze.groove),
             fill: color(breeze.fill),
             handle_frame: color(breeze.handle_frame),
+            default_fill: color(breeze.default_fill),
+            default_frame: color(breeze.default_frame),
+            tab: color(breeze.tab),
+            tab_inactive: color(breeze.tab_inactive),
         });
     }
     // macOS's cursor is the accent, filled, as Finder's; elsewhere a tint, framed.

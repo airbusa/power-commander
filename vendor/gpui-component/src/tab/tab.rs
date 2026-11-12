@@ -634,6 +634,18 @@ impl RenderOnce for Tab {
                 hover_style.borders.left = px(0.);
             }
         }
+        // PowerCommander patch: Breeze's document-mode tabs, see `BreezeControls`:
+        // the selected one tinted by the selection, the others in the view colour.
+        let breeze = match self.variant {
+            TabVariant::Tab => cx.try_global::<crate::BreezeControls>().copied(),
+            _ => None,
+        };
+        if let Some(breeze) = breeze {
+            normal_style.bg = breeze.tab_inactive.into();
+            normal_style.fg = breeze.mark;
+            selected_style.bg = breeze.tab.into();
+            selected_style.fg = breeze.mark;
+        }
         let tab_style = if self.disabled {
             &disabled_style
         } else if self.selected {
@@ -646,7 +658,8 @@ impl RenderOnce for Tab {
         let inner_paddings = self.variant.inner_paddings(self.size);
         let inner_margins = self.variant.inner_margins(self.size);
         let inner_height = self.variant.inner_height(self.size);
-        let height = self.variant.height(self.size);
+        // Breeze's: a 3 px line over 31 px.
+        let height = if breeze.is_some() { px(34.) } else { self.variant.height(self.size) };
         let aria_label = self.a11y_label();
 
         let segmented_indicator_active =
@@ -863,7 +876,8 @@ impl RenderOnce for Tab {
             .child(inner_element)
             // PowerCommander patch: the selected tab's accent line on top, as Breeze draws it.
             .when(self.selected && !self.disabled && self.variant == TabVariant::Tab, |this| {
-                this.child(div().absolute().top_0().left_0().right_0().h(px(2.)).bg(cx.theme().primary))
+                let (line, color) = breeze.map_or((px(2.), cx.theme().primary), |breeze| (px(3.), breeze.highlight));
+                this.child(div().absolute().top_0().left_0().right_0().h(line).bg(color))
             })
             .when_some(self.suffix, |this, suffix| {
                 this.child(

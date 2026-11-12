@@ -2,7 +2,7 @@
 //! Style page previews a style (`PC_STYLE_PREVIEW=1`): for matching the look
 //! of a desktop's style.
 
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState, NumberInput};
 use gpui_kit::component::progress::Progress;
@@ -11,7 +11,7 @@ use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::select::{Select, SelectState};
 use gpui_kit::component::slider::{Slider, SliderState};
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme, IndexPath, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, IndexPath, Sizable, h_flex, v_flex};
 use gpui_kit::*;
 use pc_core::settings::Settings;
 
@@ -25,7 +25,7 @@ pub(crate) struct StylePreview {
 
 pub(crate) fn open(cx: &mut App) {
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(330.), px(240.)), cx)),
+        window_bounds: Some(WindowBounds::centered(size(px(330.), px(330.)), cx)),
         app_id: Some("powercommander".into()),
         ..Default::default()
     };
@@ -83,5 +83,15 @@ impl Render for StylePreview {
             .text_color(cx.theme().foreground)
             .child(TabBar::new("tabs").selected_index(0).child(Tab::new().label("Tab 1")).child(Tab::new().label("Tab 2")))
             .child(page)
+            // A dialog's buttons and a panel's tabs, as the app has them.
+            .child(
+                h_flex()
+                    .gap_2()
+                    .py_2()
+                    .justify_end()
+                    .child(Button::new("ok").primary().label("OK"))
+                    .child(Button::new("cancel").label("Cancel")),
+            )
+            .child(TabBar::new("panel-tabs").small().selected_index(0).child(Tab::new().label("airbusa")).child(Tab::new().label("Downloads")))
     }
 }
