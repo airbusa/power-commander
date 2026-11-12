@@ -1570,7 +1570,11 @@ impl Commander {
             .map(|el| {
                 let el = el.on_mouse_down(
                     MouseButton::Right,
-                    cx.listener(move |this, _, window, cx| this.right_click(ix, row, window, cx)),
+                    cx.listener(move |this, _, window, cx| {
+                        this.right_click(ix, row, window, cx);
+                        this.show_file_menu(ix, window, cx);
+                        cx.stop_propagation();
+                    }),
                 );
                 #[cfg(windows)]
                 let el = el.on_mouse_up(
