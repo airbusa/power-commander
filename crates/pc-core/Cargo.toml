@@ -41,9 +41,12 @@ suppaftp = { version = "12", default-features = false, features = ["rustls-ring"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 ring = "0.17"
 
-# mpv draws frames with OpenGL, by EGL with no window; wgpu builds both already.
+# mpv draws frames with OpenGL, with no window: by EGL on Linux, by CGL (the
+# system's) on macOS; on Linux wgpu builds both already.
 [target.'cfg(target_os = "linux")'.dependencies]
 khronos-egl = { version = "6", features = ["dynamic"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 glow = "0.17"
 
 # The file manager's own properties dialog (FileManager1); the keyring builds it already.

@@ -23,7 +23,7 @@ pub fn is_media(path: &Path) -> bool {
 
 /// libmpv is there, and this system's OpenGL is drawn with.
 pub fn available() -> bool {
-    cfg!(target_os = "linux") && library().is_ok()
+    cfg!(any(target_os = "linux", target_os = "macos")) && library().is_ok()
 }
 
 /// A frame in BGRA, top row first.
@@ -94,7 +94,7 @@ impl Player {
             ("keep-open", "yes"),
             ("hwdec", "auto-safe"),
             // mpv's probe of NVIDIA's prints "Cannot load libcuda.so.1" where it is missing.
-            ("gpu-hwdec-interop", if nvidia() { "auto" } else { "vaapi" }),
+            ("gpu-hwdec-interop", if cfg!(target_os = "linux") && !nvidia() { "vaapi" } else { "auto" }),
             ("input-default-bindings", "no"),
             ("terminal", "no"),
             ("pause", if paused { "yes" } else { "no" }),
@@ -274,13 +274,13 @@ unsafe extern "C" fn on_update(shared: *mut c_void) {
 
 /// Draws frames on a thread of its own, where its OpenGL context is current.
 fn render(mpv: &'static Mpv, handle: Raw, shared: Arc<Shared>, ready: mpsc::Sender<Result<(), String>>) {
-    let egl = match gl::Egl::new() {
-        Ok(egl) => egl,
+    let opengl = match gl::Context::new() {
+        Ok(opengl) => opengl,
         Err(err) => return drop(ready.send(Err(err))),
     };
     let mut init = GlInit {
         get_proc_address: gl::proc_address,
-        context: &*egl as *const gl::Egl as *mut c_void,
+        context: &*opengl as *const gl::Context as *mut c_void,
     };
     let mut params = [
         Param::new(PARAM_API_TYPE, c"opengl".as_ptr() as *mut c_void),
@@ -298,7 +298,7 @@ fn render(mpv: &'static Mpv, handle: Raw, shared: Arc<Shared>, ready: mpsc::Send
     // SAFETY: `shared` outlives the callback, removed below.
     unsafe { (mpv.render_set_update_callback)(context, Some(on_update), callback) };
     let _ = ready.send(Ok(()));
-    let mut target = gl::Target::new(&egl);
+    let mut target = gl::Target::new(&opengl);
     loop {
         let (resized, (width, height)) = {
             let mut wake = shared.wake.lock().unwrap();
@@ -483,9 +483,9 @@ struct Mpv {
     _library: libloading::Library,
 }
 
+/// The system's; macOS has none, Power Commander ships its own (vendor/mpv).
 const NAMES: &[&str] = match () {
     _ if cfg!(windows) => &["libmpv-2.dll", "mpv-2.dll"],
-    _ if cfg!(target_os = "macos") => &["libmpv.2.dylib", "libmpv.dylib"],
     _ => &["libmpv.so.2", "libmpv.so"],
 };
 
@@ -495,11 +495,20 @@ fn library() -> Result<&'static Mpv, String> {
 }
 
 fn load() -> Result<Mpv, String> {
-    // SAFETY: loading libmpv runs only its libraries' initialisers.
-    let library = NAMES
-        .iter()
-        .find_map(|name| unsafe { libloading::Library::new(name) }.ok())
-        .ok_or_else(|| format!("libmpv is not installed ({})", NAMES[0]))?;
+    let library = if cfg!(target_os = "macos") {
+        let path = crate::bundled::path("mpv", "libmpv.2.dylib");
+        if !path.exists() {
+            return Err(format!("libmpv is missing: {} (run vendor/mpv/build.sh)", path.display()));
+        }
+        // SAFETY: loading libmpv runs only its libraries' initialisers.
+        unsafe { libloading::Library::new(&path) }.map_err(|err| format!("libmpv: {err}"))?
+    } else {
+        // SAFETY: as above.
+        NAMES
+            .iter()
+            .find_map(|name| unsafe { libloading::Library::new(name) }.ok())
+            .ok_or_else(|| format!("libmpv is not installed ({})", NAMES[0]))?
+    };
     /// A function of libmpv's, typed as the header says.
     fn get<T: Copy>(library: &libloading::Library, name: &str) -> Result<T, String> {
         // SAFETY: the types above follow libmpv's headers.
@@ -526,71 +535,176 @@ fn load() -> Result<Mpv, String> {
     })
 }
 
-/// An OpenGL context with no window, by EGL; a framebuffer to draw in.
-#[cfg(target_os = "linux")]
+/// OpenGL with no window, EGL's on Linux and CGL's on macOS; a framebuffer
+/// to draw in.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod gl {
     use std::ffi::{CStr, c_char, c_void};
 
     use glow::HasContext;
-    use khronos_egl as egl;
 
-    pub struct Egl {
-        instance: egl::DynamicInstance<egl::EGL1_4>,
-        display: egl::Display,
-        context: egl::Context,
-    }
+    #[cfg(target_os = "macos")]
+    pub use cgl::Context;
+    #[cfg(target_os = "linux")]
+    pub use egl::Context;
 
-    impl Egl {
-        /// Current on this thread from now on; boxed, as mpv keeps its address.
-        pub fn new() -> Result<Box<Egl>, String> {
-            let failed = |err: egl::Error| format!("OpenGL (EGL): {err}");
-            // SAFETY: loads the system's libEGL.
-            let instance = unsafe { egl::DynamicInstance::<egl::EGL1_4>::load_required() }
-                .map_err(|err| format!("OpenGL (EGL) is not there: {err}"))?;
-            // SAFETY: the default display needs no native handle.
-            let display = unsafe { instance.get_display(egl::DEFAULT_DISPLAY) }
-                .ok_or("OpenGL (EGL): no display")?;
-            instance.initialize(display).map_err(failed)?;
-            instance.bind_api(egl::OPENGL_API).map_err(failed)?;
-            // Any surface type: frames are drawn in framebuffers (the default asks for windows).
-            let attributes = [egl::RENDERABLE_TYPE, egl::OPENGL_BIT, egl::SURFACE_TYPE, 0, egl::NONE];
-            let config = instance
-                .choose_first_config(display, &attributes)
-                .map_err(failed)?
-                .ok_or("OpenGL (EGL): no configuration for OpenGL")?;
-            let context = instance
-                .create_context(display, config, None, &[egl::NONE])
-                .map_err(failed)?;
-            // No surface: everything is drawn in framebuffers.
-            instance
-                .make_current(display, None, None, Some(context))
-                .map_err(failed)?;
-            Ok(Box::new(Egl {
-                instance,
-                display,
-                context,
-            }))
+    #[cfg(target_os = "linux")]
+    mod egl {
+        use std::ffi::c_void;
+
+        use khronos_egl as egl;
+
+        pub struct Context {
+            instance: egl::DynamicInstance<egl::EGL1_4>,
+            display: egl::Display,
+            context: egl::Context,
         }
 
-        fn address(&self, name: &str) -> *const c_void {
-            let found = self.instance.get_proc_address(name);
-            found.map_or(std::ptr::null(), |function| function as *const c_void)
+        impl Context {
+            /// Current on this thread from now on; boxed, as mpv keeps its address.
+            pub fn new() -> Result<Box<Context>, String> {
+                let failed = |err: egl::Error| format!("OpenGL (EGL): {err}");
+                // SAFETY: loads the system's libEGL.
+                let instance = unsafe { egl::DynamicInstance::<egl::EGL1_4>::load_required() }
+                    .map_err(|err| format!("OpenGL (EGL) is not there: {err}"))?;
+                // SAFETY: the default display needs no native handle.
+                let display = unsafe { instance.get_display(egl::DEFAULT_DISPLAY) }
+                    .ok_or("OpenGL (EGL): no display")?;
+                instance.initialize(display).map_err(failed)?;
+                instance.bind_api(egl::OPENGL_API).map_err(failed)?;
+                // Any surface type: frames are drawn in framebuffers (the default asks for windows).
+                let attributes = [egl::RENDERABLE_TYPE, egl::OPENGL_BIT, egl::SURFACE_TYPE, 0, egl::NONE];
+                let config = instance
+                    .choose_first_config(display, &attributes)
+                    .map_err(failed)?
+                    .ok_or("OpenGL (EGL): no configuration for OpenGL")?;
+                let context = instance
+                    .create_context(display, config, None, &[egl::NONE])
+                    .map_err(failed)?;
+                // No surface: everything is drawn in framebuffers.
+                instance
+                    .make_current(display, None, None, Some(context))
+                    .map_err(failed)?;
+                Ok(Box::new(Context {
+                    instance,
+                    display,
+                    context,
+                }))
+            }
+
+            pub fn address(&self, name: &str) -> *const c_void {
+                let found = self.instance.get_proc_address(name);
+                found.map_or(std::ptr::null(), |function| function as *const c_void)
+            }
+        }
+
+        impl Drop for Context {
+            fn drop(&mut self) {
+                // The display stays initialised: other players may share it.
+                let _ = self.instance.make_current(self.display, None, None, None);
+                let _ = self.instance.destroy_context(self.display, self.context);
+            }
         }
     }
 
-    impl Drop for Egl {
-        fn drop(&mut self) {
-            // The display stays initialised: other players may share it.
-            let _ = self.instance.make_current(self.display, None, None, None);
-            let _ = self.instance.destroy_context(self.display, self.context);
+    /// Apple deprecated OpenGL for Metal, but every Mac still has it, as mpv
+    /// draws with it: a context of its core profile, with no window.
+    #[cfg(target_os = "macos")]
+    mod cgl {
+        use std::ffi::{c_int, c_void};
+        use std::ptr::{null, null_mut};
+
+        type PixelFormat = *mut c_void;
+        type Cgl = *mut c_void;
+
+        // CGLTypes.h.
+        const PROFILE: c_int = 99;
+        const CORE_3_2: c_int = 0x3200;
+        const ACCELERATED: c_int = 73;
+        const OFFLINE_RENDERERS: c_int = 96;
+
+        pub struct Context {
+            context: Cgl,
+            set_current: unsafe extern "C" fn(Cgl) -> c_int,
+            destroy: unsafe extern "C" fn(Cgl) -> c_int,
+            /// OpenGL's functions are found in it.
+            library: libloading::Library,
+        }
+
+        /// A function of CGL's, typed as its header says.
+        fn get<T: Copy>(library: &libloading::Library, name: &str) -> Result<T, String> {
+            // SAFETY: the types above follow CGL's headers.
+            let symbol = unsafe { library.get::<T>(name.as_bytes()) };
+            symbol.map(|symbol| *symbol).map_err(|err| format!("OpenGL (CGL): {err}"))
+        }
+
+        impl Context {
+            /// Current on this thread from now on; boxed, as mpv keeps its address.
+            pub fn new() -> Result<Box<Context>, String> {
+                let path = "/System/Library/Frameworks/OpenGL.framework/OpenGL";
+                // SAFETY: loads the system's OpenGL.
+                let library = unsafe { libloading::Library::new(path) }
+                    .map_err(|err| format!("OpenGL is not there: {err}"))?;
+                let choose: unsafe extern "C" fn(*const c_int, *mut PixelFormat, *mut c_int) -> c_int =
+                    get(&library, "CGLChoosePixelFormat")?;
+                let create: unsafe extern "C" fn(PixelFormat, Cgl, *mut Cgl) -> c_int =
+                    get(&library, "CGLCreateContext")?;
+                let release: unsafe extern "C" fn(PixelFormat) -> c_int = get(&library, "CGLDestroyPixelFormat")?;
+                let set_current = get(&library, "CGLSetCurrentContext")?;
+                let destroy = get(&library, "CGLDestroyContext")?;
+                // The GPU, a laptop's other one too; everything is drawn in framebuffers.
+                let attributes = [PROFILE, CORE_3_2, ACCELERATED, OFFLINE_RENDERERS, 0];
+                let (mut format, mut formats) = (null_mut(), 0);
+                // SAFETY: a zero-ended list; the format is released below.
+                let code = unsafe { choose(attributes.as_ptr(), &mut format, &mut formats) };
+                if code != 0 || format.is_null() {
+                    return Err(format!("OpenGL (CGL): no pixel format ({code})"));
+                }
+                let mut context = null_mut();
+                // SAFETY: as above; no context to share.
+                let code = unsafe { create(format, null_mut(), &mut context) };
+                // SAFETY: the context keeps what it needs of it.
+                unsafe { release(format) };
+                if code != 0 {
+                    return Err(format!("OpenGL (CGL): no context ({code})"));
+                }
+                let context = Context {
+                    context,
+                    set_current,
+                    destroy,
+                    library,
+                };
+                // SAFETY: a live context; dropped, it is no longer current.
+                let code = unsafe { (context.set_current)(context.context) };
+                if code != 0 {
+                    return Err(format!("OpenGL (CGL): the context cannot be used ({code})"));
+                }
+                Ok(Box::new(context))
+            }
+
+            pub fn address(&self, name: &str) -> *const c_void {
+                // SAFETY: only the address is taken; mpv and glow type it.
+                let found = unsafe { self.library.get::<*const c_void>(name.as_bytes()) };
+                found.map_or(null(), |function| *function)
+            }
+        }
+
+        impl Drop for Context {
+            fn drop(&mut self) {
+                // SAFETY: made current on this thread, which drops it.
+                unsafe {
+                    (self.set_current)(null_mut());
+                    (self.destroy)(self.context);
+                }
+            }
         }
     }
 
     /// For mpv: OpenGL's functions by name.
-    pub unsafe extern "C" fn proc_address(egl: *mut c_void, name: *const c_char) -> *mut c_void {
-        // SAFETY: mpv passes back the Egl it was given, and a C string.
-        let (egl, name) = unsafe { (&*(egl as *const Egl), CStr::from_ptr(name)) };
-        egl.address(&name.to_string_lossy()) as *mut c_void
+    pub unsafe extern "C" fn proc_address(context: *mut c_void, name: *const c_char) -> *mut c_void {
+        // SAFETY: mpv passes back the Context it was given, and a C string.
+        let (context, name) = unsafe { (&*(context as *const Context), CStr::from_ptr(name)) };
+        context.address(&name.to_string_lossy()) as *mut c_void
     }
 
     pub struct Target {
@@ -599,9 +713,9 @@ mod gl {
     }
 
     impl Target {
-        pub fn new(egl: &Egl) -> Self {
+        pub fn new(context: &Context) -> Self {
             // SAFETY: the context is current on this thread.
-            let gl = unsafe { glow::Context::from_loader_function(|name| egl.address(name)) };
+            let gl = unsafe { glow::Context::from_loader_function(|name| context.address(name)) };
             Target {
                 gl,
                 framebuffer: None,
@@ -688,15 +802,15 @@ mod gl {
 }
 
 /// Elsewhere for now: no OpenGL context to draw with.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod gl {
     use std::ffi::{c_char, c_void};
 
-    pub struct Egl;
+    pub struct Context;
 
-    impl Egl {
-        pub fn new() -> Result<Box<Egl>, String> {
-            Err("video is played only on Linux yet".into())
+    impl Context {
+        pub fn new() -> Result<Box<Context>, String> {
+            Err("video is played only on Linux and macOS yet".into())
         }
     }
 
@@ -707,7 +821,7 @@ mod gl {
     pub struct Target;
 
     impl Target {
-        pub fn new(_: &Egl) -> Self {
+        pub fn new(_: &Context) -> Self {
             Target
         }
 
@@ -735,9 +849,9 @@ mod tests {
         assert_eq!(clock(-1.), "0:00");
     }
 
-    /// Plays a second of generated video with the system's libmpv and EGL.
+    /// Plays a second of generated video with the system's libmpv and OpenGL.
     #[test]
-    #[ignore = "needs libmpv, EGL and ffmpeg"]
+    #[ignore = "needs libmpv, OpenGL (EGL on Linux) and ffmpeg"]
     fn draws_frames() {
         let dir = std::env::temp_dir().join(format!("pc-media-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -765,7 +879,7 @@ mod tests {
             if let Some(frame) = frame.filter(|f| f.bgra.chunks(4).any(|px| px[..3] != [0; 3])) {
                 break frame;
             }
-            assert!(std::time::Instant::now() < deadline, "no frame with a picture");
+            assert!(std::time::Instant::now() < deadline, "no frame with a picture: {:?}", player.state());
         };
         assert_eq!((frame.width, frame.height, frame.bgra.len()), (160, 120, 160 * 120 * 4));
         let pixel = |x: usize, y: usize| frame.bgra[(y * 160 + x) * 4];

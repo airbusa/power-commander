@@ -1,6 +1,7 @@
 pub mod archive;
 pub mod associations;
 pub mod attributes;
+mod bundled;
 pub mod checksum;
 pub mod clipboard;
 pub mod codepage;
