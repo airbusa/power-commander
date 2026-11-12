@@ -1415,6 +1415,7 @@ impl Render for Viewer {
             Mode::Markdown => Some(self.markdown_minimap.clone()),
             _ => Some(self.minimap.clone()),
         };
+        let header = (!self.quick).then(|| crate::header::title_bar(title(self.shown.path()), window, cx)).flatten();
         let theme = cx.theme();
         v_flex()
             .key_context(CONTEXT)
@@ -1422,6 +1423,7 @@ impl Render for Viewer {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
+            .children(header)
             .when(!self.quick, |el| {
                 el.on_action(cx.listener(|_, _: &Close, window, _| window.remove_window()))
                     .on_action(cx.listener(|_, _: &ToggleFullScreen, window, _| {

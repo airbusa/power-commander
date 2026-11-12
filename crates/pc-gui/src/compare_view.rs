@@ -45,16 +45,20 @@ impl Commander {
     }
 }
 
-fn open(files: [Arc<Origin>; 2], bounds: WindowBounds, cx: &mut App) -> Result<(), String> {
+fn title(files: &[Arc<Origin>; 2]) -> String {
     let name = |origin: &Origin| {
         let name = origin.name();
         let file = Path::new(&name).file_name().map(|n| n.display().to_string());
         file.unwrap_or(name)
     };
+    format!("Compare: {} — {}", name(&files[0]), name(&files[1]))
+}
+
+fn open(files: [Arc<Origin>; 2], bounds: WindowBounds, cx: &mut App) -> Result<(), String> {
     let options = WindowOptions {
         window_bounds: Some(bounds),
         titlebar: Some(TitlebarOptions {
-            title: Some(format!("Compare: {} — {}", name(&files[0]), name(&files[1])).into()),
+            title: Some(title(&files).into()),
             ..Default::default()
         }),
         app_id: Some("powercommander".into()),
@@ -412,7 +416,8 @@ impl Side {
 }
 
 impl Render for CompareView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let header = crate::header::title_bar(title(&self.files), window, cx);
         let theme = cx.theme().clone();
         let none = self.runs.is_empty();
         let path = |side: usize, cx: &mut Context<Self>| {
@@ -450,6 +455,7 @@ impl Render for CompareView {
             .text_color(theme.foreground)
             .text_sm()
             .track_focus(&self.focus)
+            .children(header)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let keys = &event.keystroke;
                 if keys.key == "escape" {

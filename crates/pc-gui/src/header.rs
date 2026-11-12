@@ -28,18 +28,7 @@ impl Commander {
 
     /// The title bar, where the window draws its own frame.
     pub(crate) fn render_header(&self, window: &Window, cx: &mut App) -> Option<AnyElement> {
-        if !own_frame(window) {
-            return None;
-        }
-        // The window buttons as GTK draws them, from the desktop's icon theme.
-        if !cx.has_global::<WindowButtonPictures>()
-            && let Some(pictures) = pc_core::theme::window_buttons()
-        {
-            let pictures = pictures.clone().map(|path| path.to_string_lossy().into_owned().into());
-            cx.set_global(WindowButtonPictures(pictures));
-        }
-        let title = div().absolute().inset_0().flex().items_center().justify_center();
-        let title = title.font_weight(FontWeight::BOLD).child("Power Commander");
+        let bar = title_bar("Power Commander", window, cx)?;
         let focus = self.focus.clone();
         let menu = Button::new("app-menu")
             .ghost()
@@ -57,12 +46,30 @@ impl Commander {
             });
         // A press on the button must not start moving the window.
         let menu = div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(menu);
-        let bar = TitleBar::new()
+        let bar = bar
             .on_close_window(|_, _, cx| cx.quit())
-            .child(title)
             .child(h_flex().w_full().justify_end().pr_1().children(self.menus_behind_button(window).then_some(menu)));
         Some(bar.into_any_element())
     }
+}
+
+/// The title bar of a window that draws its own frame: any on GNOME on
+/// Wayland, which draws none, and the main one for its ☰ button.
+pub(crate) fn title_bar(title: impl Into<SharedString>, window: &Window, cx: &mut App) -> Option<TitleBar> {
+    if !own_frame(window) {
+        return None;
+    }
+    // The window buttons as GTK draws them, from the desktop's icon theme.
+    if !cx.has_global::<WindowButtonPictures>()
+        && let Some(pictures) = pc_core::theme::window_buttons()
+    {
+        let pictures = pictures.clone().map(|path| path.to_string_lossy().into_owned().into());
+        cx.set_global(WindowButtonPictures(pictures));
+    }
+    let title = div().min_w_0().truncate().font_weight(FontWeight::BOLD).child(title.into());
+    // Kept clear of the buttons on both sides, as GTK centres it.
+    let title = div().absolute().inset_0().px(px(140.)).flex().items_center().justify_center().child(title);
+    Some(TitleBar::new().child(title))
 }
 
 fn own_frame(window: &Window) -> bool {

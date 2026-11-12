@@ -302,13 +302,23 @@ impl TextEditor {
 }
 
 impl Render for TextEditor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let this = cx.weak_entity();
+        // Its close button asks about changes, as the desktop's would.
+        let header = crate::header::title_bar(title(&self.path, self.edited), window, cx).map(|bar| {
+            bar.on_close_window(move |_, window, cx| {
+                if this.update(cx, |this, cx| this.may_close(window, cx)).unwrap_or(true) {
+                    window.remove_window();
+                }
+            })
+        });
         let theme = cx.theme();
         v_flex()
             .key_context(CONTEXT)
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
+            .children(header)
             .on_action(cx.listener(|this, _: &Save, window, cx| {
                 this.save(window, cx);
             }))
