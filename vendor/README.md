@@ -54,6 +54,7 @@ diff against upstream; every change is marked `PowerCommander patch`.
 | `src/linux/wayland/client.rs`, `src/linux/wayland/clipboard.rs` | an item with files offers those types too and sends each as asked; another program's URI list reads as files, cut or copied, before its text |
 | `src/linux/x11/client.rs`, `src/linux/x11/clipboard.rs` | the same on X11: the types are stored beside the text, and a URI list is read before the text |
 | `src/linux/wayland/client.rs`, `src/linux/wayland/window.rs` | a blurred window background also through `ext-background-effect-v1` (blurring the window inside its shadow, given again on every resize), where KDE's own blur protocol is gone (KWin 6.8) |
+| `src/linux/wayland/client.rs`, `src/linux/wayland/window.rs` | a window's icon (`WindowOptions::icon`) also on Wayland, through `xdg-toplevel-icon-v1` (KWin), as X11's `_NET_WM_ICON`: a build that is not installed shows it too |
 
 ### Upgrading GPUI Kit
 

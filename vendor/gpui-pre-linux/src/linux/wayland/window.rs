@@ -600,6 +600,11 @@ impl WaylandWindowState {
                 xdg_state.toplevel.set_app_id(app_id.clone());
             }
 
+            // PowerCommander patch: see `set_toplevel_icon`.
+            if let Some(icon) = options.icon.as_ref() {
+                set_toplevel_icon(&globals, &xdg_state.toplevel, icon.width(), icon.height(), icon.as_raw());
+            }
+
             // Set max window size based on the GPU's maximum texture dimension.
             // This prevents the window from being resized larger than what the GPU can render.
             let max_texture_size = renderer.max_texture_size() as i32;
@@ -2452,4 +2457,48 @@ fn inset_by_tiling(mut bounds: Bounds<Pixels>, inset: Pixels, tiling: Tiling) ->
     }
 
     bounds
+}
+
+// PowerCommander patch: the window's icon from its pixels (xdg-toplevel-icon-v1,
+// KWin), as X11's `_NET_WM_ICON`: it needs no installed desktop file.
+fn set_toplevel_icon(globals: &Globals, toplevel: &xdg_toplevel::XdgToplevel, width: u32, height: u32, rgba: &[u8]) {
+    use std::io::Write;
+    use std::os::fd::{AsFd, FromRawFd};
+    use wayland_client::protocol::wl_shm;
+
+    let Some(manager) = &globals.toplevel_icon else {
+        return;
+    };
+    let side = width;
+    if side == 0 || side != height || rgba.len() != (side * side * 4) as usize {
+        return;
+    }
+    // wl_shm's ARGB8888: premultiplied, in memory B, G, R, A.
+    let pixels: Vec<u8> = rgba
+        .chunks_exact(4)
+        .flat_map(|px| {
+            let [r, g, b, a] = [px[0], px[1], px[2], px[3]];
+            let times = |c: u8| (c as u32 * a as u32 / 255) as u8;
+            [times(b), times(g), times(r), a]
+        })
+        .collect();
+    let fd = unsafe { libc::memfd_create(c"gpui-icon".as_ptr(), libc::MFD_CLOEXEC) };
+    if fd < 0 {
+        return;
+    }
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    if file.write_all(&pixels).is_err() {
+        return;
+    }
+    let qh = &globals.qh;
+    let pool = globals.shm.create_pool(file.as_fd(), pixels.len() as i32, qh, ());
+    let side = side as i32;
+    let buffer = pool.create_buffer(0, side, side, side * 4, wl_shm::Format::Argb8888, qh, ());
+    let icon = manager.create_icon(qh, ());
+    icon.add_buffer(&buffer, 1);
+    manager.set_icon(toplevel, Some(&icon));
+    // The toplevel keeps its icon; the buffer goes after the icon.
+    icon.destroy();
+    buffer.destroy();
+    pool.destroy();
 }

@@ -1909,8 +1909,9 @@ pub(crate) fn over_main_window(title: String, over: Over, cx: &App) -> WindowOpt
     }
 }
 
-/// The app's icon on its windows, as X11 takes it; Wayland's desktop finds it
-/// by the app id, through the installed `powercommander.desktop`.
+/// The app's icon on its windows: X11's, and Wayland's where the compositor
+/// takes a window's icon (KWin); other Wayland desktops find it by the app id,
+/// through the installed `powercommander.desktop`.
 pub(crate) fn window_icon() -> Option<std::sync::Arc<image::RgbaImage>> {
     static ICON: std::sync::OnceLock<Option<std::sync::Arc<image::RgbaImage>>> = std::sync::OnceLock::new();
     let png = include_bytes!("../../../packaging/linux/hicolor/256x256/apps/powercommander.png");
