@@ -428,7 +428,7 @@ pub(crate) fn open_edit(
     window.open_dialog(cx, move |dialog, _, _| {
         let enter = view.clone();
         dialog
-            .title("Favourite")
+            .title("Connection")
             .width(px(520.))
             .overlay_closable(false)
             .child(view.clone())

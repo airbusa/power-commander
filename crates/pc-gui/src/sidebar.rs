@@ -149,7 +149,7 @@ impl Commander {
         let mut all = Connections::load().unwrap_or_default();
         change(&mut all.saved);
         if let Err(err) = all.save() {
-            window.push_notification(Notification::error(format!("Could not save the favourites: {err}")), cx);
+            window.push_notification(Notification::error(format!("Could not save the connections: {err}")), cx);
         }
         self.sidebar.reload_servers();
         cx.notify();
@@ -193,7 +193,7 @@ impl Commander {
         let background = self.colors.window.opacity(self.sidebar.tint.unwrap_or(1.));
         let mut sections = vec![
             (SidebarTab::Tree, "tree.svg", "Folders"),
-            (SidebarTab::Favourites, "folder-server.svg", "Favourites"),
+            (SidebarTab::Favourites, "folder-server.svg", "Connections"),
         ];
         if self.sidebar.has_devices() {
             sections.push((SidebarTab::Devices, "folder-mobile.svg", "Devices"));
@@ -621,7 +621,7 @@ impl Commander {
                 .ghost()
                 .xsmall()
                 .icon(IconName::Plus)
-                .tooltip("New favourite...")
+                .tooltip("New connection...")
                 .on_click(cx.listener(|this, _, window, cx| this.edit_server(None, false, window, cx))),
             Button::new("server-address")
                 .ghost()
@@ -644,7 +644,7 @@ impl Commander {
                 div()
                     .p_2()
                     .text_color(theme.muted_foreground)
-                    .child("No favourites yet: + adds one."),
+                    .child("No connections yet: + adds one."),
             );
         }
         for (scheme, servers) in groups {
@@ -762,6 +762,6 @@ fn server_menu(
             .item(edit("Delete", |this, ix, window, cx| this.delete_server(ix, window, cx)));
     }
     menu.separator()
-        .item(act("New favourite...", |this, window, cx| this.edit_server(None, false, window, cx)))
+        .item(act("New connection...", |this, window, cx| this.edit_server(None, false, window, cx)))
         .item(act("Disconnect", |this, window, cx| this.disconnect(window, cx)))
 }

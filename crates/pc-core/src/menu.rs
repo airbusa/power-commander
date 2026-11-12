@@ -217,7 +217,7 @@ pub const MENUS: &[Menu] = &[
             cmd("Full", Full),
             Item::Submenu {
                 label: "Sidebar",
-                items: &[cmd("Folders", SidebarTree), cmd("Favourites", SidebarFavourites)],
+                items: &[cmd("Folders", SidebarTree), cmd("Connections", SidebarFavourites)],
             },
             cmd("Thumbnail View", ThumbnailView),
             cmd("Quick View Panel", QuickViewPanel),
@@ -297,7 +297,7 @@ const FULL_NAMES: &[(Command, &str)] = &[
     (Brief, "Brief View"),
     (Full, "Full View"),
     (SidebarTree, "Sidebar: Folders"),
-    (SidebarFavourites, "Sidebar: Favourites"),
+    (SidebarFavourites, "Sidebar: Connections"),
     (AllFiles, "Show All Files"),
     (Programs, "Show Programs"),
     (AllWithExtension, "Show *.*"),
