@@ -10,4 +10,6 @@ It is not in git: `vendor/rclone/build.sh` builds it from rclone's source
 (MIT, `COPYING` beside each build) into `<os>-<arch>/`. Without it the app
 uses an `rclone` on `PATH`.
 
-Releases copy the platform's folder to `rclone/` beside the executable.
+Releases copy the platform's folder to `rclone/` beside the executable;
+the macOS app has `rclone` in `Contents/MacOS`, signed with the app, and its
+license as `Contents/Resources/licenses/rclone.txt` (`packaging/macos/bundle.sh`).

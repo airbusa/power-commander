@@ -1,7 +1,7 @@
 #!/bin/sh
-# Builds "Power Commander.app" for this Mac's processor, with 7-Zip, PDFium
-# and libmpv from vendor/ (fetched or built first), and a zip of it for a
-# release, both in target/release.
+# Builds "Power Commander.app" for this Mac's processor, with 7-Zip, PDFium,
+# libmpv and rclone from vendor/ (fetched or built first), and a zip of it for
+# a release, both in target/release.
 # SIGN_IDENTITY: a "Developer ID Application" certificate to sign with, for
 # notarizing; unset, the app is signed ad hoc.
 set -eu
@@ -12,7 +12,7 @@ case "$(uname -m)" in
     *) echo "No macOS build for $(uname -m)." >&2; exit 1 ;;
 esac
 PLATFORM=macos-$ARCH
-for vendored in 7zip/$PLATFORM/7zz:fetch.sh pdfium/$PLATFORM/libpdfium.dylib:fetch.sh mpv/$PLATFORM/libmpv.2.dylib:build.sh; do
+for vendored in 7zip/$PLATFORM/7zz:fetch.sh pdfium/$PLATFORM/libpdfium.dylib:fetch.sh mpv/$PLATFORM/libmpv.2.dylib:build.sh rclone/$PLATFORM/rclone:build.sh; do
     file=${vendored%:*}
     [ -e "vendor/$file" ] || { echo "vendor/$file is missing: run vendor/${file%%/*}/${vendored#*:}" >&2; exit 1; }
 done
@@ -24,13 +24,14 @@ cargo build --release -p pc-gui
 APP="target/release/Power Commander.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources/licenses/PDFium"
-cp target/release/powercommander "vendor/7zip/$PLATFORM/7zz" "$APP/Contents/MacOS/"
+cp target/release/powercommander "vendor/7zip/$PLATFORM/7zz" "vendor/rclone/$PLATFORM/rclone" "$APP/Contents/MacOS/"
 cp "vendor/pdfium/$PLATFORM/libpdfium.dylib" "vendor/mpv/$PLATFORM/"*.dylib "$APP/Contents/Frameworks/"
 LICENSES="$APP/Contents/Resources/licenses"
 cp LICENSE "$LICENSES/Power Commander.txt"
 cp "vendor/7zip/$PLATFORM/License.txt" "$LICENSES/7-Zip.txt"
 cp -R "vendor/pdfium/$PLATFORM/LICENSE" "vendor/pdfium/$PLATFORM/licenses" "$LICENSES/PDFium/"
 cp vendor/mpv/README.md "$LICENSES/libmpv.md"
+cp "vendor/rclone/$PLATFORM/COPYING" "$LICENSES/rclone.txt"
 cp packaging/macos/PowerCommander.icns "$APP/Contents/Resources/"
 
 # macOS 13: PDFium's. Automatic graphics switching: mpv's OpenGL leaves a
@@ -88,7 +89,7 @@ EOF
 SIGN=${SIGN_IDENTITY:--}
 set -- --force --sign "$SIGN"
 [ "$SIGN" = - ] || set -- "$@" --options runtime --timestamp
-codesign "$@" "$APP"/Contents/Frameworks/*.dylib "$APP/Contents/MacOS/7zz"
+codesign "$@" "$APP"/Contents/Frameworks/*.dylib "$APP/Contents/MacOS/7zz" "$APP/Contents/MacOS/rclone"
 codesign "$@" "$APP"
 codesign --verify --strict "$APP"
 

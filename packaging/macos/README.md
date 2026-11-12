@@ -5,7 +5,7 @@ silicon or Intel) and a zip of it for a GitHub release, both in
 `target/release`:
 
 ```sh
-vendor/7zip/fetch.sh && vendor/pdfium/fetch.sh && vendor/mpv/build.sh
+vendor/7zip/fetch.sh && vendor/pdfium/fetch.sh && vendor/mpv/build.sh && vendor/rclone/build.sh macos-$(uname -m | sed s/arm64/aarch64/)
 packaging/macos/bundle.sh
 ```
 
@@ -13,6 +13,7 @@ packaging/macos/bundle.sh
 |---|---|
 | `Contents/MacOS/powercommander` | `cargo build --release -p pc-gui` |
 | `Contents/MacOS/7zz` | `vendor/7zip` |
+| `Contents/MacOS/rclone` | `vendor/rclone` (built from source; needs Go: `brew install go`) |
 | `Contents/Frameworks/libpdfium.dylib` | `vendor/pdfium` |
 | `Contents/Frameworks/libmpv.2.dylib` and the 12 libraries it loads | `vendor/mpv` (built from source) |
 | `Contents/Resources/PowerCommander.icns` | the app's icon, beside this file |
