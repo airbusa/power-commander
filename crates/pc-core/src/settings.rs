@@ -16,7 +16,7 @@ pub struct SidebarOpacity(pub u8);
 /// About ForkLift's: the desktop shows through, dimmed.
 impl Default for SidebarOpacity {
     fn default() -> Self {
-        SidebarOpacity(75)
+        SidebarOpacity(80)
     }
 }
 
