@@ -450,13 +450,19 @@ impl FindFiles {
         };
         let settings = commander.read(cx).settings.clone();
         let bounds = window.window_bounds();
-        if let Some(text) = &self.query_text(cx) {
+        // As Lister from Total Commander's search: at the text found.
+        let text = self.query_text(cx);
+        if let Some(text) = &text {
             viewer::remember_find(text, cx);
         }
+        let view = match text.is_some() {
+            true => viewer::open_finding,
+            false => viewer::open,
+        };
         let files: Vec<PathBuf> = self.results.iter().filter(|hit| !hit.is_dir && hit.member.is_none()).map(|hit| hit.path.clone()).collect();
         if !edit && found.member.is_none() {
             let at = files.iter().position(|path| *path == found.path).unwrap_or(0);
-            if let Err(err) = viewer::open(files, at, settings.viewer, bounds, cx) {
+            if let Err(err) = view(files, at, settings.viewer, bounds, cx) {
                 window.push_notification(Notification::error(format!("{}: {err}", found.shown())), cx);
             }
             return;
@@ -476,7 +482,7 @@ impl FindFiles {
             let _ = cx.update(|window, cx| {
                 let opened = taken.and_then(|(file, upload)| match edit {
                     true => editor::open(file, settings.editor.limit_mb, upload, bounds, cx),
-                    false => viewer::open(vec![file], 0, settings.viewer, bounds, cx),
+                    false => view(vec![file], 0, settings.viewer, bounds, cx),
                 });
                 if let Err(err) = opened {
                     window.push_notification(Notification::error(format!("{}: {err}", found.shown())), cx);

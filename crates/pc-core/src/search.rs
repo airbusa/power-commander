@@ -1099,7 +1099,7 @@ mod tests {
             ..Query::default()
         };
         let mut found = Vec::new();
-        run(&query, &[repo.clone()], &AtomicBool::new(false), &mut |event| {
+        run(&query, std::slice::from_ref(&repo), &AtomicBool::new(false), &mut |event| {
             if let Event::Found(hit) = event {
                 found.push(hit.path.strip_prefix(&repo).unwrap().display().to_string());
             }
