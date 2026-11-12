@@ -118,7 +118,8 @@ const ROW: Pixels = px(22.);
 /// The path title's height, typing a path or not.
 const PATH_HEIGHT: Pixels = px(30.);
 /// Name, Ext, Size, Date and Attr; Name 0 takes the rest, until resized.
-const COLUMN_WIDTHS: [f32; 5] = [0., 56., 100., 132., 92.];
+/// Name, Ext, Size, Date, Attr; they keep their widths whatever the window or sidebar do.
+const COLUMN_WIDTHS: [f32; 5] = [240., 56., 100., 132., 92.];
 const COLUMN_MIN: f32 = 24.;
 /// Row and header padding plus border, left of Name and right of Attr.
 const ROW_INSET: Pixels = px(5.);
@@ -348,7 +349,7 @@ struct Commander {
     path_edit: Option<(usize, Entity<InputState>, Subscription)>,
     _appearance: Subscription,
     command: Entity<InputState>,
-    /// Widths of Ext, Size, Date and Attr, both panels'.
+    /// Widths of Name, Ext, Size, Date and Attr, both panels'.
     columns: [f32; 5],
     /// The left panel's share of the width.
     split: f32,
@@ -466,9 +467,10 @@ impl Commander {
         Self {
             panels: [side(0), side(1)],
             active: session.active.min(1),
+            // Name 0: it filled the panel once.
             columns: match session.columns[..] {
-                [name, ext, size, date, attr] => [name, ext, size, date, attr],
-                [ext, size, date, attr] => [0., ext, size, date, attr],
+                [name, ext, size, date, attr] if name > 0. => [name, ext, size, date, attr],
+                [_, ext, size, date, attr] | [ext, size, date, attr] => [COLUMN_WIDTHS[0], ext, size, date, attr],
                 _ => COLUMN_WIDTHS,
             },
             split: match session.split {
@@ -1224,13 +1226,11 @@ impl Commander {
                 .when(sorted, |el| el.child(Icon::new(arrow).small().text_color(accent)))
         };
         let [name, ext, size, date, attr] = self.columns.map(px);
-        let filling = self.columns[0] == 0.;
         let (scrolled, wide) = {
             let scroll = &side.scroll.0.borrow().base_handle;
             (scroll.offset().x, scroll.max_offset().x > px(0.))
         };
-        // A column's right edge: while Name fills, as far from the right as the
-        // columns right of it; otherwise past the columns left of it.
+        // A column's right edge, past the columns left of it.
         let handles = (0..5).map(|column| {
             let handle = div()
                 .id(("resize", ix * 5 + column))
@@ -1243,16 +1243,8 @@ impl Commander {
                 .on_drag(ColumnDrag { panel: ix, column }, |_, _, _, cx| {
                     cx.new(|_| EmptyView)
                 });
-            match filling {
-                true => {
-                    let right: f32 = self.columns[column + 1..].iter().sum();
-                    handle.right(px(right - 3.))
-                }
-                false => {
-                    let left: f32 = self.columns[..=column].iter().sum();
-                    handle.left(scrolled + px(left - 3.))
-                }
-            }
+            let left: f32 = self.columns[..=column].iter().sum();
+            handle.left(scrolled + px(left - 3.))
         });
         let column_titles = h_flex()
             .h(ROW + px(4.))
@@ -1271,11 +1263,6 @@ impl Commander {
                     let column = drag.column;
                     let scrolled = this.panels[ix].scroll.0.borrow().base_handle.offset().x;
                     let widths = &mut this.columns;
-                    // Name stops filling, so the others keep their widths from now on.
-                    if widths[0] == 0. {
-                        let inside = event.bounds.size.width - ROW_INSET - ROW_INSET - SCROLLBAR;
-                        widths[0] = (f32::from(inside) - widths[1..].iter().sum::<f32>()).max(COLUMN_MIN);
-                    }
                     let left = event.bounds.left() + ROW_INSET + scrolled;
                     let left = left + px(widths[..column].iter().sum());
                     let width = f32::from(event.event.position.x - left);
@@ -1292,10 +1279,7 @@ impl Commander {
                         h_flex()
                             .size_full()
                             .ml(scrolled)
-                            .child(title("Name", SortKey::Name, false).map(|el| match filling {
-                                true => el.flex_1().min_w_0(),
-                                false => el.w(name).flex_none(),
-                            }))
+                            .child(title("Name", SortKey::Name, false).w(name).flex_none())
                             .child(title("Ext", SortKey::Extension, false).w(ext).flex_none())
                             .child(title("Size", SortKey::Size, true).w(size).flex_none())
                             .child(title("Date", SortKey::Modified, false).w(date).flex_none())
@@ -1319,9 +1303,7 @@ impl Commander {
         .size_full()
         .pr(SCROLLBAR)
         // Columns wider than the panel scroll sideways, under a scrollbar of their own.
-        .when(!filling, |list| {
-            list.with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
-        })
+        .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
         .when(wide, |list| list.pb(SCROLLBAR));
         // The list paints its rows over its padding too; these keep it under the scrollbars clear.
         let gutter = || div().absolute().right_0().bottom_0().bg(theme.background);
@@ -1332,7 +1314,7 @@ impl Commander {
                 .min_h_0()
                 .child(views::measure(side.area.clone(), cx.entity_id()))
                 .child(rows)
-                .when(!filling, |el| el.child(gutter().top_0().w(SCROLLBAR)))
+                .child(gutter().top_0().w(SCROLLBAR))
                 .when(wide, |el| el.child(gutter().left_0().h(SCROLLBAR)))
                 .child(div().absolute().inset_0().child(Scrollbar::new(&side.scroll)))
                 .into_any_element(),
@@ -1501,10 +1483,8 @@ impl Commander {
             .px_1()
             .child(
                 h_flex()
-                    .map(|el| match name_width > px(0.) {
-                        true => el.w(name_width).flex_none(),
-                        false => el.flex_1().min_w_0(),
-                    })
+                    .w(name_width)
+                    .flex_none()
                     .px_1()
                     .gap_1()
                     .child(icon)
