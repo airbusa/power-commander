@@ -330,7 +330,12 @@ pub fn paired() -> Vec<Device> {
 
 /// Mounts the device's files: its folders with their names, the main one first.
 pub fn mount(id: &str) -> io::Result<Vec<(PathBuf, String)>> {
-    let folders = main_first(kde_connect::mount(id)?);
+    let mut folders = main_first(kde_connect::mount(id)?);
+    // A mount left from a lost connection fails every read (EIO): mount it afresh.
+    if folders.first().is_some_and(|(path, _)| std::fs::read_dir(path).is_err()) {
+        kde_connect::unmount(id)?;
+        folders = main_first(kde_connect::mount(id)?);
+    }
     match folders.is_empty() {
         true => Err(io::Error::other("the device shares no folder")),
         false => Ok(folders),
@@ -400,6 +405,9 @@ mod kde_connect {
 
     pub fn mount(id: &str) -> io::Result<Vec<(PathBuf, String)>> {
         let bus = Connection::session().map_err(io::Error::other)?;
+        if !property(&bus, &format!("/modules/kdeconnect/devices/{id}"), "isReachable").unwrap_or(false) {
+            return Err(io::Error::new(io::ErrorKind::NotConnected, "not reachable: is KDE Connect open on it, on this network?"));
+        }
         let path = format!("/modules/kdeconnect/devices/{id}/sftp");
         let sftp = "org.kde.kdeconnect.device.sftp";
         let mounted: bool = call(&bus, &path, sftp, "mountAndWait", &()).map_err(io::Error::other)?;
@@ -411,6 +419,12 @@ mod kde_connect {
         let folders: HashMap<String, OwnedValue> = call(&bus, &path, sftp, "getDirectories", &()).map_err(io::Error::other)?;
         let named = folders.into_iter().map(|(path, name)| (PathBuf::from(path), String::try_from(name).unwrap_or_default()));
         Ok(named.collect())
+    }
+
+    pub fn unmount(id: &str) -> io::Result<()> {
+        let bus = Connection::session().map_err(io::Error::other)?;
+        let path = format!("/modules/kdeconnect/devices/{id}/sftp");
+        call(&bus, &path, "org.kde.kdeconnect.device.sftp", "unmount", &()).map_err(io::Error::other)
     }
 }
 
@@ -426,6 +440,10 @@ mod kde_connect {
     }
 
     pub fn mount(_: &str) -> io::Result<Vec<(PathBuf, String)>> {
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+
+    pub fn unmount(_: &str) -> io::Result<()> {
         Err(io::Error::from(io::ErrorKind::Unsupported))
     }
 }

@@ -210,14 +210,19 @@ impl Commander {
         self.sidebar.followed = here;
     }
 
-    /// The active panel shows `path`, leaving its server for it.
+    /// The active panel shows `path`, leaving its server for it; an error names `path`.
     fn open_folder(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let remote = self.panels[self.active].tabs.current().remote().is_some();
-        let go = move |panel: &mut pc_core::Panel| match remote {
-            true => panel.disconnect(path),
-            false => panel.go_to_folder(path),
-        };
-        self.navigate_on(self.active, false, go, window, cx);
+        let side = &mut self.panels[self.active];
+        let remote = side.tabs.current().remote().is_some();
+        let went = side.tabs.navigate(|panel| match remote {
+            true => panel.disconnect(path.clone()),
+            false => panel.go_to_folder(path.clone()),
+        });
+        if let Err(err) = went {
+            window.push_notification(Notification::error(format!("{}: {err}", path.display())), cx);
+        }
+        side.scroll_to_cursor();
+        cx.notify();
     }
 
     /// The saved servers as on disk, changed, saved and shown.
@@ -583,15 +588,15 @@ impl Commander {
             })
     }
 
-    /// Mounts the device in the background, then shows its widest folder.
-    fn open_device(&mut self, device: &Device, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(folders) = self.sidebar.device_folders.get(&device.id) {
-            let first = folders[0].0.clone();
-            return self.open_folder(first, window, cx);
-        }
+    /// Mounts the device in the background, afresh where its mount went stale,
+    /// then shows `folder`, else its widest one.
+    fn open_device(&mut self, device: &Device, folder: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
         let (id, name) = (device.id.clone(), device.name.clone());
-        let note = Notification::info(format!("Opening {name}...")).id1::<Mounting>(id.clone()).autohide(false);
-        window.push_notification(note, cx);
+        // Mounted, it is quick.
+        if !self.sidebar.device_folders.contains_key(&id) {
+            let note = Notification::info(format!("Opening {name}...")).id1::<Mounting>(id.clone()).autohide(false);
+            window.push_notification(note, cx);
+        }
         let mount = {
             let id = id.clone();
             cx.background_executor().spawn(async move { devices::mount(&id) })
@@ -602,9 +607,9 @@ impl Commander {
                 window.remove_notification1::<Mounting>(id.clone(), cx);
                 match mounted {
                     Ok(folders) => {
-                        let first = folders[0].0.clone();
+                        let shown = folder.unwrap_or_else(|| folders[0].0.clone());
                         this.sidebar.device_folders.insert(id, folders);
-                        this.open_folder(first, window, cx);
+                        this.open_folder(shown, window, cx);
                     }
                     Err(err) => {
                         let note = Notification::error(format!("{name}: {err}")).autohide(false);
@@ -676,7 +681,7 @@ impl Commander {
                         true => el
                             .cursor_pointer()
                             .hover(|style| style.bg(theme.foreground.opacity(0.06)))
-                            .on_click(cx.listener(move |this, _, window, cx| this.open_device(&opened, window, cx))),
+                            .on_click(cx.listener(move |this, _, window, cx| this.open_device(&opened, None, window, cx))),
                         false => el.text_color(theme.muted_foreground),
                     })
                     .child(Icon::new(icon).small().text_color(theme.muted_foreground))
@@ -695,7 +700,7 @@ impl Commander {
                 let theme = cx.theme();
                 let selected = inside.as_ref() == Some(path);
                 let icon = icons::material().icon(name, true, !theme.mode.is_dark());
-                let path = path.clone();
+                let (path, opened) = (path.clone(), device.clone());
                 list = list.child(
                     h_flex()
                         .id(SharedString::from(format!("device-{}-{ix}", device.id)))
@@ -709,7 +714,9 @@ impl Commander {
                         .when(!selected, |el| el.hover(|style| style.bg(theme.foreground.opacity(0.06))))
                         .child(img(format!("material/{icon}")).size(px(16.)).flex_none())
                         .child(div().flex_1().min_w_0().truncate().child(name.clone()))
-                        .on_click(cx.listener(move |this, _, window, cx| this.open_folder(path.clone(), window, cx))),
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_device(&opened, Some(path.clone()), window, cx)
+                        })),
                 );
             }
         }
