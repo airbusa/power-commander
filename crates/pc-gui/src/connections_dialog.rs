@@ -7,8 +7,8 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::radio::RadioGroup;
-use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::select::{Select, SelectEvent, SelectState};
+use gpui_kit::component::{ActiveTheme, Disableable, IndexPath, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::connections::{self, Connection, Connections};
@@ -18,12 +18,19 @@ use pc_core::secrets;
 
 use crate::Commander;
 
-/// Ours, the desktop's, then online storage: a row each.
-const SCHEMES: [&[(Scheme, &str)]; 3] = [
-    &[(Scheme::Sftp, "SFTP"), (Scheme::Ftp, "FTP"), (Scheme::Ftps, "FTPS")],
-    &[(Scheme::Smb, "SMB"), (Scheme::Webdav, "WebDAV"), (Scheme::Webdavs, "WebDAVS"), (Scheme::Nfs, "NFS")],
-    &[(Scheme::S3, "S3")],
+/// Ours, the desktop's, then online storage, as the Protocol list shows them.
+const SCHEMES: [(Scheme, &str); 8] = [
+    (Scheme::Sftp, "SFTP"),
+    (Scheme::Ftp, "FTP"),
+    (Scheme::Ftps, "FTPS"),
+    (Scheme::Smb, "SMB"),
+    (Scheme::Webdav, "WebDAV"),
+    (Scheme::Webdavs, "WebDAVS"),
+    (Scheme::Nfs, "NFS"),
+    (Scheme::S3, "S3"),
 ];
+
+type Protocols = SelectState<Vec<&'static str>>;
 
 pub fn open(commander: WeakEntity<Commander>, side: usize, window: &mut Window, cx: &mut App) {
     let address = cx.new(|cx| {
@@ -419,8 +426,19 @@ pub(crate) fn open_edit(
             .masked(true)
             .placeholder("kept in the system keyring; empty keeps it")
     });
-    let view = cx.new(|_| EditConnection {
+    let at = SCHEMES.iter().position(|(scheme, _)| *scheme == connection.scheme);
+    let labels = SCHEMES.map(|(_, label)| label).to_vec();
+    let protocol = cx.new(|cx| SelectState::new(labels, at.map(IndexPath::new), window, cx));
+    let view = cx.new(|cx| EditConnection {
         scheme: connection.scheme,
+        _picked: cx.subscribe(&protocol, |this: &mut EditConnection, _, event: &SelectEvent<Vec<&'static str>>, cx| {
+            let SelectEvent::Confirm(Some(label)) = event else { return };
+            if let Some((scheme, _)) = SCHEMES.iter().find(|(_, it)| it == label) {
+                this.scheme = *scheme;
+                cx.notify();
+            }
+        }),
+        protocol,
         fields: [name.clone(), host, port, user, path],
         password,
         forget: false,
@@ -443,6 +461,8 @@ pub(crate) fn open_edit(
 
 struct EditConnection {
     scheme: Scheme,
+    protocol: Entity<Protocols>,
+    _picked: Subscription,
     /// Name, host, port, user, path.
     fields: [Entity<InputState>; 5],
     password: Entity<InputState>,
@@ -504,17 +524,6 @@ impl Render for EditConnection {
                 .child(div().w(px(96.)).flex_none().child(label))
                 .child(div().flex_1().child(Input::new(input)))
         };
-        let row = |ix: usize, cx: &mut Context<Self>| {
-            let schemes = SCHEMES[ix];
-            RadioGroup::horizontal(("connection-scheme", ix))
-                .children(schemes.iter().map(|(_, label)| *label))
-                .selected_index(schemes.iter().position(|(scheme, _)| *scheme == self.scheme))
-                .on_click(cx.listener(move |this, at: &usize, _, cx| {
-                    this.scheme = schemes[*at].0;
-                    cx.notify();
-                }))
-        };
-        let (ours, desktops, online) = (row(0, cx), row(1, cx), row(2, cx));
         let [name, rest @ ..] = &self.fields;
         v_flex()
             .w_full()
@@ -525,10 +534,8 @@ impl Render for EditConnection {
                 h_flex()
                     .gap_3()
                     .child(div().w(px(96.)).flex_none().child("Protocol"))
-                    .child(ours),
+                    .child(div().flex_1().child(Select::new(&self.protocol))),
             )
-            .child(h_flex().gap_3().child(div().w(px(96.)).flex_none()).child(desktops))
-            .child(h_flex().gap_3().child(div().w(px(96.)).flex_none()).child(online))
             .children(
                 labels[1..]
                     .iter()

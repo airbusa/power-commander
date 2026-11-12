@@ -272,7 +272,7 @@ impl Commander {
         let mut accordion = v_flex().h_full().flex_1().min_w_0();
         for (at, (which, icon, name)) in sections.into_iter().enumerate() {
             let open = tab == which;
-            let buttons = (which == SidebarTab::Favourites).then(|| self.favourite_buttons(cx));
+            let button = (which == SidebarTab::Favourites).then(|| self.new_favourite_button(cx));
             let theme = cx.theme();
             let chevron = match open {
                 true => IconName::ChevronDown,
@@ -290,7 +290,7 @@ impl Commander {
                 .hover(|style| style.bg(theme.foreground.opacity(0.06)))
                 .child(img(format!("material/{icon}")).size(px(16.)).flex_none())
                 .child(div().flex_1().font_medium().child(name))
-                .children(buttons.into_iter().flatten())
+                .children(button)
                 .child(Icon::new(chevron).xsmall().text_color(theme.muted_foreground))
                 .on_click(cx.listener(move |this, _, _, cx| this.open_section(which, cx)));
             accordion = accordion.child(header);
@@ -717,25 +717,14 @@ impl Commander {
         v_flex().size_full().child(list)
     }
 
-    /// On the Favourites header: a new one, and an address to connect to.
-    fn favourite_buttons(&self, cx: &mut Context<Self>) -> [Button; 2] {
-        [
-            Button::new("server-new")
-                .ghost()
-                .xsmall()
-                .icon(IconName::Plus)
-                .tooltip("New connection...")
-                .on_click(cx.listener(|this, _, window, cx| this.edit_server(None, false, window, cx))),
-            Button::new("server-address")
-                .ghost()
-                .xsmall()
-                .icon(IconName::Globe)
-                .tooltip("Connect to an address...")
-                .on_click(cx.listener(|this, _, window, cx| {
-                    let side = this.active;
-                    connections_dialog::open(cx.entity().downgrade(), side, window, cx)
-                })),
-        ]
+    /// On the Favourites header: a new one.
+    fn new_favourite_button(&self, cx: &mut Context<Self>) -> Button {
+        Button::new("server-new")
+            .ghost()
+            .xsmall()
+            .icon(IconName::Plus)
+            .tooltip("New connection...")
+            .on_click(cx.listener(|this, _, window, cx| this.edit_server(None, false, window, cx)))
     }
 
     fn render_favourites(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
