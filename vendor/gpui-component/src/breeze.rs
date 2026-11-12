@@ -15,6 +15,12 @@ pub struct BreezeControls {
     pub highlight: Hsla,
     /// Check marks and radio dots: the text colour.
     pub mark: Hsla,
+    /// A slider's or progress bar's groove.
+    pub groove: Hsla,
+    /// What fills it.
+    pub fill: Hsla,
+    /// A slider handle's frame.
+    pub handle_frame: Hsla,
 }
 
 impl Global for BreezeControls {}

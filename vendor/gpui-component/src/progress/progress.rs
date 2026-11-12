@@ -93,7 +93,10 @@ impl RenderOnce for Progress {
         let mut inner_style = StyleRefinement::default();
         inner_style.corner_radii = radius;
 
+        // PowerCommander patch: Breeze's 6 px groove and fill, see `BreezeControls`.
+        let breeze = cx.try_global::<crate::BreezeControls>().copied();
         let (height, pill_radius) = match self.size {
+            _ if breeze.is_some() => (px(6.), px(3.)),
             Size::XSmall => (px(4.), px(2.)),
             Size::Small => (px(6.), px(3.)),
             Size::Medium => (px(8.), px(4.)),
@@ -132,7 +135,7 @@ impl RenderOnce for Progress {
                 ProgressTrack::new()
                     .absolute()
                     .size_full()
-                    .bg(bg.opacity(0.2))
+                    .bg(breeze.map_or(bg.opacity(0.2), |breeze| breeze.groove.into()))
                     .rounded(radius)
                     .refine_style(&inner_style),
             )
@@ -142,7 +145,7 @@ impl RenderOnce for Progress {
                     .top_0()
                     .left_0()
                     .h_full()
-                    .bg(bg)
+                    .bg(breeze.map_or(bg, |breeze| breeze.fill.into()))
                     .rounded(radius)
                     .refine_style(&inner_style)
                     .map(|this| {

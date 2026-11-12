@@ -194,11 +194,38 @@ pub fn sidebar_see_through() -> bool {
     cfg!(any(target_os = "macos", windows)) || kwin
 }
 
+/// The controls' colours as KDE's Breeze style mixes them from the scheme
+/// (`breezehelper.cpp`, `breezestyle.cpp`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BreezeColors {
+    pub button: u32,
+    /// Frames: a fifth of the text over the window.
+    pub frame: u32,
+    /// A checked box's or radio button's fill: the button under 30% of the selection.
+    pub checked: u32,
+    pub highlight: u32,
+    /// Marks and dots: the text.
+    pub mark: u32,
+    /// A slider's or progress bar's groove: the text at 14% over the window.
+    pub groove: u32,
+    /// What fills it: the selection at 70% over the window.
+    pub fill: u32,
+    /// A slider handle's frame: a fifth of the text over the button.
+    pub handle_frame: u32,
+}
+
 impl Palette {
-    /// A checked box's or radio button's fill, as KDE's Breeze style draws it:
-    /// the button's colour under 30% of the selection's.
-    pub fn checked_fill(&self) -> u32 {
-        mix(self.button, self.selection, 0.3)
+    pub fn breeze(&self) -> BreezeColors {
+        BreezeColors {
+            button: self.button,
+            frame: self.border,
+            checked: mix(self.button, self.selection, 0.3),
+            highlight: self.selection,
+            mark: self.text,
+            groove: mix(self.window, self.text, 0.14),
+            fill: mix(self.window, self.selection, 0.7),
+            handle_frame: mix(self.button, self.text, 0.2),
+        }
     }
 }
 

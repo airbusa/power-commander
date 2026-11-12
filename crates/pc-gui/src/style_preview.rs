@@ -25,7 +25,7 @@ pub(crate) struct StylePreview {
 
 pub(crate) fn open(cx: &mut App) {
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::centered(size(px(330.), px(190.)), cx)),
+        window_bounds: Some(WindowBounds::centered(size(px(330.), px(240.)), cx)),
         app_id: Some("powercommander".into()),
         ..Default::default()
     };

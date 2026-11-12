@@ -69,12 +69,16 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
     });
     // On KDE the controls take Breeze's look, in the scheme's colours.
     if pc_core::theme::breeze_controls() {
+        let breeze = palette.breeze();
         cx.set_global(BreezeControls {
-            button: color(palette.button),
-            frame: color(palette.border),
-            checked: color(palette.checked_fill()),
-            highlight: color(palette.selection),
-            mark: color(palette.text),
+            button: color(breeze.button),
+            frame: color(breeze.frame),
+            checked: color(breeze.checked),
+            highlight: color(breeze.highlight),
+            mark: color(breeze.mark),
+            groove: color(breeze.groove),
+            fill: color(breeze.fill),
+            handle_frame: color(breeze.handle_frame),
         });
     }
     // macOS's cursor is the accent, filled, as Finder's; elsewhere a tint, framed.
