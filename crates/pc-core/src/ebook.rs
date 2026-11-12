@@ -1,6 +1,7 @@
 //! Books for the viewer, read as one HTML document, as the UI kit's text view
-//! renders it: an EPUB's chapters in reading order, an FB2's sections, their
-//! pictures inline as `data:` URLs. Books with DRM cannot be read.
+//! renders it: an EPUB's chapters in reading order, an FB2's sections, a
+//! Kindle book's text (MOBI, AZW, AZW3), their pictures inline as `data:`
+//! URLs. Books with DRM cannot be read.
 
 use std::collections::HashMap;
 use std::fs;
@@ -10,7 +11,7 @@ use std::path::Path;
 use base64::Engine as _;
 use regex::{Captures, Regex};
 
-pub const EXTENSIONS: &[&str] = &["epub", "fb2"];
+pub const EXTENSIONS: &[&str] = &["epub", "fb2", "mobi", "azw", "azw3", "prc"];
 
 pub fn is_book(path: &Path) -> bool {
     let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
@@ -22,6 +23,7 @@ pub fn html(path: &Path) -> io::Result<String> {
     let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
     match extension.as_deref() {
         Some("fb2") => fb2(&String::from_utf8_lossy(&fs::read(path)?)),
+        Some("mobi" | "azw" | "azw3" | "prc") => kindle(fs::read(path)?),
         _ => epub(&Zip::open(fs::read(path)?)?),
     }
 }
@@ -199,10 +201,6 @@ fn chapter_html(zip: &Zip, chapter: &str, xhtml: &str) -> String {
     });
     static IMG_SRC: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r#"(?is)(<img\b[^>]*?\bsrc\s*=\s*)(["'])(.*?)["']"#).unwrap());
-    // XHTML's `<a id="x"/>` never ends as HTML: all that follows would be its link.
-    static SELF_CLOSED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<([a-z][a-z0-9]*)\b([^<>]*?)/\s*>").unwrap());
-    // Links lead nowhere from the viewer: their text stays.
-    static LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<a\b[^>]*>|</a\s*>").unwrap());
     let body = BODY.captures(xhtml).and_then(|body| body.get(1)).map_or(xhtml, |body| body.as_str());
     let body = DROPPED.replace_all(body, "");
     let folder = folder_of(chapter);
@@ -212,15 +210,163 @@ fn chapter_html(zip: &Zip, chapter: &str, xhtml: &str) -> String {
     };
     let body = SVG_IMAGE.replace_all(&body, |found: &Captures| format!(r#"<img src="{}"/>"#, inline(&found[2])));
     let body = IMG_SRC.replace_all(&body, |found: &Captures| format!(r#"{}"{}""#, &found[1], inline(&found[3])));
-    let body = SELF_CLOSED.replace_all(&body, |found: &Captures| {
+    format!("{}\n<br/>\n", tidy(&body))
+}
+
+/// XHTML as HTML reads it: `<a id="x"/>` never ends as HTML, all that follows
+/// would be its link; links lead nowhere from the viewer, their text stays.
+fn tidy(html: &str) -> String {
+    use std::sync::LazyLock;
+    static SELF_CLOSED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<([a-z][a-z0-9]*)\b([^<>]*?)/\s*>").unwrap());
+    static LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<a\b[^>]*>|</a\s*>").unwrap());
+    let html = SELF_CLOSED.replace_all(html, |found: &Captures| {
         let tag = found[1].to_lowercase();
         match VOID.contains(&tag.as_str()) {
             true => found[0].to_owned(),
             false => format!("<{tag}{}></{tag}>", &found[2]),
         }
     });
-    let body = LINK.replace_all(&body, "");
-    format!("{body}\n<br/>\n")
+    LINK.replace_all(&html, "").into_owned()
+}
+
+/// A Kindle book's text: a MOBI's one document, or an AZW3's parts in their
+/// order (their skeletons not filled in, which the reading order survives),
+/// pictures from the image records they number. As KindleUnpack reads them.
+fn kindle(data: Vec<u8>) -> io::Result<String> {
+    use std::sync::LazyLock;
+    let damaged = || invalid("a damaged book");
+    let u16_at = |at: usize| data.get(at..at + 2).map(|b| u16::from_be_bytes([b[0], b[1]]) as usize);
+    let u32_at = |at: usize| data.get(at..at + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    // The Palm database's records: each runs to where the next starts.
+    let count = u16_at(76).ok_or_else(damaged)?;
+    let starts: Vec<usize> = (0..count).map(|i| u32_at(78 + 8 * i)).collect::<Option<_>>().ok_or_else(damaged)?;
+    let record = |i: usize| -> Option<&[u8]> {
+        let end = starts.get(i + 1).copied().unwrap_or(data.len());
+        data.get(*starts.get(i)?..end)
+    };
+    let header = record(0).ok_or_else(damaged)?;
+    let field16 = |at: usize| header.get(at..at + 2).map(|b| u16::from_be_bytes([b[0], b[1]]) as usize);
+    let field32 = |at: usize| header.get(at..at + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    let (compression, texts, encryption) = (field16(0), field16(8), field16(12));
+    let (compression, texts) = (compression.ok_or_else(damaged)?, texts.ok_or_else(damaged)?);
+    if encryption.unwrap_or(0) != 0 {
+        return Err(invalid("DRM-protected: only Kindle can read it"));
+    }
+    if compression == 17480 {
+        return Err(invalid("compressed as Amazon's own books are (HUFF/CDIC), which is not read yet"));
+    }
+    let encoding = field32(28).unwrap_or(1252);
+    // Each text record ends in entries of the book's index, then the bytes of a
+    // character it splits with the next; the MOBI header says which.
+    let mobi_length = field32(20).unwrap_or(0);
+    let flags = match mobi_length >= 0xE4 {
+        true => field16(0xF2).unwrap_or(0),
+        false => 0,
+    };
+    let mut text = Vec::new();
+    for i in 1..=texts {
+        let mut content = record(i).ok_or_else(damaged)?;
+        let mut trailers = flags >> 1;
+        while trailers > 0 {
+            if trailers & 1 == 1 {
+                let size = content[content.len().saturating_sub(4)..]
+                    .iter()
+                    .fold(0, |size, &byte| match byte & 0x80 {
+                        0 => (size << 7) | (byte & 0x7f) as usize,
+                        _ => (byte & 0x7f) as usize,
+                    });
+                content = &content[..content.len().saturating_sub(size)];
+            }
+            trailers >>= 1;
+        }
+        if flags & 1 == 1 {
+            let split = content.last().map_or(0, |last| (last & 3) as usize + 1);
+            content = &content[..content.len().saturating_sub(split)];
+        }
+        match compression {
+            1 => text.extend_from_slice(content),
+            2 => palmdoc(content, &mut text),
+            _ => return Err(invalid(format!("compressed in a way not read yet ({compression})"))),
+        }
+    }
+    let text = match encoding {
+        65001 => String::from_utf8_lossy(&text).into_owned(),
+        page => crate::codepage::decode(page as u16, &text),
+    };
+    let first = field32(0x6C).unwrap_or(usize::MAX);
+    // Numbered from 1, from the first image record on.
+    let picture = |number: usize| {
+        let content = record(first.checked_add(number)?.checked_sub(1)?)?;
+        let kind = match content {
+            [0xff, 0xd8, ..] => "jpg",
+            [0x89, b'P', b'N', b'G', ..] => "png",
+            [b'G', b'I', b'F', ..] => "gif",
+            _ => return None,
+        };
+        Some(data_url(&format!("picture.{kind}"), content))
+    };
+    // MOBI's `recindex="00001"`, AZW3's `kindle:embed:0001` (base 32).
+    static RECINDEX: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"(?is)<img\b[^>]*?\brecindex\s*=\s*["']?(\d+)["']?[^>]*>"#).unwrap());
+    static EMBED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"kindle:embed:([0-9A-V]{4})(\?[^\x22'\s>]*)?").unwrap());
+    // The parts' own frames; the CSS that follows the text, past its last `</html>`.
+    static FRAME: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?is)<\?xml[^>]*>|<!DOCTYPE[^>]*>|<head\b.*?</head\s*>|</?html\b[^>]*>|</?body\b[^>]*>").unwrap()
+    });
+    static PAGE_BREAK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<mbp:pagebreak[^>]*>").unwrap());
+    let text = match text.rfind("</html>") {
+        Some(end) => &text[..end + "</html>".len()],
+        None => &text[..],
+    };
+    let html = RECINDEX.replace_all(text, |found: &Captures| match found[1].parse().ok().and_then(picture) {
+        Some(url) => format!(r#"<img src="{url}"/>"#),
+        None => String::new(),
+    });
+    let html = EMBED.replace_all(&html, |found: &Captures| {
+        let number = found[1].chars().try_fold(0, |number, digit| Some(number * 32 + digit.to_digit(32)? as usize));
+        number.and_then(picture).unwrap_or_default()
+    });
+    let html = FRAME.replace_all(&html, "");
+    let html = PAGE_BREAK.replace_all(&html, "<br/>");
+    let html = tidy(&html);
+    if html.trim().is_empty() {
+        return Err(invalid("the book has no text"));
+    }
+    Ok(html)
+}
+
+/// PalmDOC's LZ77: literals, runs of them, a space and a letter, and copies
+/// of up to ten bytes from up to 2047 back.
+fn palmdoc(data: &[u8], out: &mut Vec<u8>) {
+    let start = out.len();
+    let mut at = 0;
+    while at < data.len() {
+        let byte = data[at];
+        at += 1;
+        match byte {
+            0 | 0x09..=0x7f => out.push(byte),
+            1..=8 => {
+                let end = (at + byte as usize).min(data.len());
+                out.extend_from_slice(&data[at..end]);
+                at = end;
+            }
+            0xc0.. => out.extend_from_slice(&[b' ', byte ^ 0x80]),
+            0x80..=0xbf => {
+                let Some(&next) = data.get(at) else {
+                    break;
+                };
+                at += 1;
+                let pair = (byte as usize) << 8 | next as usize;
+                let (distance, length) = ((pair >> 3) & 0x07ff, (pair & 7) + 3);
+                if distance == 0 || distance > out.len() - start {
+                    continue;
+                }
+                for _ in 0..length {
+                    out.push(out[out.len() - distance]);
+                }
+            }
+        }
+    }
 }
 
 fn escape(text: &str) -> String {
@@ -351,6 +497,14 @@ mod tests {
         assert!(html.contains(r#"src="data:image/png;base64,UE5H""#), "the picture inline: {html}");
         assert!(!html.contains("<style>") && !html.contains("two.xhtml"), "{html}");
         assert!(!html.contains("<a") && html.contains("page on</p>"), "links only text: {html}");
+    }
+
+    #[test]
+    fn decompresses_palmdoc() {
+        // "abc", "abc" copied from 3 back, a space and "x".
+        let mut out = Vec::new();
+        palmdoc(&[b'a', b'b', b'c', 0x80, 0x18, 0xf8], &mut out);
+        assert_eq!(out, b"abcabc x");
     }
 
     #[test]
