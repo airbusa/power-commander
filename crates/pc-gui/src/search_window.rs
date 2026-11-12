@@ -71,7 +71,10 @@ impl Commander {
         let over = crate::Over::at(WindowBounds::Windowed(Bounds { origin, size }), window, cx);
         let options = crate::over_main_window("Find Files".into(), over, cx);
         let commander = cx.entity().downgrade();
+        let main = window.window_handle();
         let opened = gpui_kit::open_window(options, cx, |window, cx| {
+            // It works for the main window: its menus, its commands.
+            crate::menus::lend(window, main, cx);
             cx.new(|cx| FindFiles::new(commander, separate, folder, chosen, window, cx))
         });
         match opened {
@@ -151,10 +154,14 @@ impl FindFiles {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // macOS: the application and Window menus only.
+        // macOS: the main window puts its menus up for this one (menus::lend).
         #[cfg(target_os = "macos")]
-        cx.observe_window_activation(window, |_, window, cx| crate::menus::show(window, Vec::new(), cx))
-            .detach();
+        cx.observe_window_activation(window, |this, _, cx| {
+            if let Some(commander) = this.commander.upgrade() {
+                commander.update(cx, |_, cx| cx.notify());
+            }
+        })
+        .detach();
         let input = |placeholder: &str, window: &mut Window, cx: &mut Context<Self>| {
             let placeholder = placeholder.to_owned();
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))

@@ -1,13 +1,14 @@
 use gpui_kit::component::GlobalState;
 use gpui_kit::component::menu::PopupMenu;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui_kit::{
-    Action, App, Context, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate, Menu,
-    MenuItem, SharedString, Unbind, Window,
+    Action, AnyWindowHandle, App, Context, DummyKeyboardMapper, Global, KeyBinding,
+    KeyBindingContextPredicate, Menu, MenuItem, SharedString, Unbind, Window, WindowId,
 };
 #[cfg(target_os = "macos")]
-use gpui_kit::{Global, SystemMenuType, actions};
+use gpui_kit::{SystemMenuType, actions};
 use pc_core::keymap::KeySettings;
 use pc_core::menu::{Command, Item, MENUS};
 use pc_core::theme::Appearance;
@@ -86,13 +87,34 @@ pub fn init(cx: &mut App) {
             KeyBinding::new("alt-cmd-h", HideOtherApps, None),
             KeyBinding::new("cmd-m", MinimizeWindow, None),
         ]);
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
-                grey_out(cx);
-            }
-        })
-        .detach();
     }
+    cx.on_window_closed(|cx, closed| {
+        cx.default_global::<Lent>().0.remove(&closed);
+        #[cfg(target_os = "macos")]
+        if cx.windows().is_empty() {
+            grey_out(cx);
+        }
+    })
+    .detach();
+}
+
+/// Windows that work for another, as Find Files for the main one: while one
+/// is active, the menu bar shows the other's menus and their commands go to
+/// the other, as a Mac app's panels leave the menus to its main window.
+#[derive(Default)]
+struct Lent(HashMap<WindowId, AnyWindowHandle>);
+
+impl Global for Lent {}
+
+/// `window` works for `owner` (see `Lent`).
+pub fn lend(window: &Window, owner: AnyWindowHandle, cx: &mut App) {
+    cx.default_global::<Lent>().0.insert(window.window_handle().window_id(), owner);
+}
+
+/// The window the active one works for, if it works for one.
+pub fn owner_of_active(cx: &App) -> Option<AnyWindowHandle> {
+    let active = cx.active_window()?;
+    cx.try_global::<Lent>()?.0.get(&active.window_id()).copied()
 }
 
 /// macOS: no window is left to act on; the menu bar stays as it was, greyed
@@ -254,7 +276,9 @@ pub fn show(window: &Window, menus: Vec<Menu>, cx: &mut App) {
             }
         }
     }
-    if !window.is_window_active() {
+    // Its own while active, and while a window that works for it is.
+    let lent = owner_of_active(cx).is_some_and(|owner| owner.window_id() == window.window_handle().window_id());
+    if !window.is_window_active() && !lent {
         return;
     }
     let mut state = DefaultHasher::new();

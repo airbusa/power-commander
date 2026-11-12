@@ -155,16 +155,28 @@ fn main() {
         ]);
         menus::init(cx);
         // Settings and Shortcuts where the panels do not take them, as from
-        // the menu bar over another window: over the main window.
+        // the menu bar over another window: over the main window. Other
+        // commands from a window working for the main one go to its panels.
         cx.on_action(|Run(command): &Run, cx| {
             let page = match command {
                 Command::Settings => Some(0),
                 Command::Shortcuts => None,
                 // To the next listener: Quit's.
-                _ => return cx.propagate(),
+                Command::Quit => return cx.propagate(),
+                _ => {
+                    if !to_main_window(Box::new(Run(*command)), cx) {
+                        cx.propagate();
+                    }
+                    return;
+                }
             };
             // The window the action came to may be the main one, being updated.
             cx.defer(move |cx| configure(page, cx));
+        });
+        cx.on_action(|appearance: &SetAppearance, cx| {
+            if !to_main_window(appearance.boxed_clone(), cx) {
+                cx.propagate();
+            }
         });
         // Files taken out of archives for the viewer.
         std::thread::spawn(archive::remove_stale_scratch);
@@ -220,6 +232,35 @@ fn name_the_app() {
 struct MainWindow(AnyWindowHandle, WeakEntity<Commander>);
 
 impl Global for MainWindow {}
+
+/// While a command goes to the main window: one it does not take goes on.
+struct Forwarding;
+
+impl Global for Forwarding {}
+
+/// A command of the main window's, chosen in a window that works for it
+/// (menus::lend), to its panels, without leaving that window; false when the
+/// active window does not work for the main one.
+fn to_main_window(action: Box<dyn Action>, cx: &mut App) -> bool {
+    let Some(MainWindow(main, commander)) = cx.try_global::<MainWindow>().cloned() else {
+        return false;
+    };
+    if cx.has_global::<Forwarding>() || menus::owner_of_active(cx) != Some(main) {
+        return false;
+    }
+    // The window it came to is being updated.
+    cx.defer(move |cx| {
+        let _ = main.update(cx, |_, window, cx| {
+            let Ok(focus) = commander.read_with(cx, |this, _| this.focus.clone()) else {
+                return;
+            };
+            cx.set_global(Forwarding);
+            focus.dispatch_action(&*action, window, cx);
+            cx.remove_global::<Forwarding>();
+        });
+    });
+    true
+}
 
 /// Settings on its Edit/View page, over the main window.
 fn configure_viewer(cx: &mut App) {
