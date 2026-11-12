@@ -28,15 +28,17 @@ const SCHEMES: [&[(Scheme, &str)]; 3] = [
 pub fn open(commander: WeakEntity<Commander>, side: usize, window: &mut Window, cx: &mut App) {
     let address = cx.new(|cx| {
         InputState::new(window, cx)
-            .placeholder("sftp://user@host/path, ftp://, smb://, webdav://, s3://, mtp:/, or a host below")
+            .placeholder("sftp://user@host, ftp://, smb://, webdav://, s3://, rclone://, mtp:/, or one below")
     });
     let view = cx.new(|_| {
         let saved = Connections::load().unwrap_or_default().saved;
         let hosts = connections::ssh_hosts();
-        let selected = match (saved.is_empty(), hosts.is_empty()) {
-            (false, _) => Some(Pick::Saved(0)),
-            (true, false) => Some(Pick::Host(0)),
-            (true, true) => None,
+        let remotes = pc_core::cloud::user_remotes();
+        let selected = match (saved.is_empty(), hosts.is_empty(), remotes.is_empty()) {
+            (false, ..) => Some(Pick::Saved(0)),
+            (true, false, _) => Some(Pick::Host(0)),
+            (true, true, false) => Some(Pick::Remote(0)),
+            (true, true, true) => None,
         };
         ConnectionsDialog {
             commander,
@@ -44,6 +46,7 @@ pub fn open(commander: WeakEntity<Commander>, side: usize, window: &mut Window, 
             selected,
             saved,
             hosts,
+            remotes,
             address: address.clone(),
             scroll: ScrollHandle::new(),
         }
@@ -67,6 +70,8 @@ pub fn open(commander: WeakEntity<Commander>, side: usize, window: &mut Window, 
 enum Pick {
     Saved(usize),
     Host(usize),
+    /// An rclone remote.
+    Remote(usize),
 }
 
 struct ConnectionsDialog {
@@ -74,6 +79,7 @@ struct ConnectionsDialog {
     side: usize,
     saved: Vec<Connection>,
     hosts: Vec<String>,
+    remotes: Vec<(String, String)>,
     selected: Option<Pick>,
     address: Entity<InputState>,
     scroll: ScrollHandle,
@@ -117,17 +123,20 @@ impl ConnectionsDialog {
     /// with no address connects the selected.
     fn step(&mut self, by: isize, cx: &mut Context<Self>) {
         let saved = (0..self.saved.len()).map(Pick::Saved);
-        let picks: Vec<Pick> = saved.chain((0..self.hosts.len()).map(Pick::Host)).collect();
+        let hosts = (0..self.hosts.len()).map(Pick::Host);
+        let picks: Vec<Pick> = saved.chain(hosts).chain((0..self.remotes.len()).map(Pick::Remote)).collect();
         let at = self.selected.and_then(|pick| picks.iter().position(|p| *p == pick));
         let Some(&pick) = picks.get(at.map_or(0, |at| at.saturating_add_signed(by).min(picks.len() - 1))) else {
             return;
         };
         self.selected = Some(pick);
-        // The list's children: each part's heading, then its rows.
+        // The list's children: each part's heading, then its rows; empty parts are left out.
+        let before = |parts: &[usize]| parts.iter().filter(|&&rows| rows > 0).map(|rows| 1 + rows).sum::<usize>();
+        let (saved, hosts) = (self.saved.len(), self.hosts.len());
         let child = match pick {
             Pick::Saved(ix) => 1 + ix,
-            Pick::Host(ix) if self.saved.is_empty() => 1 + ix,
-            Pick::Host(ix) => 2 + self.saved.len() + ix,
+            Pick::Host(ix) => before(&[saved]) + 1 + ix,
+            Pick::Remote(ix) => before(&[saved, hosts]) + 1 + ix,
         };
         self.scroll.scroll_to_item(child);
         cx.notify();
@@ -143,15 +152,54 @@ impl ConnectionsDialog {
                 port: None,
                 path: None,
             },
+            Some(Pick::Remote(ix)) => Address {
+                scheme: Scheme::Rclone,
+                user: None,
+                host: self.remotes[ix].0.clone(),
+                port: None,
+                path: None,
+            },
             None => return,
         };
         self.connect(address, window, cx);
     }
 
+    /// The user's rclone config, where it was not found: its remotes are listed.
+    fn choose_rclone_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = paths.await else {
+                return;
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                let mut connections = Connections::load().unwrap_or_default();
+                connections.rclone_config = paths.into_iter().next();
+                if let Err(err) = connections.save() {
+                    let note = Notification::error(format!("Could not save the connections: {err}"));
+                    return window.push_notification(note, cx);
+                }
+                this.remotes = pc_core::cloud::user_remotes();
+                if this.remotes.is_empty() {
+                    window.push_notification(Notification::warning("No remotes in that config, or it is encrypted."), cx);
+                }
+                let _ = this.commander.update(cx, |commander, cx| {
+                    commander.sidebar.reload_servers();
+                    cx.notify()
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let saved = Connections {
-            saved: self.saved.clone(),
-        };
+        let mut saved = Connections::load().unwrap_or_default();
+        saved.saved = self.saved.clone();
         if let Err(err) = saved.save() {
             let note = Notification::error(format!("Could not save the connections: {err}"));
             window.push_notification(note, cx);
@@ -213,6 +261,7 @@ impl ConnectionsDialog {
         let id = match pick {
             Pick::Saved(ix) => ("connection", ix),
             Pick::Host(ix) => ("ssh-host", ix),
+            Pick::Remote(ix) => ("rclone-remote", ix),
         };
         let selected = self.selected == Some(pick);
         h_flex()
@@ -268,7 +317,13 @@ impl Render for ConnectionsDialog {
         let hosts: Vec<_> = (0..self.hosts.len())
             .map(|ix| self.row(Pick::Host(ix), self.hosts[ix].clone(), "sftp".into(), cx))
             .collect();
-        let empty = saved.is_empty() && hosts.is_empty();
+        let remotes: Vec<_> = (0..self.remotes.len())
+            .map(|ix| {
+                let (name, kind) = &self.remotes[ix];
+                self.row(Pick::Remote(ix), name.clone(), kind.clone(), cx)
+            })
+            .collect();
+        let empty = saved.is_empty() && hosts.is_empty() && remotes.is_empty();
         let saved_pick = match self.selected {
             Some(Pick::Saved(ix)) => Some(ix),
             _ => None,
@@ -324,6 +379,9 @@ impl Render for ConnectionsDialog {
                             .when(!hosts.is_empty(), |el| {
                                 el.child(heading("~/.ssh/config")).children(hosts)
                             })
+                            .when(!remotes.is_empty(), |el| {
+                                el.child(heading("rclone")).children(remotes)
+                            })
                             .when(empty, |el| {
                                 el.child(
                                     div()
@@ -369,7 +427,10 @@ impl Render for ConnectionsDialog {
                                             this.delete(ix, window, cx);
                                         }
                                     })),
-                            ),
+                            )
+                            .child(button("connection-rclone", "rclone config...").on_click(
+                                cx.listener(|this, _, window, cx| this.choose_rclone_config(window, cx)),
+                            )),
                     ),
             )
             .child(

@@ -51,6 +51,8 @@ pub(crate) struct Sidebar {
     followed: Option<PathBuf>,
     servers: Vec<Connection>,
     hosts: Vec<String>,
+    /// The user's rclone config's remotes: name and type.
+    remotes: Vec<(String, String)>,
     closed: Vec<Scheme>,
     selected: Option<(Scheme, usize)>,
     /// KDE Connect's paired devices; with no volumes either, their tab hides.
@@ -82,6 +84,7 @@ impl Sidebar {
             followed: None,
             servers: Connections::load().unwrap_or_default().saved,
             hosts: connections::ssh_hosts(),
+            remotes: pc_core::cloud::user_remotes(),
             closed: Vec::new(),
             selected: None,
             devices: Vec::new(),
@@ -112,6 +115,7 @@ impl Sidebar {
     pub(crate) fn reload_servers(&mut self) {
         self.servers = Connections::load().unwrap_or_default().saved;
         self.hosts = connections::ssh_hosts();
+        self.remotes = pc_core::cloud::user_remotes();
     }
 }
 
@@ -740,7 +744,7 @@ impl Commander {
 
     fn render_favourites(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme();
-        let groups = sidebar::favourites(&self.sidebar.servers, &self.sidebar.hosts);
+        let groups = sidebar::favourites(&self.sidebar.servers, &self.sidebar.hosts, &self.sidebar.remotes);
         let mut list = v_flex().id("favourites").flex_1().min_h_0().overflow_y_scroll().px_1();
         if groups.is_empty() {
             list = list.child(

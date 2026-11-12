@@ -201,8 +201,8 @@ pub struct Favourite {
 }
 
 /// The servers by protocol: the saved, then `~/.ssh/config`'s hosts under
-/// SFTP. Protocols with none are left out.
-pub fn favourites(saved: &[Connection], hosts: &[String]) -> Vec<(Scheme, Vec<Favourite>)> {
+/// SFTP and the rclone config's remotes (name, type). Protocols with none are left out.
+pub fn favourites(saved: &[Connection], hosts: &[String], remotes: &[(String, String)]) -> Vec<(Scheme, Vec<Favourite>)> {
     let groups = Scheme::ALL.map(|scheme| {
         let saved = saved.iter().enumerate().filter(|(_, c)| c.scheme == scheme);
         let mut servers: Vec<Favourite> = saved
@@ -219,6 +219,14 @@ pub fn favourites(saved: &[Connection], hosts: &[String]) -> Vec<(Scheme, Vec<Fa
                 detail: "~/.ssh/config".to_owned(),
                 saved: None,
                 address: Address { scheme, user: None, host: host.clone(), port: None, path: None },
+            }));
+        }
+        if scheme == Scheme::Rclone {
+            servers.extend(remotes.iter().map(|(name, kind)| Favourite {
+                name: name.clone(),
+                detail: kind.clone(),
+                saved: None,
+                address: Address { scheme, user: None, host: name.clone(), port: None, path: None },
             }));
         }
         (scheme, servers)
@@ -259,9 +267,10 @@ mod tests {
     #[test]
     fn groups_servers_by_protocol() {
         let ftp = Connection { name: "nas".into(), scheme: Scheme::Ftp, host: "nas.lan".into(), user: Some("me".into()), ..Default::default() };
-        let groups = favourites(&[ftp], &["homelab".into()]);
+        let groups = favourites(&[ftp], &["homelab".into()], &[("work".into(), "onedrive".into())]);
         let shown: Vec<_> = groups.iter().map(|(scheme, servers)| (*scheme, servers.len())).collect();
-        assert_eq!(shown, [(Scheme::Sftp, 1), (Scheme::Ftp, 1)]);
+        assert_eq!(shown, [(Scheme::Sftp, 1), (Scheme::Ftp, 1), (Scheme::Rclone, 1)]);
+        assert_eq!(groups[2].1[0].address.url(), "rclone://work");
         assert_eq!(groups[1].1[0].detail, "me@nas.lan");
         assert_eq!((groups[1].1[0].saved, groups[0].1[0].saved), (Some(0), None));
     }
