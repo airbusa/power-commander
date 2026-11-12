@@ -83,11 +83,17 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
     // The desktop style's controls (KDE's Breeze, Windows 11's), in its colours.
     if let Some(style) = pc_core::theme::control_style() {
         cx.set_global(native_controls(style, &palette.controls(style)));
-        // Windows' corners, and its fields' faint frame, a button's.
-        if style == ControlStyle::Fluent {
+        // Windows' and GNOME's corners, and their fields' frame, a button's
+        // (GNOME's unframed: its fill).
+        let radius = match style {
+            ControlStyle::Breeze => None,
+            ControlStyle::Fluent => Some(px(4.)),
+            ControlStyle::Adwaita => Some(px(9.)),
+        };
+        if let Some(radius) = radius {
             let frame = color(palette.controls(style).button[0][1]);
             KitTheme::update(cx, |kit| {
-                kit.radius = px(4.);
+                kit.radius = radius;
                 kit.colors.input = frame;
             });
         }
@@ -161,12 +167,20 @@ fn mac_controls(palette: &Palette) -> MacControls {
 fn native_controls(style: ControlStyle, colors: &ControlColors) -> NativeControls {
     let color = |value: u32| Hsla::from(rgb(value));
     let pair = |[fill, frame]: [u32; 2]| (color(fill), color(frame));
-    let fluent = style == ControlStyle::Fluent;
-    // Windows 11's sizes (WinUI's): 20 px boxes, a 12 px dot, a 4 px groove, a 1 px groove under a 3 px bar.
-    let px_of = |breeze: f32, fluent_size: f32| px(if fluent { fluent_size } else { breeze });
+    // The sizes: a check box, its corners and frame, a radio's dot; a slider's
+    // groove, a progress bar's groove and fill; the rim of the handle's middle.
+    let (check, radius, frame, dot, groove, progress, rim) = match style {
+        ControlStyle::Breeze => (16., 4., 1., 6., 6., [6., 6.], 1.),
+        // WinUI's.
+        ControlStyle::Fluent => (20., 4., 1., 12., 4., [1., 3.], 4.),
+        // libadwaita's: 14 px and 3 px of padding.
+        ControlStyle::Adwaita => (20., 6., 2., 8., 6., [8., 8.], 0.),
+    };
     NativeControls {
-        check_size: px_of(16., 20.),
-        radio_dot: px_of(6., 12.),
+        check_size: px(check),
+        check_radius: px(radius),
+        check_border: px(frame),
+        radio_dot: px(dot),
         check_frame: color(colors.check_frame),
         check_fill: color(colors.check_fill),
         checked_frame: color(colors.checked_frame),
@@ -174,11 +188,11 @@ fn native_controls(style: ControlStyle, colors: &ControlColors) -> NativeControl
         mark: color(colors.mark),
         groove: color(colors.groove),
         fill: color(colors.fill),
-        slider_groove: px_of(6., 4.),
-        progress: [px_of(6., 1.), px_of(6., 3.)],
+        slider_groove: px(groove),
+        progress: progress.map(px),
         handle: color(colors.handle),
         handle_middle: color(colors.handle_middle),
-        handle_rim: px_of(1., 4.),
+        handle_rim: px(rim),
         handle_frame: colors.handle_frame.map(color),
         button: colors.button.map(pair),
         default_button: colors.default_button.map(pair),
@@ -187,6 +201,9 @@ fn native_controls(style: ControlStyle, colors: &ControlColors) -> NativeControl
         button_edge: colors.button_edge.map(|edges| edges.map(color)),
         tabs: colors.tabs.map(|tabs| tabs.map(color)),
         field_line: colors.field_line.map(color),
+        field_fill: colors.field_fill.map(color),
+        combo_button: style != ControlStyle::Breeze,
+        bold: style == ControlStyle::Adwaita,
     }
 }
 

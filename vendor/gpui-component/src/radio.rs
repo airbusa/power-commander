@@ -257,7 +257,8 @@ impl RenderOnce for Radio {
                                 false => (native.check_frame, native.check_fill),
                             };
                             let dim = if disabled { 0.5 } else { 1. };
-                            this.size(native.check_size)
+                            native
+                                .check_frame_width(this.size(native.check_size))
                                 .flex()
                                 .items_center()
                                 .justify_center()

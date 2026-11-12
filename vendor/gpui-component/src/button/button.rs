@@ -667,6 +667,8 @@ impl RenderOnce for Button {
         let mac_push = cx.has_global::<crate::MacControls>()
             && !cx.has_global::<crate::NativeControls>()
             && self.variant.is_mac_push();
+        let native_bold = cx.try_global::<crate::NativeControls>().is_some_and(|native| native.bold)
+            && matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Default | ButtonVariant::Secondary);
         let native_edge = cx
             .try_global::<crate::NativeControls>()
             .and_then(|native| native.button_edge)
@@ -861,6 +863,8 @@ impl RenderOnce for Button {
                         .min_w_0()
                         .whitespace_nowrap()
                         .text_ellipsis()
+                        // PowerCommander patch: GNOME's labels are bold, see `NativeControls`.
+                        .when(native_bold, |this| this.font_weight(gpui::FontWeight::BOLD))
                         .child(label),
                 )
             })

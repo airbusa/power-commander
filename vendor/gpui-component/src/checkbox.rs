@@ -207,11 +207,15 @@ pub(crate) fn checkbox_check_icon(
         (None, None) => cx.theme().primary_foreground,
     };
     let color = if disabled && mac.is_none() { color.opacity(0.5) } else { color };
+    // The desktop style's 12 px mark, centred in its box; GNOME's bold, as AppKit's.
+    let native = cx.try_global::<crate::NativeControls>().copied();
+    let inset = native.map_or(px(1.), |native| (native.check_size - native.check_border * 2. - px(12.)) / 2.);
+    let bold = mac.is_some() || native.is_some_and(|native| native.bold);
 
     svg()
         .absolute()
-        .top_px()
-        .left_px()
+        .top(inset)
+        .left(inset)
         .map(|this| match size {
             Size::XSmall => this.size_2(),
             Size::Small => this.size_2p5(),
@@ -219,11 +223,11 @@ pub(crate) fn checkbox_check_icon(
             Size::Large => this.size_3p5(),
             _ => this.size_3(),
         })
-        .when(mac.is_some(), |this| this.size_3())
+        .when(mac.is_some() || native.is_some(), |this| this.size_3())
         .text_color(color)
-        .when(opacity > 0., |this| match mac {
-            Some(_) => this.data(crate::mac::CHECK_MARK).opacity(opacity),
-            None => this.path(IconName::Check.path()).opacity(opacity),
+        .when(opacity > 0., |this| match bold {
+            true => this.data(crate::mac::CHECK_MARK).opacity(opacity),
+            false => this.path(IconName::Check.path()).opacity(opacity),
         })
 }
 
@@ -334,8 +338,8 @@ impl RenderOnce for Checkbox {
                                 false => (native.check_frame, native.check_fill),
                             };
                             let dim = if self.disabled { 0.5 } else { 1. };
-                            this.size(native.check_size)
-                                .rounded(px(4.))
+                            native
+                                .check_frame_width(this.size(native.check_size).rounded(native.check_radius))
                                 .border_color(border.opacity(dim))
                                 .bg(fill.opacity(dim))
                         }

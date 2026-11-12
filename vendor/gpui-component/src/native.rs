@@ -6,8 +6,11 @@ use gpui::{Global, Hsla, Pixels};
 /// Kit's own look.
 #[derive(Clone, Copy, Debug)]
 pub struct NativeControls {
-    /// Check boxes and radio buttons, and a radio button's dot.
+    /// Check boxes and radio buttons, a check box's corners, their frame's
+    /// width (GNOME's is 2 px), and a radio button's dot.
     pub check_size: Pixels,
+    pub check_radius: Pixels,
+    pub check_border: Pixels,
     pub radio_dot: Pixels,
     /// Unchecked, their frame and fill; checked; the mark or dot on them.
     pub check_frame: Hsla,
@@ -39,6 +42,22 @@ pub struct NativeControls {
     pub tabs: Option<[Hsla; 3]>,
     /// Windows': a text field's bottom line; focused, the checked fill.
     pub field_line: Option<Hsla>,
+    /// Text fields' fill, where the style has its own.
+    pub field_fill: Option<Hsla>,
+    /// Combo boxes drawn as push buttons (Windows', GNOME's); buttons' labels
+    /// and the check mark bold (GNOME's).
+    pub combo_button: bool,
+    pub bold: bool,
+}
+
+impl NativeControls {
+    /// The frame of check boxes and radio buttons, as GPUI's border widths go.
+    pub(crate) fn check_frame_width<E: gpui::Styled>(&self, element: E) -> E {
+        match self.check_border >= gpui::px(2.) {
+            true => element.border_2(),
+            false => element.border_1(),
+        }
+    }
 }
 
 impl Global for NativeControls {}

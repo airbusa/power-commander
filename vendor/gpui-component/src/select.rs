@@ -524,6 +524,10 @@ where
             .try_global::<crate::MacControls>()
             .copied()
             .filter(|_| !cx.has_global::<crate::NativeControls>() && self.state.appearance);
+        let native_combo = cx
+            .try_global::<crate::NativeControls>()
+            .copied()
+            .filter(|native| native.combo_button && self.state.appearance && !self.state.disabled);
 
         self.state.list.update(cx, |list, cx| {
             list.set_searchable(searchable, cx);
@@ -564,6 +568,15 @@ where
                                 .when(matches!(self.state.size, Size::Medium | Size::Large), |this| {
                                     this.h(px(24.)).py_0()
                                 })
+                        })
+                        // PowerCommander patch: Windows' and GNOME's combo box is a push button, see `NativeControls`.
+                        .when_some(native_combo, |this, native| {
+                            let [(fill, frame), (hover, hover_frame), _] = native.button;
+                            this.bg(fill)
+                                .border_color(frame)
+                                .text_color(native.button_text)
+                                .when(native.bold, |this| this.font_weight(gpui::FontWeight::BOLD))
+                                .hover(|this| this.bg(hover).border_color(hover_frame))
                         })
                         .refine_style(&self.state.style)
                         .when(outline_visible && self.state.appearance, |this| {

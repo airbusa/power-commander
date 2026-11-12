@@ -118,8 +118,25 @@ pub fn system(dark: bool) -> Palette {
         false => Palette {
             font: desktop_font(),
             font_size: None,
+            selection: gnome_accent(interface_setting("accent-color").as_deref()),
             ..adwaita(dark)
         },
+    }
+}
+
+/// GNOME's accent (GNOME 47's accent-color) as libadwaita draws it; its blue
+/// before, and elsewhere.
+fn gnome_accent(name: Option<&str>) -> u32 {
+    match name.unwrap_or_default() {
+        "teal" => 0x2190a4,
+        "green" => 0x3a944a,
+        "yellow" => 0xc88800,
+        "orange" => 0xed5b00,
+        "red" => 0xe62d42,
+        "pink" => 0xd56199,
+        "purple" => 0x9141ac,
+        "slate" => 0x6f8396,
+        _ => 0x3584e4,
     }
 }
 
@@ -204,6 +221,8 @@ pub enum ControlStyle {
     Breeze,
     /// Windows 11's (WinUI's Fluent controls).
     Fluent,
+    /// GNOME's (libadwaita's).
+    Adwaita,
 }
 
 /// This desktop's control style; none where GPUI Kit's own look stands.
@@ -211,6 +230,7 @@ pub fn control_style() -> Option<ControlStyle> {
     match () {
         _ if cfg!(windows) => Some(ControlStyle::Fluent),
         _ if cfg!(any(target_os = "linux", target_os = "freebsd")) && on_kde() => Some(ControlStyle::Breeze),
+        _ if cfg!(any(target_os = "linux", target_os = "freebsd")) && on_desktop("GNOME") => Some(ControlStyle::Adwaita),
         _ => None,
     }
 }
@@ -243,6 +263,8 @@ pub struct ControlColors {
     pub tabs: Option<[u32; 3]>,
     /// Windows': a text field's bottom line, the checked fill when focused.
     pub field_line: Option<u32>,
+    /// Text fields' fill, where the style has its own.
+    pub field_fill: Option<u32>,
 }
 
 impl Palette {
@@ -250,6 +272,7 @@ impl Palette {
         match style {
             ControlStyle::Breeze => self.breeze(),
             ControlStyle::Fluent => self.fluent(windows_accents()),
+            ControlStyle::Adwaita => self.adwaita(),
         }
     }
 
@@ -281,6 +304,7 @@ impl Palette {
             button_edge: None,
             tabs: Some([mix(self.window, self.selection, 0.2), self.view, self.selection]),
             field_line: None,
+            field_fill: None,
         }
     }
 
@@ -324,6 +348,38 @@ impl Palette {
             }),
             tabs: None,
             field_line: Some(on(strong)),
+            field_fill: Some(on(fills[0])),
+        }
+    }
+
+    /// GNOME's (libadwaita's stylesheet): fills of the text over the window,
+    /// unframed; the selection is the accent.
+    fn adwaita(&self) -> ControlColors {
+        let ink = |share: f32| mix(self.window, self.text, share);
+        let accent = self.selection;
+        let white = 0xffffff;
+        // The slider's knob: white 80% over the view; its rim, a faint shade.
+        let knob = mix(self.view, white, 0.8);
+        let fills = [ink(0.1), ink(0.15), ink(0.3)];
+        ControlColors {
+            check_frame: ink(0.15),
+            check_fill: self.window,
+            checked_frame: accent,
+            checked_fill: accent,
+            mark: white,
+            groove: ink(0.15),
+            fill: accent,
+            handle: knob,
+            handle_middle: knob,
+            handle_frame: Some(mix(self.window, 0x000006, if self.dark { 0.35 } else { 0.1 })),
+            button: fills.map(|fill| [fill, fill]),
+            default_button: [accent, mix(accent, white, 0.1), mix(accent, 0x000006, 0.2)].map(|fill| [fill, fill]),
+            button_text: self.text,
+            default_button_text: white,
+            button_edge: None,
+            tabs: None,
+            field_line: None,
+            field_fill: Some(fills[0]),
         }
     }
 }
@@ -721,6 +777,16 @@ mod tests {
         assert_eq!((light.checked_fill, light.mark), (0x0067c0, 0xffffff));
         // ControlFillColorDefault, 6% white, over dark's #202020.
         assert_eq!(dark.button[0][0], 0x2d2d2d);
+    }
+
+    #[test]
+    fn gnome_controls() {
+        assert_eq!((gnome_accent(Some("teal")), gnome_accent(None)), (0x2190a4, 0x3584e4));
+        let light = adwaita(false).adwaita();
+        // Buttons: the text at 10% over the window, unframed; the suggested one in the accent.
+        assert_eq!(light.button[0], [mix(0xfafafb, 0x2e2e33, 0.1); 2]);
+        assert_eq!((light.default_button[0][0], light.default_button_text), (0x3584e4, 0xffffff));
+        assert_eq!(light.field_fill, Some(light.button[0][0]));
     }
 
     #[cfg(windows)]

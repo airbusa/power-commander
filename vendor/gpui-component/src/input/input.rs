@@ -721,14 +721,12 @@ impl RenderOnce for Input {
         };
         // PowerCommander patch: Windows' fields, see `NativeControls`: a button's
         // fill, the page's when focused, and a bottom line, the accent's when focused.
-        let field_line = cx
-            .try_global::<crate::NativeControls>()
-            .and_then(|native| native.field_line.map(|line| (line, native.checked_fill, native.button[0].0)))
-            .filter(|_| self.appearance && self.bordered);
-        let bg = match field_line {
+        let native = cx.try_global::<crate::NativeControls>().copied().filter(|_| self.appearance && self.bordered);
+        let field_line = native.and_then(|native| native.field_line.map(|line| (line, native.checked_fill)));
+        let bg = match native.and_then(|native| native.field_fill) {
             Some(_) if presentation.is_disabled() || presentation.is_code_editor() => bg,
-            Some(_) if focused => cx.theme().background,
-            Some((_, _, fill)) => fill,
+            Some(_) if focused && field_line.is_some() => cx.theme().background,
+            Some(fill) => fill,
             None => bg,
         };
         let prefix = self.prefix;
@@ -822,7 +820,7 @@ impl RenderOnce for Input {
                     })
             })
             // In place of the bottom border: the field clips what is on its border.
-            .when_some(field_line, |this, (line, accent, _)| {
+            .when_some(field_line, |this, (line, accent)| {
                 let (height, color) = if focused { (px(2.), accent) } else { (px(1.), line) };
                 let inset = cx.theme().radius;
                 this.relative()
