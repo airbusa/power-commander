@@ -25,6 +25,7 @@ pub mod pdf;
 pub mod properties;
 pub mod remote;
 pub mod rename;
+pub mod search;
 pub mod secrets;
 pub mod session;
 pub mod settings;
