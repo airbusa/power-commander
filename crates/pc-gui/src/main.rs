@@ -7,8 +7,9 @@ mod associations_dialog;
 mod attributes_dialog;
 mod compare_view;
 mod connections_dialog;
-#[cfg(any(target_os = "macos", windows))]
 mod context_menu;
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+mod desktop_menu;
 mod drag_drop;
 mod editor;
 #[cfg(target_os = "macos")]
@@ -348,6 +349,9 @@ struct Commander {
     vertical: bool,
     /// Quick View's viewer has the keys: no panel shows a cursor.
     quick_keys: bool,
+    /// The last right click was on an entry, not off them (the desktop's menu on Linux).
+    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
+    menu_on_row: bool,
 }
 
 struct Side {
@@ -466,6 +470,7 @@ impl Commander {
             sidebar,
             quick: None,
             quick_keys: false,
+            menu_on_row: false,
             thumbnails: views::Thumbnails::default(),
             app_icons: app_icons::AppIcons::default(),
             vertical: session.vertical,
@@ -1316,6 +1321,8 @@ impl Commander {
         let rows = self.with_file_menu(ix, rows, cx);
         #[cfg(windows)]
         let rows = self.with_shell_menu(ix, rows, cx);
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        let rows = self.with_desktop_menu(ix, rows, cx);
         let theme = cx.theme();
         let tab_list = self.tab_list.as_ref().filter(|(side, ..)| *side == ix);
         let ring = theme.ring;
@@ -1559,9 +1566,8 @@ impl Commander {
                     this.enter(window, cx);
                 }
             }))
-            // The menu is for the row right-clicked: Finder's (file_menu), Explorer's (context_menu).
+            // The menu is for the row right-clicked: Finder's (file_menu), Explorer's (context_menu), the desktop's (desktop_menu).
             .map(|el| {
-                #[cfg(any(target_os = "macos", windows))]
                 let el = el.on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, _, window, cx| this.right_click(ix, row, window, cx)),
@@ -1641,6 +1647,8 @@ impl Render for Commander {
                     Command::CopyTabToOtherPanel => this.copy_tab_to_other_panel(cx),
                     Command::ListTabs => this.show_tab_list(window, cx),
                     Command::NewFolder => this.new_folder(window, cx),
+                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                    Command::OpenTerminal => this.open_terminal(window, cx),
                     Command::CalculateOccupiedSpace => this.calculate_space(window, cx),
                     Command::ChangeAttributes => this.change_attributes(window, cx),
                     Command::Properties => this.show_properties(window, cx),
@@ -1789,6 +1797,8 @@ impl Render for Commander {
             );
         #[cfg(target_os = "macos")]
         let panels = self.file_menu_actions(panels, cx);
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        let panels = self.desktop_menu_actions(panels, cx);
         let main = v_flex()
             .flex_1()
             .min_w_0()

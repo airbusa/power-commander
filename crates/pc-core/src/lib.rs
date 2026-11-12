@@ -9,6 +9,8 @@ pub mod command;
 pub mod compare;
 pub mod connections;
 pub mod convert;
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub mod desktop;
 pub mod devices;
 pub mod ebook;
 pub mod edit;
@@ -870,6 +872,27 @@ impl Panel {
             .next()
             .map(|c| c.as_os_str().to_owned());
         self.go_to(self.path.clone(), first)
+    }
+
+    /// A new file here, empty or a copy of `template`; the cursor on it.
+    pub fn new_file(&mut self, name: &str, template: Option<&Path>) -> io::Result<()> {
+        self.on_disk()?;
+        let name = name.trim();
+        if name.is_empty() || name.contains(['/', std::path::MAIN_SEPARATOR]) || name == "." || name == PARENT {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{name}: not a name")));
+        }
+        let target = self.path.join(name);
+        let fs = self.fs();
+        if fs.metadata(&target).is_ok() {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{name} exists already")));
+        }
+        // A new file's times are now's, not the template's.
+        let mut file = fs.create(&target)?;
+        if let Some(template) = template {
+            io::copy(&mut fs::File::open(template)?, &mut file)?;
+        }
+        drop(file);
+        self.go_to(self.path.clone(), Some(OsString::from(name)))
     }
 
     /// Renames an entry here or on a server (`name` may be a path, as in

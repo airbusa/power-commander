@@ -15,6 +15,7 @@ impl Commander {
     /// Explorer select.
     pub(crate) fn right_click(&mut self, ix: usize, row: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.active = ix;
+        self.menu_on_row = true;
         window.focus(&self.focus, cx);
         let panel = self.panels[ix].tabs.current_mut();
         if panel.entries().get(row).is_some_and(|entry| !panel.is_marked(entry)) {

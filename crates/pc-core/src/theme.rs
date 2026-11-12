@@ -119,7 +119,7 @@ pub fn system(dark: bool) -> Palette {
 }
 
 /// One of GNOME's interface settings.
-fn gnome_setting(key: &str) -> Option<String> {
+pub(crate) fn gnome_setting(key: &str) -> Option<String> {
     let output = Command::new("gsettings").args(["get", "org.gnome.desktop.interface", key]).output().ok()?;
     let value = String::from_utf8(output.stdout).ok()?;
     Some(value.trim().trim_matches('\'').to_owned()).filter(|value| !value.is_empty())

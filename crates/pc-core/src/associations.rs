@@ -30,6 +30,18 @@ pub fn matches(masks: &str, name: &str) -> bool {
         .any(|mask| wildcard(&mask.to_lowercase().chars().collect::<Vec<_>>(), &name))
 }
 
+/// One glob, `*` and `?`; case aside unless `case_sensitive`.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub(crate) fn wildcard_match(mask: &str, name: &str, case_sensitive: bool) -> bool {
+    let chars = |text: &str| -> Vec<char> {
+        match case_sensitive {
+            true => text.chars().collect(),
+            false => text.to_lowercase().chars().collect(),
+        }
+    };
+    wildcard(&chars(mask), &chars(name))
+}
+
 fn wildcard(mask: &[char], name: &[char]) -> bool {
     // Where the last `*` was, and where in the name it began to match.
     let (mut m, mut n, mut star) = (0, 0, None);
