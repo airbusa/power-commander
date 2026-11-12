@@ -62,6 +62,7 @@ pub enum Command {
     #[serde(alias = "Tree")]
     SidebarTree,
     SidebarFavourites,
+    ToggleSidebar,
     ThumbnailView,
     QuickViewPanel,
     VerticalArrangement,
@@ -217,7 +218,12 @@ pub const MENUS: &[Menu] = &[
             cmd("Full", Full),
             Item::Submenu {
                 label: "Sidebar",
-                items: &[cmd("Folders", SidebarTree), cmd("Connections", SidebarFavourites)],
+                items: &[
+                    cmd("Show Sidebar", ToggleSidebar),
+                    SEP,
+                    cmd("Folders", SidebarTree),
+                    cmd("Connections", SidebarFavourites),
+                ],
             },
             cmd("Thumbnail View", ThumbnailView),
             cmd("Quick View Panel", QuickViewPanel),
@@ -298,6 +304,7 @@ const FULL_NAMES: &[(Command, &str)] = &[
     (Full, "Full View"),
     (SidebarTree, "Sidebar: Folders"),
     (SidebarFavourites, "Sidebar: Connections"),
+    (ToggleSidebar, "Sidebar: show or hide"),
     (AllFiles, "Show All Files"),
     (Programs, "Show Programs"),
     (AllWithExtension, "Show *.*"),

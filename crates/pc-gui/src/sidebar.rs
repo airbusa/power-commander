@@ -32,11 +32,17 @@ const SECTION: Pixels = px(30.);
 pub(crate) struct Sidebar {
     /// The section open; none while hidden.
     pub(crate) tab: Option<SidebarTab>,
+    /// The section last open, which Show Sidebar opens.
+    pub(crate) last: SidebarTab,
     pub(crate) width: f32,
     /// Times shown or hidden since the start, each a slide of its own.
     slides: usize,
     /// Hidden, the section it slides out with.
     closing: Option<SidebarTab>,
+    /// Section switches so far.
+    switches: usize,
+    /// The section sliding shut.
+    leaving: Option<SidebarTab>,
     /// How much of the window colour it paints over the desktop; none: solid.
     tint: Option<f32>,
     tree: FolderTree,
@@ -64,9 +70,12 @@ impl Sidebar {
     pub(crate) fn new(tab: Option<SidebarTab>, width: f32, hidden: bool, opacity: u8) -> Self {
         Sidebar {
             tab,
+            last: tab.unwrap_or(SidebarTab::Tree),
             width: if width > 0. { width } else { WIDTH },
             slides: 0,
             closing: None,
+            switches: 0,
+            leaving: None,
             tint: theme::sidebar_tint(opacity),
             tree: FolderTree::new(hidden),
             tree_scroll: UniformListScrollHandle::new(),
@@ -86,6 +95,7 @@ impl Sidebar {
         match command {
             Command::SidebarTree => self.tab == Some(SidebarTab::Tree),
             Command::SidebarFavourites => self.tab == Some(SidebarTab::Favourites),
+            Command::ToggleSidebar => self.tab.is_some(),
             _ => false,
         }
     }
@@ -106,10 +116,37 @@ impl Sidebar {
 }
 
 impl Commander {
+    /// Opens `which`; the open one slides shut.
+    fn open_section(&mut self, which: SidebarTab, cx: &mut Context<Self>) {
+        let Some(was) = self.sidebar.tab.filter(|&was| was != which) else {
+            return;
+        };
+        self.sidebar.tab = Some(which);
+        self.sidebar.last = which;
+        self.sidebar.switches += 1;
+        self.sidebar.leaving = Some(was);
+        let switch = self.sidebar.switches;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SLIDE).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.sidebar.switches == switch && this.sidebar.leaving.take().is_some() {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        self.reload_menus(cx);
+        cx.notify();
+    }
+
     /// Show > Sidebar: that tab, or hidden when it shows it already.
     pub(crate) fn toggle_sidebar(&mut self, tab: SidebarTab, window: &mut Window, cx: &mut Context<Self>) {
         let was = self.sidebar.tab;
+        if was.is_some_and(|was| was != tab) {
+            return self.open_section(tab, cx);
+        }
         self.sidebar.tab = (was != Some(tab)).then_some(tab);
+        self.sidebar.last = tab;
         // Shown or hidden, it slides; hidden, it is drawn until out.
         if was.is_some() != self.sidebar.tab.is_some() {
             self.sidebar.slides += 1;
@@ -255,21 +292,27 @@ impl Commander {
                 .child(div().flex_1().font_medium().child(name))
                 .children(buttons.into_iter().flatten())
                 .child(Icon::new(chevron).xsmall().text_color(theme.muted_foreground))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if this.sidebar.tab != Some(which) {
-                        this.sidebar.tab = Some(which);
-                        this.reload_menus(cx);
-                        cx.notify();
-                    }
-                }));
+                .on_click(cx.listener(move |this, _, _, cx| this.open_section(which, cx)));
             accordion = accordion.child(header);
-            if open {
+            let leaving = self.sidebar.leaving == Some(which) && self.sidebar.tab.is_some();
+            if open || leaving {
                 let content = match which {
                     SidebarTab::Tree => self.render_tree(cx).into_any_element(),
                     SidebarTab::Favourites => self.render_favourites(cx).into_any_element(),
                     SidebarTab::Devices => self.render_devices(cx).into_any_element(),
                 };
-                accordion = accordion.child(v_flex().flex_1().min_h_0().pb_1().child(content));
+                let content = v_flex().flex_1().min_h_0().overflow_hidden().pb_1().child(content);
+                accordion = match self.sidebar.leaving.is_some() {
+                    true => {
+                        let id = (if open { "sidebar-opening" } else { "sidebar-closing" }, self.sidebar.switches);
+                        let slide = Animation::new(SLIDE).with_easing(ease_in_out);
+                        accordion.child(content.with_animation(id, slide, move |mut el, delta| {
+                            el.style().flex_grow = Some(if open { delta } else { 1. - delta });
+                            el
+                        }))
+                    }
+                    false => accordion.child(content),
+                };
             }
         }
         let theme = cx.theme();

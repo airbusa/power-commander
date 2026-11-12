@@ -1682,6 +1682,10 @@ impl Render for Commander {
                         cx.notify()
                     }
                     Command::SidebarTree => this.toggle_sidebar(SidebarTab::Tree, window, cx),
+                    Command::ToggleSidebar => {
+                        let tab = this.sidebar.tab.unwrap_or(this.sidebar.last);
+                        this.toggle_sidebar(tab, window, cx)
+                    }
                     Command::SidebarFavourites => {
                         this.toggle_sidebar(SidebarTab::Favourites, window, cx)
                     }
