@@ -112,7 +112,7 @@ pub fn system(dark: bool) -> Palette {
         }
         // GTK's apps write in the desktop's font.
         false => Palette {
-            font: on_gnome().then(gnome_font).flatten(),
+            font: desktop_font(),
             ..adwaita(dark)
         },
     }
@@ -141,6 +141,15 @@ fn font_family(pango: &str) -> String {
 pub fn on_gnome() -> bool {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     desktop.split(':').any(|name| name == "GNOME")
+}
+
+/// GNOME's or Xfce's interface font.
+fn desktop_font() -> Option<String> {
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    if std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().split(':').any(|name| name == "XFCE") {
+        return crate::desktop::xfce_setting("FontName").map(|name| font_family(&name));
+    }
+    on_gnome().then(gnome_font).flatten()
 }
 
 fn on_kde() -> bool {
@@ -199,6 +208,9 @@ fn find_icon(bases: &[PathBuf], theme: &str, name: &str, depth: u8) -> Option<Pa
     parents.find_map(|parent| find_icon(bases, parent, name, depth - 1))
 }
 
+/// Plasma's font where kdeglobals names none.
+const PLASMA_FONT: &str = "Noto Sans";
+
 /// The user's KDE colour scheme when it is as dark as asked; else Breeze,
 /// with the scheme's accent and font.
 fn kde_or_breeze(kdeglobals: Option<&str>, dark: bool) -> Palette {
@@ -252,7 +264,7 @@ fn kde(kdeglobals: &str) -> Option<Palette> {
         selection: color("Colors:Selection", "BackgroundNormal")?,
         selection_text: color("Colors:Selection", "ForegroundNormal")?,
         marked: color("Colors:View", "ForegroundNegative").unwrap_or(0xda4453),
-        font: font.filter(|font| !font.is_empty()).map(str::to_owned),
+        font: Some(font.filter(|font| !font.is_empty()).unwrap_or(PLASMA_FONT).to_owned()),
     })
 }
 
@@ -270,7 +282,7 @@ fn breeze(dark: bool) -> Palette {
             selection: 0x3daee9,
             selection_text: 0xfcfcfc,
             marked: 0xda4453,
-            font: None,
+            font: Some(PLASMA_FONT.into()),
         },
         false => Palette {
             dark,
@@ -283,7 +295,7 @@ fn breeze(dark: bool) -> Palette {
             selection: 0x3daee9,
             selection_text: 0xffffff,
             marked: 0xda4453,
-            font: None,
+            font: Some(PLASMA_FONT.into()),
         },
     }
 }

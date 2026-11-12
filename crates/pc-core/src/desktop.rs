@@ -824,7 +824,7 @@ fn icon_theme() -> String {
             let on = |name: &str| desktops.iter().any(|d| d == name);
             let found = match () {
                 _ if on("kde") => Some(kde_setting("Icons", "Theme").unwrap_or_else(|| "breeze".into())),
-                _ if on("xfce") => xfce_icon_theme(),
+                _ if on("xfce") => xfce_setting("IconThemeName"),
                 _ => crate::theme::gnome_setting("icon-theme"),
             };
             found.unwrap_or_else(|| "hicolor".into())
@@ -838,12 +838,14 @@ fn kde_setting(group: &str, key: &str) -> Option<String> {
     read_desktop(&path)?.get(group)?.get(key).cloned().filter(|v| !v.is_empty())
 }
 
-fn xfce_icon_theme() -> Option<String> {
-    let path = dirs::config_dir()?.join("xfce4/xfconf/xfce-perchannel-xml/xsettings.xml");
-    let text = fs::read_to_string(path).ok()?;
-    let doc = roxmltree::Document::parse(&text).ok()?;
-    let node = doc.descendants().find(|n| n.attribute("name") == Some("IconThemeName"))?;
-    node.attribute("value").map(str::to_owned)
+/// One of Xfce's look settings (xsettings): the user's, else the distribution's defaults.
+pub(crate) fn xfce_setting(name: &str) -> Option<String> {
+    config_dirs().iter().find_map(|dir| {
+        let text = fs::read_to_string(dir.join("xfce4/xfconf/xfce-perchannel-xml/xsettings.xml")).ok()?;
+        let doc = roxmltree::Document::parse(&text).ok()?;
+        let node = doc.descendants().find(|n| n.attribute("name") == Some(name))?;
+        node.attribute("value").filter(|v| !v.is_empty()).map(str::to_owned)
+    })
 }
 
 // --- Files every desktop shares --------------------------------------------
