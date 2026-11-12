@@ -22,7 +22,8 @@ check them against `SHA256SUMS` (GitHub's published digests):
 
 Each folder keeps its package's `LICENSE` (MIT, the builds) and `licenses/`
 (PDFium's BSD-3-Clause and those of the libraries in it); releases ship them
-with the library, in `pdfium/` beside the executable. The macOS app has the
+with the library, in `pdfium/` beside the executable
+(`packaging/linux/package.sh`). The macOS app has the
 library in `Contents/Frameworks`, signed with the app, and the licenses in
 `Contents/Resources/licenses` (`packaging/macos/bundle.sh`); it needs macOS
 13, as this library does.

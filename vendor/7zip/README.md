@@ -22,7 +22,8 @@ https://github.com/ip7z/7zip/releases/tag/26.06 and check them against
 Each folder gets its package's `License.txt` (LGPL 2.1+, BSD, unRAR
 restriction).
 
-Releases copy the platform's folder to `7zip/` beside the executable, with
+Releases copy the platform's folder to `7zip/` beside the executable
+(`packaging/linux/package.sh`), with
 its `License.txt`, and attach `7z2606-src.tar.xz` (also in `SHA256SUMS`),
 the source the LGPL asks us to offer. The macOS app has `7zz` beside the
 executable, in `Contents/MacOS`, signed with the app, and the license in
