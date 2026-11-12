@@ -367,7 +367,7 @@ fn windows(dark: bool) -> Palette {
 
 /// macOS's, with its default accent.
 fn mac(dark: bool) -> Palette {
-    // shortcut: the default blue accent; read the user's when a Mac can test it.
+    // The default blue accent; pc-gui puts the user's in.
     match dark {
         true => Palette {
             dark,

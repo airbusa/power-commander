@@ -1,6 +1,6 @@
 use gpui_kit::component::scroll::ScrollbarMode;
 use gpui_kit::component::{Theme as KitTheme, ThemeMode};
-use gpui_kit::{App, Hsla, rgb};
+use gpui_kit::{App, Hsla, hsla, rgb};
 use pc_core::theme::Palette;
 
 #[derive(Clone, Copy)]
@@ -8,6 +8,11 @@ pub struct PanelColors {
     /// The active panel's cursor: its fill and its dotted frame.
     pub cursor: Hsla,
     pub cursor_frame: Hsla,
+    /// While another window is in front.
+    pub cursor_inactive: Hsla,
+    /// macOS: the cursor's names, on the accent.
+    pub cursor_text: Option<Hsla>,
+    pub sidebar_selection: Hsla,
     pub alternate_row: Hsla,
     pub header_border: Hsla,
     pub active_path: Hsla,
@@ -62,9 +67,24 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         kit.tab_foreground = color(palette.dim);
         kit.tab_active_foreground = color(palette.text);
     });
+    // macOS's cursor is the accent, filled, as Finder's; elsewhere a tint, framed.
+    let filled = cfg!(target_os = "macos");
     PanelColors {
-        cursor: color(list.selected_row),
-        cursor_frame: color(palette.text),
+        cursor: color(if filled { palette.selection } else { list.selected_row }),
+        cursor_frame: if filled { gpui_kit::transparent_black() } else { color(palette.text) },
+        // AppKit's unemphasized selection.
+        cursor_inactive: match (filled, palette.dark) {
+            (false, _) => color(list.selected_row),
+            (true, true) => color(0x464646),
+            (true, false) => color(0xdcdcdc),
+        },
+        cursor_text: filled.then(|| color(palette.selection_text)),
+        // AppKit's sidebar selection: faint white or black over the blur.
+        sidebar_selection: match (filled, palette.dark) {
+            (false, _) => color(list.selected_row),
+            (true, true) => hsla(0., 0., 1., 0.12),
+            (true, false) => hsla(0., 0., 0., 0.1),
+        },
         alternate_row: color(list.alternate_row),
         header_border: color(list.header_border),
         active_path: color(list.active_path),
@@ -73,4 +93,22 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         window: color(palette.window),
         marked: color(palette.marked),
     }
+}
+
+/// macOS: the selected rows' colour, the user's accent, as Finder has it.
+#[cfg(target_os = "macos")]
+pub fn mac_selection(dark: bool) -> Option<u32> {
+    use std::cell::Cell;
+
+    use block2::StackBlock;
+    use objc2_app_kit::{NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSColor, NSColorSpace};
+    let name = unsafe { if dark { NSAppearanceNameDarkAqua } else { NSAppearanceNameAqua } };
+    let rgb = Cell::new(None);
+    let resolve = StackBlock::new(|| {
+        let color = NSColor::selectedContentBackgroundColor().colorUsingColorSpace(&NSColorSpace::sRGBColorSpace());
+        rgb.set(color.map(|color| [color.redComponent(), color.greenComponent(), color.blueComponent()]));
+    });
+    NSAppearance::appearanceNamed(name)?.performAsCurrentDrawingAppearance(&resolve);
+    let [r, g, b] = rgb.get()?.map(|channel| (channel * 255.).round() as u32);
+    Some(r << 16 | g << 8 | b)
 }

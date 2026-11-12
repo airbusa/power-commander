@@ -367,6 +367,8 @@ struct Commander {
     vertical: bool,
     /// Quick View's viewer has the keys: no panel shows a cursor.
     quick_keys: bool,
+    /// macOS: the cursor turns grey while another window is in front, as Finder's.
+    window_active: bool,
     /// The last right click was on an entry, not off them (the desktop's menu on Linux).
     #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
     menu_on_row: bool,
@@ -448,6 +450,7 @@ impl Commander {
             if window.is_window_active() {
                 this.reread_local(cx);
             }
+            cx.notify();
         })
         .detach();
         let command = cx.new(|cx| InputState::new(window, cx));
@@ -488,6 +491,7 @@ impl Commander {
             sidebar,
             quick: None,
             quick_keys: false,
+            window_active: true,
             menu_on_row: false,
             thumbnails: views::Thumbnails::default(),
             app_icons: app_icons::AppIcons::default(),
@@ -1568,8 +1572,10 @@ impl Commander {
             .border_color(gpui_kit::transparent_black())
             .when(striped && row % 2 == 1, |el| el.bg(self.colors.alternate_row))
             .when(cursor, |el| {
-                el.bg(self.colors.cursor).border_dashed().border_color(self.colors.cursor_frame)
+                let fill = if self.window_active { self.colors.cursor } else { self.colors.cursor_inactive };
+                el.bg(fill).border_dashed().border_color(self.colors.cursor_frame)
             })
+            .when_some(self.colors.cursor_text.filter(|_| cursor && self.window_active), |el, text| el.text_color(text))
             .when(marked, |el| el.text_color(self.colors.marked))
             // On press, as Total Commander: the panel turns active with the cursor already here.
             .on_mouse_down(
@@ -1614,6 +1620,7 @@ impl Render for Commander {
         #[cfg(target_os = "macos")]
         menus::show(window, menus::main_menus(self.settings.appearance, &|command| self.checked(command)), cx);
         self.quick_keys = self.quick_focused(window, cx);
+        self.window_active = window.is_window_active();
         self.trim_thumbnails(window);
         let vertical = self.vertical;
         // Keeps panel keys out of the menu bar.
@@ -1925,7 +1932,10 @@ fn palette(settings: &Settings, window: &Window) -> theme::Palette {
         Appearance::Light => false,
         Appearance::Dark => true,
     };
-    theme::system(dark)
+    let palette = theme::system(dark);
+    #[cfg(target_os = "macos")]
+    let palette = theme::Palette { selection: appearance::mac_selection(dark).unwrap_or(palette.selection), ..palette };
+    palette
 }
 
 /// Finder's tag dots: overlapping, the first on the right, three at most.
