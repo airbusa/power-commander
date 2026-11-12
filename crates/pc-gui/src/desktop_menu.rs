@@ -97,7 +97,7 @@ impl Commander {
             },
             archives: !folder && chosen.iter().all(|e| !e.is_dir && archive::is_archive(&e.name)),
             apps: if local && !folder { desktop::open_with(&paths) } else { Vec::new() },
-            actions: if local { desktop::actions(&paths) } else { Vec::new() },
+            actions: if local { desktop::actions(&paths, folder) } else { Vec::new() },
             templates: if folder && !panel.in_archive() { desktop::templates() } else { Vec::new() },
         }
     }

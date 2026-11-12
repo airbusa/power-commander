@@ -2,7 +2,8 @@
 //! right-click menu, read from the files every desktop shares: the
 //! applications that open a type (shared-mime-info, .desktop files,
 //! mimeapps.list), the desktop's own actions (KDE's service menus,
-//! Nautilus's scripts, Thunar's custom actions), the templates for new
+//! Nautilus's, Nemo's and Caja's scripts, Thunar's custom actions, Nemo's
+//! actions, FileManager-Actions' for Caja), the templates for new
 //! files, the terminal, and the desktop's app chooser.
 
 use std::collections::{HashMap, HashSet};
@@ -50,10 +51,14 @@ pub struct Action {
 enum Run {
     /// A desktop entry's Exec line (KDE's service menus).
     Exec { line: String, terminal: bool, file: PathBuf },
-    /// One of Nautilus's scripts.
-    Script(PathBuf),
+    /// A Nautilus, Nemo or Caja script, with that file manager's variables (`NEMO`).
+    Script(PathBuf, &'static str),
     /// A Thunar custom action's command line.
     Thunar(String),
+    /// A Nemo action's: its folder for `<program>`, for the folder's menu or the files'.
+    Nemo { line: String, dir: PathBuf, terminal: bool, separator: Option<String>, background: bool },
+    /// A FileManager-Actions profile's, and its working folder.
+    FileManager { line: String, terminal: bool, path: Option<String> },
 }
 
 impl Action {
@@ -61,18 +66,38 @@ impl Action {
     pub fn run(&self, paths: &[PathBuf], folder: &Path) -> io::Result<()> {
         match &self.run {
             Run::Exec { line, terminal, file } => launch(line, *terminal, &self.name, file, paths, folder),
-            Run::Script(script) => {
+            Run::Script(script, manager) => {
                 let joined = |each: &dyn Fn(&PathBuf) -> String| paths.iter().map(|p| each(p) + "\n").collect::<String>();
                 // As Nautilus: names relative to the folder, the rest in its variables.
                 let names = paths.iter().map(|path| path.strip_prefix(folder).ok().filter(|p| !p.as_os_str().is_empty()).unwrap_or(path.as_path()));
                 spawn(
                     Command::new(script)
                         .args(names)
-                        .env("NAUTILUS_SCRIPT_SELECTED_FILE_PATHS", joined(&|p| p.to_string_lossy().into_owned()))
-                        .env("NAUTILUS_SCRIPT_SELECTED_URIS", joined(&|p| file_uri(p)))
-                        .env("NAUTILUS_SCRIPT_CURRENT_URI", file_uri(folder))
+                        .env(format!("{manager}_SCRIPT_SELECTED_FILE_PATHS"), joined(&|p| p.to_string_lossy().into_owned()))
+                        .env(format!("{manager}_SCRIPT_SELECTED_URIS"), joined(&|p| file_uri(p)))
+                        .env(format!("{manager}_SCRIPT_CURRENT_URI"), file_uri(folder))
                         .current_dir(folder),
                 )
+            }
+            Run::Nemo { line, dir, terminal, separator, background } => {
+                // `<program …>`: a program of the action's folder.
+                let line = match line.strip_prefix('<').and_then(|l| l.strip_suffix('>')) {
+                    Some(own) => format!("{}/{own}", dir.display()),
+                    None => line.clone(),
+                };
+                let chosen = if *background { &[][..] } else { paths };
+                let argv = command_line(&line, |code| nemo_value(code, chosen, folder, separator.as_deref()));
+                start(argv, *terminal, &self.name, folder)
+            }
+            Run::FileManager { line, terminal, path } => {
+                // A singular code first (%f, not %F) runs it once per file.
+                let first = codes_in(line).find(|c| "bdfmuwxBDFMUWX".contains(*c));
+                if first.is_some_and(|c| c.is_lowercase()) && paths.len() > 1 {
+                    return paths.iter().try_for_each(|p| self.run(std::slice::from_ref(p), folder));
+                }
+                let argv = command_line(line, |code| fma_value(code, paths));
+                let dir = path.as_deref().map(|p| PathBuf::from(codes(p, |code| fma_value(code, paths).map(|v| v.join(" ")))));
+                start(argv, *terminal, &self.name, dir.as_deref().filter(|d| d.is_dir()).unwrap_or(folder))
             }
             Run::Thunar(line) => {
                 let first = paths.first().map(PathBuf::as_path).unwrap_or(folder);
@@ -164,23 +189,37 @@ pub fn open_with(chosen: &[(PathBuf, bool)]) -> Vec<App> {
     ids.iter().filter_map(|id| app(index.get(id.as_str())?)).collect()
 }
 
-/// The desktop's own actions for `chosen` (path, is a folder): KDE's
-/// service menus, GNOME's Nautilus scripts or Xfce's Thunar actions, by
-/// the desktop running; all of them on others.
-pub fn actions(chosen: &[(PathBuf, bool)]) -> Vec<Action> {
+/// The desktop's own actions for `chosen` (path, is a folder), or for the
+/// folder shown when `background`: KDE's service menus, GNOME's Nautilus
+/// scripts, Xfce's Thunar actions, Cinnamon's Nemo actions and scripts,
+/// MATE's Caja scripts and FileManager-Actions, by the desktop running;
+/// all of them on others.
+pub fn actions(chosen: &[(PathBuf, bool)], background: bool) -> Vec<Action> {
     let items: Vec<Item> = chosen.iter().map(|(path, is_dir)| Item::new(path, *is_dir)).collect();
+    let folder = match (background, chosen.first()) {
+        (true, Some((path, _))) => path.clone(),
+        (_, first) => first.and_then(|(path, _)| path.parent()).map(Path::to_path_buf).unwrap_or_default(),
+    };
     let desktops = desktops();
     let on = |names: &[&str]| desktops.iter().any(|d| names.contains(&d.as_str()));
-    let known = on(&["kde", "gnome", "xfce"]);
+    let known = on(&["kde", "gnome", "xfce", "x-cinnamon", "mate"]);
     let mut found = Vec::new();
     if on(&["kde"]) || !known {
         service_menus(&items, &mut found);
     }
     if on(&["gnome"]) || !known {
-        nautilus_scripts(&mut found);
+        scripts(dirs::data_dir().map(|d| d.join("nautilus/scripts")), "NAUTILUS", &mut found);
     }
     if on(&["xfce"]) || !known {
         thunar_actions(&items, &mut found);
+    }
+    if on(&["x-cinnamon"]) || !known {
+        nemo_actions(&items, background, &folder, &mut found);
+        scripts(dirs::data_dir().map(|d| d.join("nemo/scripts")), "NEMO", &mut found);
+    }
+    if on(&["mate"]) || !known {
+        file_manager_actions(&items, background, &folder, &mut found);
+        scripts(dirs::config_dir().map(|d| d.join("caja/scripts")), "CAJA", &mut found);
     }
     found
 }
@@ -250,49 +289,45 @@ fn launch(line: &str, terminal: bool, name: &str, file: &Path, paths: &[PathBuf]
         return paths.iter().try_for_each(|path| launch(line, terminal, name, file, std::slice::from_ref(path), folder));
     }
     let takes_files = ["%f", "%F", "%u", "%U"].iter().any(|code| has(code));
-    let single = |code: char, path: Option<&PathBuf>| match code {
-        'f' => path.map(|p| p.to_string_lossy().into_owned()),
-        'u' => path.map(|p| file_uri(p)),
-        'c' => Some(name.to_owned()),
-        'k' => Some(file.to_string_lossy().into_owned()),
-        '%' => Some("%".to_owned()),
-        // %i and the deprecated ones go.
-        _ => Some(String::new()),
+    let line = if takes_files { line.to_owned() } else { format!("{line} %F") };
+    let argv = command_line(&line, |code| {
+        Some(match code {
+            'F' => paths.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
+            'U' => paths.iter().map(|p| file_uri(p)).collect(),
+            'f' => paths.first().map(|p| p.to_string_lossy().into_owned()).into_iter().collect(),
+            'u' => paths.first().map(|p| file_uri(p)).into_iter().collect(),
+            'c' => vec![name.to_owned()],
+            'k' => vec![file.to_string_lossy().into_owned()],
+            '%' => vec!["%".to_owned()],
+            // %i and the deprecated ones go.
+            _ => Vec::new(),
+        })
+    });
+    start(argv, terminal, name, folder)
+}
+
+/// A command line's arguments, its `%x` codes replaced by `value`'s: a
+/// code alone gives an argument per value, one inside an argument its
+/// values joined. A line using the shell runs in `sh`, each value quoted.
+fn command_line(line: &str, value: impl Fn(char) -> Option<Vec<String>>) -> Vec<String> {
+    let Some(args) = split_exec(line) else {
+        let script = codes(line, |code| value(code).map(|v| v.iter().map(|v| quote(v)).collect::<Vec<_>>().join(" ")));
+        return vec!["sh".into(), "-c".into(), script];
     };
-    let mut argv: Vec<String> = match split_exec(line) {
-        Some(args) => {
-            let mut argv = Vec::new();
-            for arg in args {
-                match arg.as_str() {
-                    "%F" => argv.extend(paths.iter().map(|p| p.to_string_lossy().into_owned())),
-                    "%U" => argv.extend(paths.iter().map(|p| file_uri(p))),
-                    _ => {
-                        let expanded = codes(&arg, |code| single(code, paths.first()));
-                        // A lone code with nothing to stand for leaves no empty argument.
-                        if !expanded.is_empty() || !arg.starts_with('%') {
-                            argv.push(expanded);
-                        }
-                    }
-                }
-            }
-            if !takes_files {
-                argv.extend(paths.iter().map(|p| p.to_string_lossy().into_owned()));
-            }
-            argv
-        }
-        None => {
-            let all = |each: &dyn Fn(&PathBuf) -> String| paths.iter().map(|p| quote(&each(p))).collect::<Vec<_>>().join(" ");
-            let mut script = codes(line, |code| match code {
-                'F' => Some(all(&|p| p.to_string_lossy().into_owned())),
-                'U' => Some(all(&|p| file_uri(p))),
-                _ => single(code, paths.first()).map(|value| if value.is_empty() { value } else { quote(&value) }),
-            });
-            if !takes_files {
-                script = format!("{script} {}", all(&|p| p.to_string_lossy().into_owned()));
-            }
-            vec!["sh".into(), "-c".into(), script]
-        }
+    let lone = |arg: &str| match arg.as_bytes() {
+        [b'%', code] if *code != b'%' => value(*code as char),
+        _ => None,
     };
+    args.iter().flat_map(|arg| lone(arg).unwrap_or_else(|| vec![codes(arg, |code| value(code).map(|v| v.join(" ")))])).collect()
+}
+
+/// The `%x` codes a line has, in order.
+fn codes_in(line: &str) -> impl Iterator<Item = char> + '_ {
+    line.split('%').skip(1).filter_map(|after| after.chars().next())
+}
+
+/// Runs `argv` from `folder`, in the desktop's terminal when asked.
+fn start(mut argv: Vec<String>, terminal: bool, name: &str, folder: &Path) -> io::Result<()> {
     if argv.is_empty() {
         return Err(io::Error::other(format!("{name}: nothing to run")));
     }
@@ -387,7 +422,7 @@ fn terminal() -> Option<(OsString, &'static str, Option<&'static str>)> {
     ];
     let desktops = desktops();
     let on = |name: &str| desktops.iter().any(|d| d == name);
-    // The desktop's own first: KDE's setting, Xfce's and GNOME's usual ones.
+    // The desktop's own first: KDE's, Cinnamon's and MATE's setting, Xfce's and GNOME's usual ones.
     let mut wanted: Vec<String> = std::env::var("TERMINAL").into_iter().collect();
     if on("kde") {
         wanted.push(kde_setting("General", "TerminalApplication").unwrap_or_else(|| "konsole".into()));
@@ -397,6 +432,12 @@ fn terminal() -> Option<(OsString, &'static str, Option<&'static str>)> {
     }
     if on("gnome") {
         wanted.extend(["ptyxis", "gnome-terminal", "kgx"].map(String::from));
+    }
+    if on("x-cinnamon") {
+        wanted.extend(crate::theme::gsetting("org.cinnamon.desktop.default-applications.terminal", "exec"));
+    }
+    if on("mate") {
+        wanted.extend(crate::theme::gsetting("org.mate.applications-terminal", "exec"));
     }
     wanted.extend(KNOWN.iter().map(|(name, ..)| name.to_string()));
     wanted.into_iter().find_map(|name| {
@@ -577,9 +618,10 @@ fn bus_name_taken(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Nautilus's scripts: every program in its scripts folder, a subfolder's under its name.
-fn nautilus_scripts(found: &mut Vec<Action>) {
-    let Some(root) = dirs::data_dir().map(|dir| dir.join("nautilus/scripts")) else { return };
+/// Nautilus's, Nemo's or Caja's scripts: every program in its scripts
+/// folder, a subfolder's under its name.
+fn scripts(root: Option<PathBuf>, manager: &'static str, found: &mut Vec<Action>) {
+    let Some(root) = root else { return };
     let mut scripts: Vec<(PathBuf, String)> = Vec::new();
     for entry in fs::read_dir(&root).into_iter().flatten().flatten() {
         let path = entry.path();
@@ -600,7 +642,7 @@ fn nautilus_scripts(found: &mut Vec<Action>) {
         icon: None,
         submenu: Some("Scripts".into()),
         top_level: true,
-        run: Run::Script(path),
+        run: Run::Script(path, manager),
     }));
 }
 
@@ -653,6 +695,291 @@ fn tagged<'a, 'i>(node: roxmltree::Node<'a, 'i>, tag: &'static str) -> impl Iter
 
 fn lang<'a>(node: &roxmltree::Node<'a, '_>) -> Option<&'a str> {
     node.attribute(("http://www.w3.org/XML/1998/namespace", "lang"))
+}
+
+/// Cinnamon's Nemo actions (`.nemo_action`), the user's hiding the
+/// system's of a name, in their files' order, as Nemo lists them.
+fn nemo_actions(items: &[Item], background: bool, folder: &Path, found: &mut Vec<Action>) {
+    let mut files: Vec<(OsString, PathBuf)> = Vec::new();
+    for dir in data_dirs() {
+        for entry in fs::read_dir(dir.join("nemo/actions")).into_iter().flatten().flatten() {
+            let name = entry.file_name();
+            if entry.path().extension().is_some_and(|e| e == "nemo_action") && !files.iter().any(|(known, _)| *known == name) {
+                files.push((name, entry.path()));
+            }
+        }
+    }
+    files.sort();
+    // On the folder's menu nothing is selected.
+    let chosen = if background { &[][..] } else { items };
+    let paths: Vec<PathBuf> = chosen.iter().map(|item| folder.join(&item.name)).collect();
+    for (_, file) in files {
+        let dir = file.parent().unwrap_or(folder).to_owned();
+        let Some(groups) = read_desktop(&file) else { continue };
+        let Some(entry) = groups.get("Nemo Action") else { continue };
+        let (Some(name), Some(line)) = (entry.get("Name"), entry.get("Exec")) else { continue };
+        if entry.get("Active").is_some_and(|v| v == "false") || !nemo_applies(entry, chosen, folder, &dir) {
+            continue;
+        }
+        // Its codes filled in, its mnemonic gone: "Mount %N", "Change _Background".
+        let label = codes(name, |code| nemo_value(code, &paths, folder, None).map(|v| v.join(" ")));
+        found.push(Action {
+            name: label.replace("__", "\0").replace('_', "").replace('\0', "_"),
+            icon: entry.get("Icon-Name").and_then(|name| icon(name)),
+            submenu: None,
+            top_level: true,
+            run: Run::Nemo {
+                line: line.clone(),
+                dir,
+                terminal: entry.get("Terminal").is_some_and(|v| v == "true"),
+                separator: entry.get("Separator").cloned(),
+                background,
+            },
+        });
+    }
+}
+
+/// A Nemo action's conditions: how many, the types, programs, the scheme and Nemo's others.
+fn nemo_applies(entry: &HashMap<String, String>, items: &[Item], folder: &Path, dir: &Path) -> bool {
+    let list = |key: &str| entry.get(key).map(|v| split_list(v).map(str::to_owned).collect::<Vec<_>>()).unwrap_or_default();
+    let count = items.len();
+    let selection = entry.get("Selection").map(|s| s.trim().to_lowercase()).unwrap_or_default();
+    let count_fits = match selection.as_str() {
+        "s" => count == 1,
+        "m" => count > 1,
+        "any" => true,
+        "notnone" => count > 0,
+        "none" => count == 0,
+        number => number.parse() == Ok(count),
+    };
+    let present = |program: &str| match program.starts_with('/') {
+        true => Path::new(program).exists(),
+        false => on_path(program).is_some(),
+    };
+    // `!program`: one that must be missing.
+    let programs = list("Dependencies").iter().all(|program| match program.strip_prefix('!') {
+        Some(program) => !present(program),
+        None => present(program),
+    });
+    let conditions = list("Conditions").iter().all(|condition| {
+        let mut words = condition.split_whitespace();
+        match words.next() {
+            Some("desktop") => dirs::desktop_dir().is_some_and(|desktop| desktop == folder),
+            Some("dbus") => words.next().is_some_and(bus_name_taken),
+            Some("gsettings") => gsettings_condition(&words.collect::<Vec<_>>()),
+            Some("exec") => {
+                let program = condition["exec".len()..].trim();
+                let program = match program.strip_prefix('<').and_then(|p| p.strip_suffix('>')) {
+                    Some(own) => format!("{}/{own}", dir.display()),
+                    None => program.to_owned(),
+                };
+                let quiet = |command: &mut Command| command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+                quiet(Command::new("sh").arg("-c").arg(program).current_dir(folder)).is_ok_and(|s| s.success())
+            }
+            // shortcut: "removable" (on a removable drive) is never met; ask udisks when an action needs it.
+            _ => false,
+        }
+    });
+    let extensions: Vec<String> = list("Extensions").iter().map(|e| e.to_lowercase()).collect();
+    let types = list("Mimetypes");
+    let type_fits = |item: &Item| {
+        let name = item.name.to_lowercase();
+        let by_name = extensions.iter().any(|ext| match ext.as_str() {
+            "any" => true,
+            "dir" => item.is_dir,
+            "nodirs" => !item.is_dir,
+            "none" => !item.is_dir && !name.contains('.'),
+            ext => !item.is_dir && name.ends_with(&format!(".{ext}")),
+        });
+        by_name || types.iter().any(|t| item.is(t))
+    };
+    count_fits
+        && programs
+        && entry.get("UriScheme").is_none_or(|scheme| scheme == "file")
+        && conditions
+        && items.iter().all(type_fits)
+}
+
+/// Nemo's `gsettings <schema> <key>` (a true boolean) and `gsettings <schema> <key> <type> <eq|ne|gt|lt> <value>`.
+fn gsettings_condition(words: &[&str]) -> bool {
+    use std::cmp::Ordering::*;
+    match words {
+        [schema, key] => crate::theme::gsetting(schema, key).as_deref() == Some("true"),
+        [schema, key, _, op, wanted] => {
+            let Some(value) = crate::theme::gsetting(schema, key) else { return false };
+            let wanted = wanted.trim_matches('\'');
+            let order = match (value.parse::<f64>(), wanted.parse::<f64>()) {
+                (Ok(a), Ok(b)) => a.partial_cmp(&b),
+                _ => Some(value.as_str().cmp(wanted)),
+            };
+            match *op {
+                "eq" => order == Some(Equal),
+                "ne" => order != Some(Equal),
+                "gt" => order == Some(Greater),
+                "lt" => order == Some(Less),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// A Nemo code's values for the chosen `paths` in `folder`; Separator joins a list into one.
+fn nemo_value(code: char, paths: &[PathBuf], folder: &Path, separator: Option<&str>) -> Option<Vec<String>> {
+    let first = paths.first().map(PathBuf::as_path).unwrap_or(folder);
+    let list = |values: Vec<String>| match separator {
+        Some(separator) => vec![values.join(separator)],
+        None => values,
+    };
+    Some(match code {
+        'F' => list(paths.iter().map(|p| p.to_string_lossy().into_owned()).collect()),
+        'U' => list(paths.iter().map(|p| file_uri(p)).collect()),
+        'P' => vec![folder.to_string_lossy().into_owned()],
+        'f' | 'N' => vec![base_name(first)],
+        'p' => vec![base_name(folder)],
+        'e' => vec![first.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()],
+        '%' => vec!["%".into()],
+        // shortcut: %D (the drive's device) and %X (the window) give nothing; fill them when an action needs them.
+        'D' | 'X' => Vec::new(),
+        _ => return None,
+    })
+}
+
+fn base_name(path: &Path) -> String {
+    path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned()
+}
+
+/// FileManager-Actions (`file-manager/actions`, Caja's caja-actions): each
+/// action by its first profile that fits, a menu's in its submenu, by name.
+fn file_manager_actions(items: &[Item], background: bool, folder: &Path, found: &mut Vec<Action>) {
+    let mut entries: Vec<(String, Groups)> = Vec::new();
+    for dir in data_dirs() {
+        for file in desktop_files(&dir.join("file-manager/actions"), 0) {
+            let id = file.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+            if !entries.iter().any(|(known, _)| *known == id)
+                && let Some(groups) = read_desktop(&file)
+            {
+                entries.push((id, groups));
+            }
+        }
+    }
+    let flag = |entry: &HashMap<String, String>, key: &str, default: bool| entry.get(key).map_or(default, |v| v == "true");
+    let shown = |entry: &HashMap<String, String>| flag(entry, "Enabled", true) && !flag(entry, "Hidden", false) && fma_applies(entry, items, folder);
+    // shortcut: one level of menus; a menu in a menu puts its actions in the outer one's.
+    let mut submenus: HashMap<String, String> = HashMap::new();
+    for (_, groups) in &entries {
+        let Some(entry) = groups.get("Desktop Entry").filter(|e| e.get("Type").is_some_and(|t| t == "Menu") && shown(e)) else { continue };
+        let (Some(name), Some(ids)) = (entry.get("Name"), entry.get("ItemsList")) else { continue };
+        for id in split_list(ids) {
+            submenus.entry(id.to_owned()).or_insert_with(|| name.clone());
+        }
+    }
+    let mut actions = Vec::new();
+    for (id, groups) in &entries {
+        let Some(entry) = groups.get("Desktop Entry") else { continue };
+        let target = match background {
+            true => flag(entry, "TargetLocation", false),
+            false => flag(entry, "TargetContext", true),
+        };
+        if entry.get("Type").is_some_and(|t| t != "Action") || !target || !shown(entry) {
+            continue;
+        }
+        let profiles = entry.get("Profiles").map(|p| split_list(p).collect::<Vec<_>>()).unwrap_or_default();
+        let profiles = profiles.iter().filter_map(|p| groups.get(&format!("X-Action-Profile {p}")));
+        let Some(profile) = profiles.into_iter().find(|p| fma_applies(p, items, folder)) else { continue };
+        let (Some(name), Some(line)) = (entry.get("Name"), profile.get("Exec")) else { continue };
+        actions.push(Action {
+            name: name.clone(),
+            icon: entry.get("Icon").and_then(|name| icon(name)),
+            submenu: submenus.get(id).cloned(),
+            top_level: true,
+            run: Run::FileManager {
+                line: line.clone(),
+                terminal: profile.get("ExecutionMode").is_some_and(|m| m == "Terminal"),
+                path: profile.get("Path").cloned(),
+            },
+        });
+    }
+    actions.sort_by(|a, b| a.name.cmp(&b.name));
+    found.extend(actions);
+}
+
+/// An action's or a profile's conditions: the desktop, programs, services,
+/// how many, the scheme, the folder, the types and the names.
+fn fma_applies(entry: &HashMap<String, String>, items: &[Item], folder: &Path) -> bool {
+    let list = |key: &str, default: &str| -> Vec<String> {
+        split_list(entry.get(key).map_or(default, String::as_str)).map(str::to_owned).collect()
+    };
+    // Some positive pattern fits (or there is none), and no `!` one.
+    let fits = |patterns: &[String], fit: &dyn Fn(&str) -> bool| {
+        let (not, yes): (Vec<&String>, Vec<&String>) = patterns.iter().partition(|p| p.starts_with('!'));
+        (yes.is_empty() || yes.iter().any(|p| fit(p))) && !not.iter().any(|p| fit(&p[1..]))
+    };
+    let count = items.len();
+    let count_fits = match entry.get("SelectionCount").map(|c| c.trim()).filter(|c| !c.is_empty()) {
+        Some(relation) => {
+            let (op, number) = relation.split_at(1);
+            match (op, number.trim().parse::<usize>()) {
+                ("=", Ok(n)) => count == n,
+                ("<", Ok(n)) => count < n,
+                (">", Ok(n)) => count > n,
+                _ => true,
+            }
+        }
+        None => true,
+    };
+    let case = entry.get("Matchcase").is_none_or(|v| v != "false");
+    let says_true = |command: &str| {
+        let output = Command::new("sh").arg("-c").arg(command).stdin(Stdio::null()).stderr(Stdio::null()).output();
+        output.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
+    };
+    // shortcut: Capabilities (Owner, Readable, Writable, Executable) go unchecked; check them when an action needs it.
+    shown_here(entry)
+        && entry.get("TryExec").is_none_or(|program| on_path(program).is_some())
+        && entry.get("ShowIfRegistered").is_none_or(|name| bus_name_taken(name))
+        && entry.get("ShowIfRunning").is_none_or(|name| running(name))
+        && entry.get("ShowIfTrue").is_none_or(|command| says_true(command))
+        && count_fits
+        && fits(&list("Schemes", "file"), &|scheme| scheme == "file" || scheme == "*")
+        && fits(&list("Folders", "/"), &|dir| folder.starts_with(dir.trim_end_matches('*')))
+        && items.iter().all(|item| fits(&list("MimeTypes", "*"), &|t| item.is(t)))
+        && items.iter().all(|item| fits(&list("Basenames", "*"), &|name| wildcard_match(name, &item.name, case)))
+}
+
+/// A program of this name running, by the name /proc gives it (15 bytes).
+fn running(program: &str) -> bool {
+    let name = base_name(Path::new(program));
+    let short = &name.as_bytes()[..name.len().min(15)];
+    let named = |dir: fs::DirEntry| fs::read(dir.path().join("comm")).is_ok_and(|comm| comm.trim_ascii_end() == short);
+    fs::read_dir("/proc").into_iter().flatten().flatten().any(named)
+}
+
+/// A FileManager-Actions code's values for `paths`: the capital one for all, the small for the first.
+fn fma_value(code: char, paths: &[PathBuf]) -> Option<Vec<String>> {
+    let of: fn(&Path) -> String = match code.to_ascii_lowercase() {
+        'b' => base_name,
+        'd' => |p| p.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(),
+        'f' => |p| p.to_string_lossy().into_owned(),
+        'm' => |p| mime_db().type_of(p, &base_name(p), p.is_dir()),
+        'u' => |p| file_uri(p),
+        'w' => |p| p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+        'x' => |p| p.extension().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+        _ => {
+            return Some(match code {
+                'c' => vec![paths.len().to_string()],
+                'n' => vec![std::env::var("USER").unwrap_or_default()],
+                's' => vec!["file".into()],
+                '%' => vec!["%".into()],
+                // The host, the port, and the no-op codes.
+                'h' | 'p' | 'o' | 'O' => Vec::new(),
+                _ => return None,
+            });
+        }
+    };
+    Some(match code.is_ascii_uppercase() {
+        true => paths.iter().map(|p| of(p)).collect(),
+        false => paths.first().map(|p| of(p)).into_iter().collect(),
+    })
 }
 
 /// Thunar's range of how many: `*`, `2`, `1-3`, `2-*`.
@@ -815,7 +1142,7 @@ pub fn icon(name: &str) -> Option<PathBuf> {
     path
 }
 
-/// KDE's icon theme, GNOME's, Xfce's; hicolor where none is set.
+/// KDE's icon theme, Xfce's, GNOME's, Cinnamon's, MATE's; hicolor where none is set.
 fn icon_theme() -> String {
     static THEME: OnceLock<String> = OnceLock::new();
     THEME
@@ -825,7 +1152,7 @@ fn icon_theme() -> String {
             let found = match () {
                 _ if on("kde") => Some(kde_setting("Icons", "Theme").unwrap_or_else(|| "breeze".into())),
                 _ if on("xfce") => xfce_setting("IconThemeName"),
-                _ => crate::theme::gnome_setting("icon-theme"),
+                _ => crate::theme::interface_setting("icon-theme"),
             };
             found.unwrap_or_else(|| "hicolor".into())
         })
@@ -874,6 +1201,8 @@ fn read_desktop(path: &Path) -> Option<Groups> {
         let (base, rank) = match key.split_once('[') {
             Some((base, lang)) => match langs.iter().position(|l| l == lang.trim_end_matches(']')) {
                 Some(at) => (base, at),
+                // FileManager-Actions' files have only `Name[C]`.
+                None if lang == "C]" => (base, langs.len() + 1),
                 None => continue,
             },
             None => (key, langs.len()),
@@ -1000,6 +1329,51 @@ mod tests {
         let folder = Item { name: "d".into(), is_dir: true, types: vec!["inode/directory".into()] };
         assert!(folder.is("all/all") && !folder.is("all/allfiles") && folder.is("inode/directory"));
     }
+    #[test]
+    fn builds_command_lines() {
+        let value = |code: char| match code {
+            'F' => Some(vec!["/a b".into(), "/c".into()]),
+            'f' => Some(vec!["/a b".into()]),
+            'x' => Some(Vec::new()),
+            _ => None,
+        };
+        assert_eq!(command_line("wc -l %F", value), ["wc", "-l", "/a b", "/c"]);
+        assert_eq!(command_line("ed --file=%f %x %y", value), ["ed", "--file=/a b", "%y"]);
+        assert_eq!(command_line("wc %F | less", value), ["sh", "-c", "wc '/a b' '/c' | less"]);
+        assert_eq!(codes_in("run %f then %U").collect::<String>(), "fU");
+        let paths = [PathBuf::from("/d/a.tar.gz"), PathBuf::from("/d/b")];
+        assert_eq!(fma_value('B', &paths).unwrap(), ["a.tar.gz", "b"]);
+        assert_eq!(fma_value('d', &paths).unwrap(), ["/d"]);
+        assert_eq!(fma_value('c', &paths).unwrap(), ["2"]);
+        assert_eq!(nemo_value('F', &paths, Path::new("/d"), Some(",")).unwrap(), ["/d/a.tar.gz,/d/b"]);
+        assert_eq!(nemo_value('p', &[], Path::new("/d"), None).unwrap(), ["d"]);
+    }
+
+    #[test]
+    fn matches_nemo_and_file_manager_actions() {
+        let item = |name: &str, is_dir: bool, types: &[&str]| Item { name: name.into(), is_dir, types: types.iter().map(|t| t.to_string()).collect() };
+        let entry = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>();
+        let text = [item("a.TXT", false, &["text/plain", "application/octet-stream"])];
+        let two = [item("a.txt", false, &["text/plain"]), item("d", true, &["inode/directory"])];
+        let here = Path::new("/tmp");
+        let nemo = |pairs: &[(&str, &str)], items: &[Item]| nemo_applies(&entry(pairs), items, here, here);
+        assert!(nemo(&[("Selection", "s"), ("Extensions", "txt;")], &text));
+        assert!(nemo(&[("Selection", "S"), ("Mimetypes", "text/*;")], &text));
+        assert!(!nemo(&[("Selection", "m"), ("Extensions", "any;")], &text));
+        assert!(!nemo(&[("Selection", "notnone"), ("Extensions", "nodirs;")], &two));
+        assert!(nemo(&[("Selection", "none"), ("Extensions", "any;")], &[]));
+        assert!(!nemo(&[("Selection", "any"), ("Extensions", "any;"), ("Dependencies", "!sh;")], &text));
+        assert!(!nemo(&[("Selection", "any"), ("Extensions", "any;"), ("UriScheme", "sftp")], &text));
+        let fma = |pairs: &[(&str, &str)], items: &[Item]| fma_applies(&entry(pairs), items, here);
+        assert!(fma(&[], &two));
+        assert!(fma(&[("MimeTypes", "text/*;"), ("SelectionCount", "=1")], &text));
+        assert!(!fma(&[("MimeTypes", "*;!text/plain;")], &text));
+        assert!(!fma(&[("Basenames", "*.txt;")], &text), "case matters by default");
+        assert!(fma(&[("Basenames", "*.txt;"), ("Matchcase", "false")], &text));
+        assert!(!fma(&[("SelectionCount", "<2")], &two));
+        assert!(!fma(&[("Schemes", "sftp;")], &text));
+        assert!(fma(&[("Folders", "/tmp/;")], &text) && !fma(&[("Folders", "/home;")], &text));
+    }
 }
 
 #[cfg(test)]
@@ -1021,7 +1395,7 @@ mod system {
         for chosen in cases {
             let started = std::time::Instant::now();
             let apps = open_with(&chosen);
-            let actions = actions(&chosen);
+            let actions = actions(&chosen, false);
             let item = Item::new(&chosen[0].0, chosen[0].1);
             println!("{:?} {:?} in {:?}", chosen.iter().map(|(p, _)| p.file_name().unwrap()).collect::<Vec<_>>(), item.types.first(), started.elapsed());
             for app in &apps {

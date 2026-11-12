@@ -118,16 +118,21 @@ pub fn system(dark: bool) -> Palette {
     }
 }
 
-/// One of GNOME's interface settings.
-pub(crate) fn gnome_setting(key: &str) -> Option<String> {
-    let output = Command::new("gsettings").args(["get", "org.gnome.desktop.interface", key]).output().ok()?;
-    let value = String::from_utf8(output.stdout).ok()?;
-    Some(value.trim().trim_matches('\'').to_owned()).filter(|value| !value.is_empty())
+/// One of the desktop's interface settings: Cinnamon's, MATE's, else GNOME's.
+pub(crate) fn interface_setting(key: &str) -> Option<String> {
+    let schema = match () {
+        _ if on_desktop("X-Cinnamon") => "org.cinnamon.desktop.interface",
+        _ if on_desktop("MATE") => "org.mate.interface",
+        _ => "org.gnome.desktop.interface",
+    };
+    gsetting(schema, key)
 }
 
-fn gnome_font() -> Option<String> {
-    static FONT: OnceLock<Option<String>> = OnceLock::new();
-    FONT.get_or_init(|| gnome_setting("font-name").map(|name| font_family(&name))).clone()
+/// A GSettings key's value.
+pub(crate) fn gsetting(schema: &str, key: &str) -> Option<String> {
+    let output = Command::new("gsettings").args(["get", schema, key]).output().ok()?;
+    let value = String::from_utf8(output.stdout).ok()?;
+    Some(value.trim().trim_matches('\'').to_owned()).filter(|value| !value.is_empty())
 }
 
 /// The family of a Pango font name: "Noto Sans,  10", "Ubuntu Sans 11".
@@ -139,22 +144,37 @@ fn font_family(pango: &str) -> String {
 
 /// GNOME, Ubuntu's own desktop among them (`ubuntu:GNOME`).
 pub fn on_gnome() -> bool {
-    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-    desktop.split(':').any(|name| name == "GNOME")
+    on_desktop("GNOME")
 }
 
-/// GNOME's or Xfce's interface font.
+/// The interface font of GNOME, Cinnamon, MATE or Xfce.
 fn desktop_font() -> Option<String> {
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    if std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().split(':').any(|name| name == "XFCE") {
-        return crate::desktop::xfce_setting("FontName").map(|name| font_family(&name));
-    }
-    on_gnome().then(gnome_font).flatten()
+    static FONT: OnceLock<Option<String>> = OnceLock::new();
+    let find = || {
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        if on_desktop("XFCE") {
+            return crate::desktop::xfce_setting("FontName").map(|name| font_family(&name));
+        }
+        let gtk = on_gnome() || on_desktop("X-Cinnamon") || on_desktop("MATE");
+        gtk.then(|| interface_setting("font-name").map(|name| font_family(&name))).flatten()
+    };
+    FONT.get_or_init(|| find().map(real_family)).clone()
+}
+
+/// The family a fontconfig alias ("Sans", Cinnamon's) stands for, which GPUI needs.
+fn real_family(family: String) -> String {
+    let alias = ["sans", "sans-serif", "sans serif", "serif", "monospace", "mono"].contains(&family.to_lowercase().as_str());
+    let matched = alias.then(|| Command::new("fc-match").args(["-f", "%{family[0]}", &family]).output().ok()).flatten();
+    matched.and_then(|out| String::from_utf8(out.stdout).ok()).filter(|f| !f.is_empty()).unwrap_or(family)
 }
 
 fn on_kde() -> bool {
-    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-    desktop.split(':').any(|name| name == "KDE")
+    on_desktop("KDE")
+}
+
+/// One of XDG_CURRENT_DESKTOP's names.
+fn on_desktop(name: &str) -> bool {
+    std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().split(':').any(|desktop| desktop == name)
 }
 
 /// How much of the window colour the sidebar paints over the system's own
@@ -174,7 +194,7 @@ pub fn window_buttons() -> Option<&'static [PathBuf; 4]> {
         if !cfg!(any(target_os = "linux", target_os = "freebsd")) {
             return None;
         }
-        let theme = gnome_setting("icon-theme")?;
+        let theme = interface_setting("icon-theme")?;
         let bases = icon_bases();
         // GTK's own fallback is Adwaita.
         let themes = [theme.as_str(), "Adwaita", "hicolor"];
