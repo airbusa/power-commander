@@ -24,6 +24,8 @@ use pc_core::{icons, theme};
 use crate::{Commander, connections_dialog};
 
 pub(crate) const WIDTH: f32 = 260.;
+/// How long it slides in or out, shown or hidden.
+const SLIDE: Duration = Duration::from_millis(200);
 const ROW: Pixels = px(22.);
 const SECTION: Pixels = px(30.);
 
@@ -31,6 +33,10 @@ pub(crate) struct Sidebar {
     /// The section open; none while hidden.
     pub(crate) tab: Option<SidebarTab>,
     pub(crate) width: f32,
+    /// Times shown or hidden since the start, each a slide of its own.
+    slides: usize,
+    /// Hidden, the section it slides out with.
+    closing: Option<SidebarTab>,
     /// How much of the window colour it paints over the desktop; none: solid.
     tint: Option<f32>,
     tree: FolderTree,
@@ -59,6 +65,8 @@ impl Sidebar {
         Sidebar {
             tab,
             width: if width > 0. { width } else { WIDTH },
+            slides: 0,
+            closing: None,
             tint: theme::sidebar_tint(),
             tree: FolderTree::new(hidden),
             tree_scroll: UniformListScrollHandle::new(),
@@ -100,7 +108,24 @@ impl Sidebar {
 impl Commander {
     /// Show > Sidebar: that tab, or hidden when it shows it already.
     pub(crate) fn toggle_sidebar(&mut self, tab: SidebarTab, window: &mut Window, cx: &mut Context<Self>) {
-        self.sidebar.tab = (self.sidebar.tab != Some(tab)).then_some(tab);
+        let was = self.sidebar.tab;
+        self.sidebar.tab = (was != Some(tab)).then_some(tab);
+        // Shown or hidden, it slides; hidden, it is drawn until out.
+        if was.is_some() != self.sidebar.tab.is_some() {
+            self.sidebar.slides += 1;
+            self.sidebar.closing = was.filter(|_| self.sidebar.tab.is_none());
+            let slide = self.sidebar.slides;
+            cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor().timer(SLIDE).await;
+                let _ = this.update_in(cx, |this, window, cx| {
+                    if this.sidebar.slides == slide && this.sidebar.closing.take().is_some() {
+                        this.set_backdrop(window, cx);
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
         self.set_backdrop(window, cx);
         self.reload_menus(cx);
         cx.notify();
@@ -109,7 +134,9 @@ impl Commander {
     /// The desktop shows through, blurred, only while the sidebar is there:
     /// a see-through window loses subpixel text.
     pub(crate) fn set_backdrop(&self, window: &mut Window, cx: &mut App) {
-        let see_through = self.sidebar.tab.is_some() && self.sidebar.tint.is_some();
+        // Sliding out too.
+        let shown = self.sidebar.tab.or(self.sidebar.closing).is_some();
+        let see_through = shown && self.sidebar.tint.is_some();
         window.set_background_appearance(match see_through {
             false => WindowBackgroundAppearance::Opaque,
             true if cfg!(windows) => WindowBackgroundAppearance::MicaBackdrop,
@@ -185,8 +212,8 @@ impl Commander {
         self.change_servers(delete, window, cx);
     }
 
-    pub(crate) fn render_sidebar(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let tab = self.sidebar.tab?;
+    pub(crate) fn render_sidebar(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let tab = self.sidebar.tab.or(self.sidebar.closing)?;
         if tab == SidebarTab::Tree {
             self.follow_active();
         }
@@ -239,29 +266,47 @@ impl Commander {
             }
         }
         let theme = cx.theme();
-        Some(
-            h_flex()
-                .relative()
-                .h_full()
-                .flex_none()
-                .w(px(self.sidebar.width))
-                .bg(background)
-                .border_r_1()
-                .border_color(theme.border)
-                .child(accordion)
-                .child(
-                    div()
-                        .id("sidebar-edge")
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .right(px(-3.))
-                        .w(px(6.))
-                        .occlude()
-                        .cursor(CursorStyle::ResizeLeftRight)
-                        .on_drag(SidebarDrag, |_, _, _, cx| cx.new(|_| EmptyView)),
-                ),
-        )
+        let width = self.sidebar.width;
+        let drawer = h_flex()
+            .h_full()
+            .w(px(width))
+            .bg(background)
+            .border_r_1()
+            .border_color(theme.border)
+            .child(accordion);
+        // Sliding, its edge narrows or widens; the drawer is clipped, not reflowed.
+        let sidebar = div()
+            .relative()
+            .h_full()
+            .flex_none()
+            .w(px(width))
+            .child(div().size_full().overflow_hidden().child(drawer))
+            .child(
+                div()
+                    .id("sidebar-edge")
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right(px(-3.))
+                    .w(px(6.))
+                    .occlude()
+                    .cursor(CursorStyle::ResizeLeftRight)
+                    .on_drag(SidebarDrag, |_, _, _, cx| cx.new(|_| EmptyView)),
+            );
+        // As the window opens, it is there already.
+        if self.sidebar.slides == 0 {
+            return Some(sidebar.into_any_element());
+        }
+        let out = self.sidebar.tab.is_none();
+        let slide = Animation::new(SLIDE).with_easing(ease_in_out);
+        let sliding = sidebar.with_animation(("sidebar-slide", self.sidebar.slides), slide, move |el, delta| {
+            let shown = match out {
+                true => 1. - delta,
+                false => delta,
+            };
+            el.w(px(width * shown))
+        });
+        Some(sliding.into_any_element())
     }
 
     /// The sidebar's width, from where its edge is dragged in `row`.
