@@ -5547,6 +5547,7 @@ dependencies = [
  "html5ever",
  "keyring",
  "khronos-egl",
+ "libc",
  "libloading",
  "markup5ever_rcdom",
  "md-5",
@@ -5573,6 +5574,7 @@ dependencies = [
 name = "pc-gui"
 version = "0.1.0"
 dependencies = [
+ "block2 0.6.2",
  "futures",
  "gpui-kit",
  "image",

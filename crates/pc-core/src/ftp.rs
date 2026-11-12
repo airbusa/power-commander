@@ -456,6 +456,7 @@ impl Remote for Ftp {
                 hidden: file.name().starts_with('.'),
                 system: false,
                 attributes: crate::sftp::mode_text(mode),
+                tags: Vec::new(),
                 is_dir,
                 size: file.size() as u64,
                 modified: modified(&file),

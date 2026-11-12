@@ -21,8 +21,9 @@ pc-core.workspace = true
 # icons; GPUI builds them already.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSDictionary", "NSGeometry", "NSObject", "NSString", "NSURL", "objc2-core-foundation"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSBitmapImageRep", "NSEvent", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSMenu", "NSMenuItem", "NSResponder", "NSSharingService", "NSView", "NSWorkspace"] }
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSDictionary", "NSGeometry", "NSObject", "NSError", "NSRange", "NSString", "NSURL", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSBezierPath", "NSBitmapImageRep", "NSColor", "NSControl", "NSEvent", "NSFont", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSMenu", "NSMenuItem", "NSPasteboard", "NSPopover", "NSResponder", "NSSharingService", "NSText", "NSTextField", "NSTokenField", "NSTrackingArea", "NSView", "NSViewController", "NSWindow", "NSWorkspace"] }
 
 # The .exe's icon on Windows, which GPUI gives its windows (resource 1).
 [build-dependencies]

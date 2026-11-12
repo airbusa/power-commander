@@ -40,6 +40,7 @@ pub mod shell_menu;
 pub mod sidebar;
 pub mod sftp;
 pub mod space;
+pub mod tags;
 pub mod split;
 pub mod theme;
 pub mod vfs;
@@ -73,6 +74,8 @@ pub struct Entry {
     pub system: bool,
     /// As the Attr column shows them: `rwxr-xr-x`, or `rahs` on Windows.
     pub attributes: String,
+    /// macOS: its Finder tags' colours.
+    pub tags: Vec<u8>,
 }
 
 /// Which entries a panel lists besides the usual ones.
@@ -1020,6 +1023,7 @@ impl Panel {
                 hidden,
                 system,
                 attributes,
+                tags: tags::colours(path),
             });
         }
         entries
@@ -1343,6 +1347,7 @@ fn read_dir(path: &Path) -> io::Result<Vec<Entry>> {
             let name = item.file_name();
             let (hidden, system, attributes) = attributes(&name, meta.as_ref());
             Entry {
+                tags: tags::colours(&item.path()),
                 name,
                 is_dir: meta.as_ref().is_some_and(fs::Metadata::is_dir),
                 size: meta.as_ref().map_or(0, fs::Metadata::len),
@@ -1384,6 +1389,7 @@ fn parent_entry(modified: Option<SystemTime>) -> Entry {
         hidden: false,
         system: false,
         attributes: String::new(),
+        tags: Vec::new(),
     }
 }
 
@@ -1814,6 +1820,7 @@ mod tests {
             hidden: false,
             system: false,
             attributes: String::new(),
+            tags: Vec::new(),
         };
         let parts = |name, is_dir| entry(name, is_dir).name_and_extension();
         assert_eq!(
@@ -1861,6 +1868,7 @@ mod tests {
             hidden: false,
             system: false,
             attributes: String::new(),
+            tags: Vec::new(),
         };
         assert_eq!(entry(1234567).size_text(), "1 234 567");
         assert_eq!(entry(123456).size_text(), "123 456");

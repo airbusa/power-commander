@@ -1486,7 +1486,8 @@ impl Commander {
                     .px_1()
                     .gap_1()
                     .child(icon)
-                    .child(div().truncate().child(name)),
+                    .child(div().flex_1().min_w_0().truncate().child(name))
+                    .child(tag_dots(&entry.tags, cx.theme().background)),
             )
             .child(div().w(ext).flex_none().px_1().truncate().child(extension))
             .child(
@@ -1907,4 +1908,13 @@ fn palette(settings: &Settings, window: &Window) -> theme::Palette {
         Appearance::Dark => true,
     };
     theme::system(dark)
+}
+
+/// Finder's tag dots: overlapping, the first on the right, three at most.
+fn tag_dots(tags: &[u8], edge: Hsla) -> Div {
+    h_flex().flex_none().children(tags.iter().take(3).rev().enumerate().filter_map(|(n, &colour)| {
+        let [r, g, b] = pc_core::tags::rgb(colour)?;
+        let dot = div().size(px(10.)).rounded_full().border_1().border_color(edge);
+        Some(dot.bg(rgb(u32::from_be_bytes([0, r, g, b]))).when(n > 0, |dot| dot.ml(px(-4.))))
+    }))
 }
