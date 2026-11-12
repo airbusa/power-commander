@@ -34,7 +34,7 @@ pub fn converter_for(path: &Path) -> Option<Converter> {
     })
 }
 
-fn on_path(program: &str) -> Option<PathBuf> {
+pub(crate) fn on_path(program: &str) -> Option<PathBuf> {
     let folders = std::env::var_os("PATH")?;
     std::env::split_paths(&folders)
         .map(|folder| folder.join(program))

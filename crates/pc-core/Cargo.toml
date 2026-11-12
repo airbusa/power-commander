@@ -41,8 +41,8 @@ base64 = "0.22"
 html5ever = "0.27"
 markup5ever_rcdom = "0.3"
 serde_json = "1"
-# Runs the SSH connections; GPUI builds it already.
-tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "io-util", "sync"] }
+# Runs the SSH connections, and rclone's for online storage; GPUI builds it already.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "io-util", "sync", "process"] }
 # F8 moves to the trash, as each platform keeps one.
 trash = "5.3.0"
 suppaftp = { version = "12", default-features = false, features = ["rustls-ring"] }

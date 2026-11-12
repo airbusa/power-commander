@@ -23,11 +23,13 @@ pub enum Scheme {
     Webdav,
     Webdavs,
     Nfs,
+    /// Amazon's object storage and those speaking it, through rclone (`cloud`).
+    S3,
 }
 
 impl Scheme {
-    pub const ALL: [Scheme; 7] =
-        [Scheme::Sftp, Scheme::Ftp, Scheme::Ftps, Scheme::Smb, Scheme::Webdav, Scheme::Webdavs, Scheme::Nfs];
+    pub const ALL: [Scheme; 8] =
+        [Scheme::Sftp, Scheme::Ftp, Scheme::Ftps, Scheme::Smb, Scheme::Webdav, Scheme::Webdavs, Scheme::Nfs, Scheme::S3];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -38,6 +40,7 @@ impl Scheme {
             Scheme::Webdav => "webdav",
             Scheme::Webdavs => "webdavs",
             Scheme::Nfs => "nfs",
+            Scheme::S3 => "s3",
         }
     }
 
@@ -47,7 +50,7 @@ impl Scheme {
             Scheme::Ftp | Scheme::Ftps => 21,
             Scheme::Smb => 445,
             Scheme::Webdav => 80,
-            Scheme::Webdavs => 443,
+            Scheme::Webdavs | Scheme::S3 => 443,
             Scheme::Nfs => 2049,
         }
     }
@@ -63,7 +66,8 @@ impl Scheme {
     }
 }
 
-/// `sftp://[user@]host[:port][/path]`, or `ftp://`, `ftps://`.
+/// `sftp://[user@]host[:port][/path]`, or `ftp://`, `ftps://`; S3's
+/// `s3://access-key@endpoint/bucket/path`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Address {
     pub scheme: Scheme,
@@ -85,6 +89,7 @@ impl Address {
             "webdav" | "dav" => Scheme::Webdav,
             "webdavs" | "davs" => Scheme::Webdavs,
             "nfs" => Scheme::Nfs,
+            "s3" => Scheme::S3,
             _ => return None,
         };
         let (authority, path) = match rest.find('/') {
@@ -185,6 +190,11 @@ pub fn connect(address: &Address, ask: Ask) -> io::Result<(Arc<dyn Remote>, Path
             let ftp = crate::ftp::Ftp::connect(address, ask)?;
             let start = ftp.start(address);
             Ok((ftp, start))
+        }
+        Scheme::S3 => {
+            let store = crate::cloud::connect(address, &ask)?;
+            let start = store.start(address);
+            Ok((store, start))
         }
         // `mounts` takes these.
         Scheme::Smb | Scheme::Webdav | Scheme::Webdavs | Scheme::Nfs => {

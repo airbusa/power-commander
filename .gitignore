@@ -6,3 +6,6 @@
 /vendor/pdfium/*/
 # Built by vendor/mpv/build.sh, with its sources and work in .build.
 /vendor/mpv/*/
+# Built by vendor/rclone/build.sh, with rclone's source in .build.
+/vendor/rclone/*/
+/vendor/rclone/.build/

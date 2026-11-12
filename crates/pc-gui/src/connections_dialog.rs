@@ -18,16 +18,17 @@ use pc_core::secrets;
 
 use crate::Commander;
 
-/// Ours, then the desktop's: a row each.
-const SCHEMES: [&[(Scheme, &str)]; 2] = [
+/// Ours, the desktop's, then online storage: a row each.
+const SCHEMES: [&[(Scheme, &str)]; 3] = [
     &[(Scheme::Sftp, "SFTP"), (Scheme::Ftp, "FTP"), (Scheme::Ftps, "FTPS")],
     &[(Scheme::Smb, "SMB"), (Scheme::Webdav, "WebDAV"), (Scheme::Webdavs, "WebDAVS"), (Scheme::Nfs, "NFS")],
+    &[(Scheme::S3, "S3")],
 ];
 
 pub fn open(commander: WeakEntity<Commander>, side: usize, window: &mut Window, cx: &mut App) {
     let address = cx.new(|cx| {
         InputState::new(window, cx)
-            .placeholder("sftp://user@host/path, ftp://, smb://, webdav://, mtp:/, or a host below")
+            .placeholder("sftp://user@host/path, ftp://, smb://, webdav://, s3://, mtp:/, or a host below")
     });
     let view = cx.new(|_| {
         let saved = Connections::load().unwrap_or_default().saved;
@@ -493,7 +494,10 @@ impl EditConnection {
 
 impl Render for EditConnection {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let labels = ["Name", "Server", "Port", "User", "Start folder"];
+        let (labels, secret) = match self.scheme {
+            Scheme::S3 => (["Name", "Endpoint", "Port", "Access key", "Bucket/folder"], "Secret key"),
+            _ => (["Name", "Server", "Port", "User", "Start folder"], "Password"),
+        };
         let field = |label: &'static str, input: &Entity<InputState>| {
             h_flex()
                 .gap_3()
@@ -510,7 +514,7 @@ impl Render for EditConnection {
                     cx.notify();
                 }))
         };
-        let (ours, desktops) = (row(0, cx), row(1, cx));
+        let (ours, desktops, online) = (row(0, cx), row(1, cx), row(2, cx));
         let [name, rest @ ..] = &self.fields;
         v_flex()
             .w_full()
@@ -524,6 +528,7 @@ impl Render for EditConnection {
                     .child(ours),
             )
             .child(h_flex().gap_3().child(div().w(px(96.)).flex_none()).child(desktops))
+            .child(h_flex().gap_3().child(div().w(px(96.)).flex_none()).child(online))
             .children(
                 labels[1..]
                     .iter()
@@ -531,7 +536,7 @@ impl Render for EditConnection {
                     .map(|(label, input)| field(label, input)),
             )
             .when(self.scheme.logs_in(), |el| {
-                el.child(field("Password", &self.password)).child(
+                el.child(field(secret, &self.password)).child(
                     h_flex().gap_3().child(div().w(px(96.)).flex_none()).child(
                         Checkbox::new("connection-forget")
                             .label("Forget the kept password")

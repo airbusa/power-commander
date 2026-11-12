@@ -1,6 +1,7 @@
 //! SFTP: hosts as `~/.ssh/config` names them, keys from the agent or from
 //! files, and the server's key checked against `known_hosts` as `ssh` does.
 
+use std::any::Any;
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -36,8 +37,9 @@ static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
 pub struct Sftp {
     url: String,
     home: PathBuf,
-    /// Taken in `drop`, where the runtime must be at hand.
-    inner: Option<(SftpSession, Handle<Client>)>,
+    /// Taken in `drop`, where the runtime must be at hand; beside the
+    /// session what carries it: SSH, or the program it is piped to.
+    inner: Option<(SftpSession, Box<dyn Any + Send + Sync>)>,
 }
 
 impl Sftp {
@@ -53,6 +55,44 @@ impl Sftp {
             .path
             .clone()
             .map_or_else(|| self.home.clone(), PathBuf::from)
+    }
+
+    /// SFTP on a program's standard input and output, as `rclone serve sftp
+    /// --stdio` speaks it, ended with the connection. Blocks.
+    pub(crate) fn over_pipe(url: String, command: std::process::Command) -> io::Result<Arc<Self>> {
+        use std::process::Stdio;
+        let mut command = tokio::process::Command::from(command);
+        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        RUNTIME.block_on(async {
+            let mut child = command.spawn()?;
+            let (Some(output), Some(input), Some(mut errors)) = (child.stdout.take(), child.stdin.take(), child.stderr.take()) else {
+                return Err(io::Error::other("no pipe to the program"));
+            };
+            // Its last words, for a failed start; read always, so it never waits on a full pipe.
+            let said = tokio::spawn(async move {
+                let (mut tail, mut buffer) = (Vec::new(), [0; 4096]);
+                while let Ok(read @ 1..) = errors.read(&mut buffer).await {
+                    tail.extend_from_slice(&buffer[..read]);
+                    tail.drain(..tail.len().saturating_sub(buffer.len()));
+                }
+                String::from_utf8_lossy(&tail).into_owned()
+            });
+            let started = async {
+                let session = SftpSession::new(tokio::io::join(output, input)).await.map_err(other)?;
+                let home = session.canonicalize(".").await.map_err(sftp_error)?;
+                Ok::<_, io::Error>((session, home))
+            };
+            match started.await {
+                Ok((session, home)) => Ok(Sftp { url, home: home.into(), inner: Some((session, Box::new(child))) }),
+                Err(err) => {
+                    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+                    let _ = child.start_kill();
+                    let said = tokio::time::timeout(Duration::from_secs(1), said).await.ok().and_then(Result::ok);
+                    Err(said.and_then(|said| last_error(&said)).map_or(err, io::Error::other))
+                }
+            }
+        })
+        .map(Arc::new)
     }
 
     fn session(&self) -> &SftpSession {
@@ -127,7 +167,7 @@ async fn connect(address: &Address, ask: Ask) -> io::Result<Sftp> {
     Ok(Sftp {
         url,
         home,
-        inner: Some((session, ssh)),
+        inner: Some((session, Box::new(ssh))),
     })
 }
 
@@ -361,6 +401,13 @@ where
         }
     }
     false
+}
+
+/// A program's last error line, without rclone's time and level.
+fn last_error(said: &str) -> Option<String> {
+    let line = said.lines().rev().find(|line| line.contains("ERROR") || line.contains("CRITICAL") || line.contains("Fatal"))?;
+    let message = ["Fatal error: ", "CRITICAL: ", "ERROR : "].iter().find_map(|level| line.split_once(level).map(|(_, rest)| rest));
+    Some(message.unwrap_or(line).trim().to_owned())
 }
 
 fn other(err: impl std::fmt::Display) -> io::Error {

@@ -4,6 +4,7 @@ pub mod attributes;
 mod bundled;
 pub mod checksum;
 pub mod clipboard;
+pub mod cloud;
 pub mod codepage;
 pub mod command;
 pub mod compare;
