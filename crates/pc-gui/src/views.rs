@@ -8,9 +8,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui_kit::component::scroll::Scrollbar;
-use gpui_kit::component::{ActiveTheme, h_flex};
+use gpui_kit::component::h_flex;
 use gpui_kit::*;
-use pc_core::{View, icons};
+use pc_core::View;
 
 use crate::{Commander, ROW, SCROLLBAR, Side};
 
@@ -143,14 +143,14 @@ impl Commander {
     fn render_brief_entry(&self, ix: usize, row: usize, cx: &mut Context<Self>) -> Stateful<Div> {
         let panel = self.panels[ix].tabs.current();
         let entry = &panel.entries()[row];
-        let icon = icons::material().icon(&entry.display_name(), entry.is_dir, !cx.theme().mode.is_dark());
+        let icon = self.entry_icon(ix, entry, px(16.), cx);
         self.entry_base(ix, row, false, cx)
             .flex()
             .items_center()
             .h(ROW)
             .px_1()
             .gap_1()
-            .child(img(format!("material/{icon}")).size(px(16.)).flex_none())
+            .child(icon)
             .child(div().min_w_0().truncate().child(entry.display_name()))
     }
 
@@ -189,11 +189,11 @@ impl Commander {
         let entry = &panel.entries()[row];
         let local = panel.remote().is_none() && !panel.in_archive() && !entry.is_dir;
         let path = panel.folder().join(&entry.name);
-        let (name, icon) = (entry.display_name(), icons::material().icon(&entry.display_name(), entry.is_dir, !cx.theme().mode.is_dark()));
+        let (name, icon) = (entry.display_name(), self.entry_icon(ix, entry, px(56.), cx));
         let picture = local.then(|| self.thumbnail(&path, cx)).flatten();
         let preview = match picture {
             Some(picture) => img(picture).max_w(px(96.)).max_h(px(96.)).object_fit(ObjectFit::Contain).into_any_element(),
-            None => img(format!("material/{icon}")).size(px(56.)).into_any_element(),
+            None => icon,
         };
         self.entry_base(ix, row, false, cx)
             .w(px(TILE_WIDTH))

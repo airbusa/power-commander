@@ -17,10 +17,12 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 futures = "0.3"
 pc-core.workspace = true
 
-# The name on macOS's menu bar when run without a bundle; GPUI builds them already.
+# The name on macOS's menu bar when run without a bundle, applications' own
+# icons; GPUI builds them already.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSDictionary", "NSObject", "NSString"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSDictionary", "NSGeometry", "NSObject", "NSString", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSBitmapImageRep", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSWorkspace"] }
 
 # The .exe's icon on Windows, which GPUI gives its windows (resource 1).
 [build-dependencies]

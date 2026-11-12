@@ -119,11 +119,13 @@ impl Sort {
         }
     }
 
-    /// `..` first, then folders by name (as Total Commander by default), then files.
+    /// `..` first, then folders by name (as Total Commander by default), then
+    /// files; macOS's applications among the files, as Finder has them.
     fn compare(self, a: &Entry, b: &Entry) -> Ordering {
+        let folder = |entry: &Entry| entry.is_dir && !entry.is_app();
         let parent = b.is_parent().cmp(&a.is_parent());
-        let dirs = parent.then(b.is_dir.cmp(&a.is_dir));
-        if a.is_dir || b.is_dir {
+        let dirs = parent.then(folder(b).cmp(&folder(a)));
+        if folder(a) || folder(b) {
             return dirs.then_with(|| by_name(a, b));
         }
         let files = match self.key {
@@ -158,11 +160,17 @@ impl Entry {
         self.name.to_string_lossy().into_owned()
     }
 
+    /// macOS: an application, a folder named `….app` the system runs.
+    pub fn is_app(&self) -> bool {
+        let extension = Path::new(&self.name).extension();
+        cfg!(target_os = "macos") && self.is_dir && extension.is_some_and(|e| e.eq_ignore_ascii_case("app"))
+    }
+
     /// For the Name and Ext columns; folders keep their name whole.
     pub fn name_and_extension(&self) -> (String, String) {
         let name = self.display_name();
         match name.rfind('.') {
-            Some(dot) if dot > 0 && !self.is_dir => {
+            Some(dot) if dot > 0 && (!self.is_dir || self.is_app()) => {
                 (name[..dot].to_owned(), name[dot + 1..].to_owned())
             }
             _ => (name, String::new()),
@@ -170,6 +178,9 @@ impl Entry {
     }
 
     pub fn size_text(&self) -> String {
+        if self.is_app() {
+            return "<APP>".into();
+        }
         if self.is_dir {
             return "<DIR>".into();
         }

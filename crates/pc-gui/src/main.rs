@@ -1,6 +1,7 @@
 // No console window beside the app on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app_icons;
 mod appearance;
 mod associations_dialog;
 mod attributes_dialog;
@@ -53,7 +54,7 @@ use pc_core::session::Session;
 use pc_core::settings::{self, Settings};
 use pc_core::sidebar::SidebarTab;
 use pc_core::theme::{self, Appearance};
-use pc_core::{Panel, Sort, SortKey, Tabs, Typed, View, archive, edit, icons, mounts, ops, origin};
+use pc_core::{Panel, Sort, SortKey, Tabs, Typed, View, archive, edit, mounts, ops, origin};
 
 use crate::appearance::PanelColors;
 use crate::drag_drop::{DragLabel, Dragged};
@@ -338,6 +339,7 @@ struct Commander {
     sidebar: sidebar::Sidebar,
     quick: Option<quick_view::QuickView>,
     thumbnails: views::Thumbnails,
+    app_icons: app_icons::AppIcons,
     /// The panels one above the other.
     vertical: bool,
     /// Quick View's viewer has the keys: no panel shows a cursor.
@@ -460,6 +462,7 @@ impl Commander {
             quick: None,
             quick_keys: false,
             thumbnails: views::Thumbnails::default(),
+            app_icons: app_icons::AppIcons::default(),
             vertical: session.vertical,
         }
     }
@@ -1040,9 +1043,11 @@ impl Commander {
     /// Enter: into folders and archives; files open with their program.
     fn enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let panel = self.panels[self.active].tabs.current();
-        let file = panel
-            .current_entry()
-            .is_some_and(|e| !e.is_dir && (panel.in_archive() || !archive::is_archive(&e.name)));
+        // macOS's applications run, but where they are only folders: in archives, on servers.
+        let local = panel.remote().is_none() && !panel.in_archive();
+        let file = panel.current_entry().is_some_and(|e| {
+            (!e.is_dir || e.is_app() && local) && (panel.in_archive() || !archive::is_archive(&e.name))
+        });
         match file {
             true => self.launch(window, cx),
             false => self.navigate(|panel| panel.open().map(drop), window, cx),
@@ -1052,10 +1057,19 @@ impl Commander {
     /// A server's or an archive's file opens from a copy, and is never run.
     fn launch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let panel = self.panels[self.active].tabs.current();
-        let (Some(origin), Some(entry)) = (panel.origin(), panel.current_entry()) else {
+        let Some(entry) = panel.current_entry() else {
             return;
         };
-        let executable = origin.is_local() && entry.attributes.contains('x');
+        // An application is a folder, which has no origin of a file: its own.
+        let origin = match entry.is_app() {
+            true => Some(origin::Origin::Local(panel.folder().join(&entry.name))),
+            false => panel.origin(),
+        };
+        let Some(origin) = origin else {
+            return;
+        };
+        // An application is a folder: the system runs it.
+        let executable = origin.is_local() && entry.attributes.contains('x') && !entry.is_app();
         let associations = self.settings.associations.clone();
         let name = origin.name();
         cx.spawn_in(window, async move |_, cx| {
@@ -1432,11 +1446,9 @@ impl Commander {
     }
 
     fn render_row(&self, ix: usize, row: usize, cx: &mut Context<Self>) -> Stateful<Div> {
-        let theme = cx.theme();
         let panel = self.panels[ix].tabs.current();
         let entry = &panel.entries()[row];
-        let light = !theme.mode.is_dark();
-        let icon = icons::material().icon(&entry.display_name(), entry.is_dir, light);
+        let icon = self.entry_icon(ix, entry, px(16.), cx);
         let (name, extension) = entry.name_and_extension();
         let [name_width, ext, size, date, attr] = self.columns.map(px);
         self.entry_base(ix, row, true, cx)
@@ -1454,7 +1466,7 @@ impl Commander {
                     })
                     .px_1()
                     .gap_1()
-                    .child(img(format!("material/{icon}")).size(px(16.)).flex_none())
+                    .child(icon)
                     .child(div().truncate().child(name)),
             )
             .child(div().w(ext).flex_none().px_1().truncate().child(extension))
