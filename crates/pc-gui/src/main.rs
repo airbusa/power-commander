@@ -494,8 +494,7 @@ impl Commander {
             return;
         };
         let around = (how == remote::Open::View && origin.is_local()).then(|| panel.files_around());
-        let (settings, bounds, name) =
-            (self.settings.clone(), window.window_bounds(), origin.name());
+        let (settings, bounds, name) = (self.settings.clone(), Over::window(window, cx), origin.name());
         // The file's own viewer or editor, by its association.
         let entry = panel
             .current_entry()
@@ -1743,12 +1742,35 @@ impl Render for Commander {
     }
 }
 
+/// Where a window opens over another: its bounds, on its display. A
+/// window's bounds are its display's; without the display they would be
+/// taken as the primary display's, another monitor.
+#[derive(Clone, Copy)]
+pub(crate) struct Over {
+    bounds: WindowBounds,
+    display: Option<DisplayId>,
+}
+
+impl Over {
+    /// As large as `window`, over it.
+    pub(crate) fn window(window: &Window, cx: &App) -> Self {
+        Self::at(window.window_bounds(), window, cx)
+    }
+
+    /// `bounds` on `window`'s display.
+    pub(crate) fn at(bounds: WindowBounds, window: &Window, cx: &App) -> Self {
+        let display = window.display(cx).map(|display| display.id());
+        Over { bounds, display }
+    }
+}
+
 /// The viewer's and editor's windows: where the main one is. Wayland lets
 /// no app place its windows; as the main window's child, the compositor
 /// centres it over the main window.
-pub(crate) fn over_main_window(title: String, bounds: WindowBounds, cx: &App) -> WindowOptions {
+pub(crate) fn over_main_window(title: String, over: Over, cx: &App) -> WindowOptions {
     WindowOptions {
-        window_bounds: Some(bounds),
+        window_bounds: Some(over.bounds),
+        display_id: over.display,
         kind: match cx.compositor_name() {
             "Wayland" => WindowKind::Floating,
             _ => WindowKind::Normal,

@@ -68,8 +68,8 @@ impl Commander {
         let main = window.bounds();
         let size = size(px(820.), px(700.)).min(&main.size);
         let origin = main.origin + point((main.size.width - size.width) / 2., (main.size.height - size.height) / 2.);
-        let bounds = WindowBounds::Windowed(Bounds { origin, size });
-        let options = crate::over_main_window("Find Files".into(), bounds, cx);
+        let over = crate::Over::at(WindowBounds::Windowed(Bounds { origin, size }), window, cx);
+        let options = crate::over_main_window("Find Files".into(), over, cx);
         let commander = cx.entity().downgrade();
         let opened = gpui_kit::open_window(options, cx, |window, cx| {
             cx.new(|cx| FindFiles::new(commander, separate, folder, chosen, window, cx))
@@ -453,7 +453,7 @@ impl FindFiles {
             return;
         };
         let settings = commander.read(cx).settings.clone();
-        let bounds = window.window_bounds();
+        let bounds = crate::Over::window(window, cx);
         // As Lister from Total Commander's search: at the text found.
         let text = self.query_text(cx);
         if let Some(text) = &text {

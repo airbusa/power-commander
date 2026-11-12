@@ -27,14 +27,14 @@ pub fn open(
     path: PathBuf,
     limit_mb: u64,
     upload: Option<Upload>,
-    bounds: WindowBounds,
+    over: crate::Over,
     cx: &mut App,
 ) -> io::Result<()> {
     let (text, unfit) = match edit::load_text(&path, limit_mb)? {
         edit::Loaded::Text(text) => (text, None),
         edit::Loaded::Unfit { why, anyway } => (String::new(), Some((why, anyway))),
     };
-    let options = crate::over_main_window(title(&path, false), bounds, cx);
+    let options = crate::over_main_window(title(&path, false), over, cx);
     gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| TextEditor::new(path, text, unfit, upload, window, cx))
     })

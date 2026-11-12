@@ -162,10 +162,10 @@ pub fn open(
     files: Vec<PathBuf>,
     at: usize,
     settings: ViewerSettings,
-    bounds: WindowBounds,
+    over: crate::Over,
     cx: &mut App,
 ) -> io::Result<()> {
-    open_with(files, at, settings, bounds, false, cx)
+    open_with(files, at, settings, over, false, cx)
 }
 
 /// As `open`, at the first match of the last Find: Find Files' text.
@@ -173,23 +173,23 @@ pub(crate) fn open_finding(
     files: Vec<PathBuf>,
     at: usize,
     settings: ViewerSettings,
-    bounds: WindowBounds,
+    over: crate::Over,
     cx: &mut App,
 ) -> io::Result<()> {
-    open_with(files, at, settings, bounds, true, cx)
+    open_with(files, at, settings, over, true, cx)
 }
 
 fn open_with(
     files: Vec<PathBuf>,
     at: usize,
     settings: ViewerSettings,
-    bounds: WindowBounds,
+    over: crate::Over,
     find: bool,
     cx: &mut App,
 ) -> io::Result<()> {
     let mut shown = Shown::new(files, at, settings, Img::extensions(), true, true);
     let text = shown.start()?;
-    let options = crate::over_main_window(title(shown.path()), bounds, cx);
+    let options = crate::over_main_window(title(shown.path()), over, cx);
     gpui_kit::open_window(options, cx, |window, cx| {
         let viewer = cx.new(|cx| Viewer::new(shown, text, false, window, cx));
         if find {

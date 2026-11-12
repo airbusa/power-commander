@@ -39,7 +39,7 @@ impl Commander {
                 [b, a]
             }
         };
-        if let Err(err) = open(files.map(Arc::new), window.window_bounds(), cx) {
+        if let Err(err) = open(files.map(Arc::new), crate::Over::window(window, cx), cx) {
             window.push_notification(Notification::error(err), cx);
         }
     }
@@ -54,9 +54,10 @@ fn title(files: &[Arc<Origin>; 2]) -> String {
     format!("Compare: {} — {}", name(&files[0]), name(&files[1]))
 }
 
-fn open(files: [Arc<Origin>; 2], bounds: WindowBounds, cx: &mut App) -> Result<(), String> {
+fn open(files: [Arc<Origin>; 2], over: crate::Over, cx: &mut App) -> Result<(), String> {
     let options = WindowOptions {
-        window_bounds: Some(bounds),
+        window_bounds: Some(over.bounds),
+        display_id: over.display,
         titlebar: Some(TitlebarOptions {
             title: Some(title(&files).into()),
             ..Default::default()
