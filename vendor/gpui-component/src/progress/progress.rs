@@ -95,8 +95,11 @@ impl RenderOnce for Progress {
 
         // PowerCommander patch: Breeze's 6 px groove and fill, see `BreezeControls`.
         let breeze = cx.try_global::<crate::BreezeControls>().copied();
+        // AppKit's 8 px groove, rimmed, see `MacControls`.
+        let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| breeze.is_none());
         let (height, pill_radius) = match self.size {
             _ if breeze.is_some() => (px(6.), px(3.)),
+            _ if mac.is_some() => (px(8.), px(4.)),
             Size::XSmall => (px(4.), px(2.)),
             Size::Small => (px(6.), px(3.)),
             Size::Medium => (px(8.), px(4.)),
@@ -136,6 +139,7 @@ impl RenderOnce for Progress {
                     .absolute()
                     .size_full()
                     .bg(breeze.map_or(bg.opacity(0.2), |breeze| breeze.groove.into()))
+                    .when_some(mac, |this, mac| this.bg(mac.groove).border(px(0.5)).border_color(mac.groove_rim))
                     .rounded(radius)
                     .refine_style(&inner_style),
             )
@@ -146,6 +150,7 @@ impl RenderOnce for Progress {
                     .left_0()
                     .h_full()
                     .bg(breeze.map_or(bg, |breeze| breeze.fill.into()))
+                    .when_some(mac, |this, mac| this.bg(mac.accent))
                     .rounded(radius)
                     .refine_style(&inner_style)
                     .map(|this| {

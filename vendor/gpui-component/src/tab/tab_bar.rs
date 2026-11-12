@@ -369,7 +369,19 @@ impl RenderOnce for TabBar {
             Size::Large => px(16.),
             _ => px(12.),
         };
+        // PowerCommander patch: AppKit's window tab bar, see `MacControls`: a
+        // rounded track holding tabs of equal width.
+        let mac = match self.variant {
+            TabVariant::Tab if !cx.has_global::<crate::BreezeControls>() => {
+                cx.try_global::<crate::MacControls>().copied()
+            }
+            _ => None,
+        };
         let (bg, paddings, gap): (Background, _, _) = match self.variant {
+            TabVariant::Tab if mac.is_some() => {
+                let track = mac.map_or(cx.theme().transparent, |mac| mac.tab_track);
+                (track.into(), Edges::all(px(2.)), px(0.))
+            }
             TabVariant::Tab => {
                 let padding = Edges::all(px(0.));
                 (cx.theme().tokens.tab_bar.into(), padding, px(0.))
@@ -470,6 +482,7 @@ impl RenderOnce for TabBar {
         for (ix, child) in self.children.into_iter().enumerate() {
             item_metas.push((child.label.clone(), child.icon.clone(), child.disabled));
             let tab_bar_prefix = child.tab_bar_prefix.unwrap_or(true);
+            let child = if mac.is_some() { child.flex_1() } else { child };
             let mut tab = child
                 .ix(ix)
                 .tab_bar_prefix(tab_bar_prefix)
@@ -544,7 +557,7 @@ impl RenderOnce for TabBar {
             .bg(bg)
             .text_color(cx.theme().tab_foreground)
             .when(
-                self.variant == TabVariant::Underline || self.variant == TabVariant::Tab,
+                self.variant == TabVariant::Underline || (self.variant == TabVariant::Tab && mac.is_none()),
                 |this| {
                     this.child(
                         div()
@@ -559,6 +572,7 @@ impl RenderOnce for TabBar {
                 },
             )
             .rounded(self.variant.tab_bar_radius(self.size, cx))
+            .when(mac.is_some(), |this| this.rounded(px(14.)).m(px(4.)))
             .paddings(paddings)
             .refine_style(&self.style)
             .when_some(self.prefix, |this, prefix| this.child(prefix))

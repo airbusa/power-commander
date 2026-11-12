@@ -182,6 +182,29 @@ impl ButtonVariant {
         Some(ButtonVariantStyle { bg: bg.into(), border, fg: breeze.mark, underline: false, shadow: false })
     }
 
+    /// PowerCommander patch: AppKit's push buttons, see `MacControls`: filled,
+    /// unframed, the default (primary) one in the accent; no change on hover.
+    fn mac(&self, state: Option<ButtonStyleState>, cx: &App) -> Option<ButtonVariantStyle> {
+        let mac = cx.try_global::<crate::MacControls>().copied()?;
+        if cx.has_global::<crate::BreezeControls>() || !self.is_mac_push() {
+            return None;
+        }
+        let primary = matches!(self, Self::Primary);
+        let (bg, fg) = match (primary, state) {
+            (_, None) => (mac.button_disabled, mac.disabled_text),
+            (true, Some(ButtonStyleState::Active)) => (mac.accent.blend(gpui::black().opacity(0.15)), mac.on_accent),
+            (true, _) => (mac.accent, mac.on_accent),
+            (false, Some(ButtonStyleState::Active)) => (mac.button_pressed, mac.text),
+            (false, _) => (mac.button, mac.text),
+        };
+        let border = cx.theme().transparent;
+        Some(ButtonVariantStyle { bg: bg.into(), border, fg, underline: false, shadow: false })
+    }
+
+    fn is_mac_push(&self) -> bool {
+        matches!(self, Self::Default | Self::Primary | Self::Secondary)
+    }
+
     #[inline]
     pub fn is_link(&self) -> bool {
         matches!(self, Self::Link)
@@ -639,6 +662,10 @@ impl RenderOnce for Button {
             && !self.shows_selected_style();
         let qt = qt.then(|| cx.try_global::<crate::QtControls>().cloned()).flatten();
         let qt_default = self.variant == ButtonVariant::Primary;
+        // PowerCommander patch: AppKit's push buttons are 24 px, see `MacControls`.
+        let mac_push = cx.has_global::<crate::MacControls>()
+            && !cx.has_global::<crate::BreezeControls>()
+            && self.variant.is_mac_push();
         let interactive = self.interactive();
         let hoverable = self.hoverable();
         let disabled = self.disabled;
@@ -675,6 +702,10 @@ impl RenderOnce for Button {
         let is_focused = focus_handle.is_focused(window);
 
         let rounding = match self.rounded {
+            _ if mac_push => match self.size {
+                Size::XSmall | Size::Small => gpui::px(5.),
+                _ => gpui::px(6.),
+            },
             ButtonRounded::Small => cx.theme().radius * 0.5,
             ButtonRounded::Medium => cx.theme().radius,
             ButtonRounded::Large => cx.theme().radius * 2.0,
@@ -701,6 +732,8 @@ impl RenderOnce for Button {
                 if self.label.is_none() && children.is_empty() {
                     // Icon Button
                     match self.size {
+                        Size::Medium | Size::Large if mac_push => this.size(gpui::px(24.)),
+                        Size::Small if mac_push => this.size(gpui::px(20.)),
                         Size::Size(px) => this.size(px),
                         Size::XSmall => this.size_5(),
                         Size::Small => this.size_6(),
@@ -709,6 +742,14 @@ impl RenderOnce for Button {
                 } else {
                     // Normal Button
                     match self.size {
+                        Size::Medium | Size::Large if mac_push => this
+                            .h(gpui::px(24.))
+                            .px(gpui::px(9.))
+                            .when(self.compact, |this| this.min_w(gpui::px(24.)).px(gpui::px(6.))),
+                        Size::Small if mac_push => this
+                            .h(gpui::px(20.))
+                            .px(gpui::px(7.))
+                            .when(self.compact, |this| this.min_w(gpui::px(20.)).px(gpui::px(5.))),
                         Size::Size(size) => this.px(size * 0.2),
                         Size::XSmall => this.h_5().px_1().when(self.compact, |this| this.min_w_5()),
                         Size::Small => this
@@ -1160,6 +1201,9 @@ impl ButtonVariant {
         if let Some(style) = self.breeze(outline, ButtonStyleState::Normal, cx) {
             return style;
         }
+        if let Some(style) = self.mac(Some(ButtonStyleState::Normal), cx) {
+            return style;
+        }
         let bg = self.bg_color(outline, cx);
         let border = self.border_color(outline, cx);
         let fg = self.text_color(outline, cx);
@@ -1177,6 +1221,9 @@ impl ButtonVariant {
 
     fn hovered(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
         if let Some(style) = self.breeze(outline, ButtonStyleState::Hovered, cx) {
+            return style;
+        }
+        if let Some(style) = self.mac(Some(ButtonStyleState::Hovered), cx) {
             return style;
         }
         let bg: Background = match self {
@@ -1264,6 +1311,9 @@ impl ButtonVariant {
 
     fn active(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
         if let Some(style) = self.breeze(outline, ButtonStyleState::Active, cx) {
+            return style;
+        }
+        if let Some(style) = self.mac(Some(ButtonStyleState::Active), cx) {
             return style;
         }
         let bg = match self {
@@ -1382,6 +1432,9 @@ impl ButtonVariant {
     }
 
     fn disabled(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
+        if let Some(style) = self.mac(None, cx) {
+            return style;
+        }
         let bg = match self {
             Self::Default | Self::Link | Self::Ghost | Self::Text => cx.theme().transparent.into(),
             Self::Primary => cx.theme().tokens.button_primary.background.opacity(0.15),

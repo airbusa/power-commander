@@ -238,9 +238,20 @@ impl RenderOnce for Radio {
                     .flex_shrink_0()
                     .rounded_full_style(cx)
                     .border_1()
-                    // PowerCommander patch: Breeze's circle and dot, see `BreezeControls`.
-                    .map(|this| match cx.try_global::<crate::BreezeControls>().copied() {
-                        Some(breeze) => {
+                    // PowerCommander patch: Breeze's circle and dot, see `BreezeControls`; AppKit's, see `MacControls`.
+                    .map(|this| match (cx.try_global::<crate::BreezeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
+                        (None, Some(mac)) => {
+                            let fill = if checked && !disabled { mac.accent } else { mac.well };
+                            let dot = if disabled { mac.disabled_text } else { mac.on_accent };
+                            this.size(px(16.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .border_color(cx.theme().transparent)
+                                .bg(if disabled { fill.opacity(0.5) } else { fill })
+                                .when(checked, |this| this.child(div().size(px(5.)).rounded_full().bg(dot)))
+                        }
+                        (Some(breeze), _) => {
                             let (border, fill) = match checked {
                                 true => (breeze.highlight, breeze.checked),
                                 false => (breeze.frame, breeze.button),
@@ -256,7 +267,7 @@ impl RenderOnce for Radio {
                                     this.child(div().size(px(6.)).rounded_full().bg(breeze.mark.opacity(dim)))
                                 })
                         }
-                        None => this
+                        (None, None) => this
                             .border_color(border_color)
                             .map(|this| match self.checked {
                                 false => this.bg(cx.theme().input_background()),

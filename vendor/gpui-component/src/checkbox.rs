@@ -197,11 +197,16 @@ pub(crate) fn checkbox_check_icon(
         window,
         cx,
     );
-    // PowerCommander patch: Breeze marks in the text colour, see `BreezeControls`.
-    let color = cx
-        .try_global::<crate::BreezeControls>()
-        .map_or(cx.theme().primary_foreground, |breeze| breeze.mark);
-    let color = if disabled { color.opacity(0.5) } else { color };
+    // PowerCommander patch: Breeze marks in the text colour, see `BreezeControls`;
+    // AppKit's, bolder, on the accent, see `MacControls`.
+    let mac = cx.try_global::<crate::MacControls>().copied();
+    let color = match (cx.try_global::<crate::BreezeControls>(), mac) {
+        (Some(breeze), _) => breeze.mark,
+        (None, Some(mac)) if disabled => mac.disabled_text,
+        (None, Some(mac)) => mac.on_accent,
+        (None, None) => cx.theme().primary_foreground,
+    };
+    let color = if disabled && mac.is_none() { color.opacity(0.5) } else { color };
 
     svg()
         .absolute()
@@ -214,9 +219,11 @@ pub(crate) fn checkbox_check_icon(
             Size::Large => this.size_3p5(),
             _ => this.size_3(),
         })
+        .when(mac.is_some(), |this| this.size_3())
         .text_color(color)
-        .when(opacity > 0., |this| {
-            this.path(IconName::Check.path()).opacity(opacity)
+        .when(opacity > 0., |this| match mac {
+            Some(_) => this.data(crate::mac::CHECK_MARK).opacity(opacity),
+            None => this.path(IconName::Check.path()).opacity(opacity),
         })
 }
 
@@ -302,9 +309,10 @@ impl RenderOnce for Checkbox {
                     .when(has_content, |this| this.mt(indicator_size * 0.125))
                     .flex_shrink_0()
                     .border_1()
-                    // PowerCommander patch: the Qt style's box, else Breeze's, see `QtControls`, `BreezeControls`.
-                    .map(|this| match (&qt, cx.try_global::<crate::BreezeControls>().copied()) {
-                        (Some(qt), _) => {
+                    // PowerCommander patch: the Qt style's box, else Breeze's, see `QtControls`, `BreezeControls`;
+                    // AppKit's, see `MacControls`.
+                    .map(|this| match (&qt, cx.try_global::<crate::BreezeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
+                        (Some(qt), _, _) => {
                             let images = &qt.checkbox[checked as usize];
                             let (width, height) = qt.size(&images.0[crate::qt::NORMAL]);
                             this.w(width).h(height).border_0().child(crate::qt::layers(
@@ -313,7 +321,14 @@ impl RenderOnce for Checkbox {
                                 |state| crate::qt::picture(images.0[state].clone()),
                             ))
                         }
-                        (None, Some(breeze)) => {
+                        (None, None, Some(mac)) => {
+                            let fill = if checked && !self.disabled { mac.accent } else { mac.well };
+                            this.size(px(16.))
+                                .rounded(px(5.))
+                                .border_color(cx.theme().transparent)
+                                .bg(if self.disabled { fill.opacity(0.5) } else { fill })
+                        }
+                        (None, Some(breeze), _) => {
                             let (border, fill) = match checked {
                                 true => (breeze.highlight, breeze.checked),
                                 false => (breeze.frame, breeze.button),
@@ -324,7 +339,7 @@ impl RenderOnce for Checkbox {
                                 .border_color(border.opacity(dim))
                                 .bg(fill.opacity(dim))
                         }
-                        (None, None) => this
+                        (None, None, None) => this
                             .rounded(radius)
                             .when(!checked, |this| {
                                 this.bg(cx.theme().input_background())

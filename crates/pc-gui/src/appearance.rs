@@ -2,6 +2,8 @@ use gpui_kit::component::scroll::ScrollbarMode;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use std::sync::Arc;
 
+#[cfg(target_os = "macos")]
+use gpui_kit::component::MacControls;
 use gpui_kit::component::{BreezeControls, Theme as KitTheme, ThemeMode};
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use gpui_kit::component::{ActiveTheme, QtControls, StateImages};
@@ -103,6 +105,8 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         None if cx.has_global::<QtControls>() => drop(cx.remove_global::<QtControls>()),
         None => {}
     }
+    #[cfg(target_os = "macos")]
+    cx.set_global(mac_controls(palette));
     // macOS's cursor is the accent, filled, as Finder's; elsewhere a tint, framed.
     let filled = cfg!(target_os = "macos");
     PanelColors {
@@ -131,17 +135,51 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
     }
 }
 
+/// macOS: the controls as AppKit draws them, measured on macOS 26: fills of
+/// the text's colour, white in dark mode, black in light.
+#[cfg(target_os = "macos")]
+fn mac_controls(palette: &Palette) -> MacControls {
+    let dark = palette.dark;
+    let ink = |alpha: f32| hsla(0., 0., if dark { 1. } else { 0. }, alpha);
+    let accent = mac_color(dark, objc2_app_kit::NSColor::controlAccentColor).unwrap_or(0x007aff);
+    MacControls {
+        accent: Hsla::from(rgb(accent)),
+        on_accent: hsla(0., 0., 1., 1.),
+        button: ink(0.075),
+        button_pressed: ink(0.16),
+        button_disabled: ink(0.035),
+        well: ink(0.1),
+        groove: ink(0.07),
+        groove_rim: ink(0.12),
+        knob: if dark { Hsla::from(rgb(0xdfdfdf)) } else { hsla(0., 0., 1., 1.) },
+        group: ink(0.03),
+        field_frame: ink(0.1),
+        text: ink(0.85),
+        disabled_text: ink(0.25),
+        window_frame: ink(if dark { 0.18 } else { 0.12 }),
+        tab_track: ink(if dark { 0.06 } else { 0.1 }),
+        tab: if dark { ink(0.19) } else { Hsla::from(rgb(0xf8f8f8)) },
+        tab_rim: hsla(0., 0., 1., if dark { 0.2 } else { 1. }),
+    }
+}
+
 /// macOS: the selected rows' colour, the user's accent, as Finder has it.
 #[cfg(target_os = "macos")]
 pub fn mac_selection(dark: bool) -> Option<u32> {
+    mac_color(dark, objc2_app_kit::NSColor::selectedContentBackgroundColor)
+}
+
+/// A system colour in light or dark mode.
+#[cfg(target_os = "macos")]
+fn mac_color(dark: bool, color: fn() -> objc2::rc::Retained<objc2_app_kit::NSColor>) -> Option<u32> {
     use std::cell::Cell;
 
     use block2::StackBlock;
-    use objc2_app_kit::{NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSColor, NSColorSpace};
+    use objc2_app_kit::{NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSColorSpace};
     let name = unsafe { if dark { NSAppearanceNameDarkAqua } else { NSAppearanceNameAqua } };
     let rgb = Cell::new(None);
     let resolve = StackBlock::new(|| {
-        let color = NSColor::selectedContentBackgroundColor().colorUsingColorSpace(&NSColorSpace::sRGBColorSpace());
+        let color = color().colorUsingColorSpace(&NSColorSpace::sRGBColorSpace());
         rgb.set(color.map(|color| [color.redComponent(), color.greenComponent(), color.blueComponent()]));
     });
     NSAppearance::appearanceNamed(name)?.performAsCurrentDrawingAppearance(&resolve);

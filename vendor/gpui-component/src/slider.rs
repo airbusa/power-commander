@@ -5,10 +5,10 @@ pub use gpui_base::slider::{SliderEvent, SliderScale, SliderState, SliderValue};
 use gpui_base::{Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack, spring};
 
 use gpui::{
-    App, Axis, Background, Corners, DefiniteLength, ElementId, Entity, EntityId, Hsla,
+    App, Axis, Background, BoxShadow, Corners, DefiniteLength, ElementId, Entity, EntityId, Hsla,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels, RenderOnce,
     StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
-    prelude::FluentBuilder as _, px, relative,
+    hsla, point, prelude::FluentBuilder as _, px, relative,
 };
 
 /// Width of the translucent ring that grows outside a hovered thumb.
@@ -155,8 +155,10 @@ impl RenderOnce for Slider {
             (relative(percentage.start), relative(1. - percentage.end))
         };
         let rem_size = window.rem_size();
-        // PowerCommander patch: Breeze's groove and handle, see `BreezeControls`.
+        // PowerCommander patch: Breeze's groove and handle, see `BreezeControls`;
+        // AppKit's groove and pill-shaped knob, see `MacControls`.
         let breeze = cx.try_global::<crate::BreezeControls>().copied();
+        let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| breeze.is_none());
 
         let bar_color = self
             .style
@@ -165,6 +167,7 @@ impl RenderOnce for Slider {
             .and_then(|bg| bg.color())
             .unwrap_or(cx.theme().tokens.slider_bar.into());
         let bar_color = breeze.map_or(bar_color, |breeze| breeze.fill.into());
+        let bar_color = mac.map_or(bar_color, |mac| mac.accent.into());
         let thumb_bg: Background = self
             .style
             .text
@@ -172,6 +175,7 @@ impl RenderOnce for Slider {
             .map(Into::into)
             .unwrap_or_else(|| cx.theme().tokens.slider_thumb.into());
         let thumb_bg = breeze.map_or(thumb_bg, |breeze| breeze.button.into());
+        let thumb_bg = mac.map_or(thumb_bg, |mac| mac.knob.into());
         let corner_radii = self.style.corner_radii.clone();
         // The track is a pill by default, and square when the theme squares its
         // corners. A caller's own corner radii still win.
@@ -207,24 +211,38 @@ impl RenderOnce for Slider {
                 .disabled(self.disabled)
                 .when(!self.disabled, |this| {
                     this.absolute()
-                        .when(axis.is_horizontal(), |this| match breeze {
-                            Some(_) => this.top(px(-7.)).left(position).ml(-px(10.)),
-                            None => this.top(px(-5.)).left(position).ml(-px(8.)),
+                        .when(axis.is_horizontal(), |this| match (breeze, mac) {
+                            (Some(_), _) => this.top(px(-7.)).left(position).ml(-px(10.)),
+                            (None, Some(_)) => this.top(px(-5.)).left(position).ml(-px(10.)),
+                            (None, None) => this.top(px(-5.)).left(position).ml(-px(8.)),
                         })
-                        .when(axis.is_vertical(), |this| match breeze {
-                            Some(_) => this.bottom(position).left(px(-7.)).mb(-px(10.)),
-                            None => this.bottom(position).left(px(-5.)).mb(-px(8.)),
+                        .when(axis.is_vertical(), |this| match (breeze, mac) {
+                            (Some(_), _) => this.bottom(position).left(px(-7.)).mb(-px(10.)),
+                            (None, Some(_)) => this.bottom(position).left(px(-5.)).mb(-px(10.)),
+                            (None, None) => this.bottom(position).left(px(-5.)).mb(-px(8.)),
                         })
                         .flex()
                         .items_center()
                         .justify_center()
                         .flex_shrink_0()
                         .rounded_full_style(cx)
-                        .map(|this| match breeze {
-                            Some(breeze) => this.bg(breeze.handle_frame).size(px(20.)),
-                            None => this.bg(bar_color.opacity(0.5)).size_4(),
+                        .map(|this| match (breeze, mac) {
+                            (Some(breeze), _) => this.bg(breeze.handle_frame).size(px(20.)).p(px(1.)),
+                            (None, Some(mac)) => this
+                                .bg(mac.knob)
+                                .map(|this| match axis.is_horizontal() {
+                                    true => this.w(px(20.)).h(px(16.)),
+                                    false => this.w(px(16.)).h(px(20.)),
+                                })
+                                .shadow(vec![BoxShadow {
+                                    color: hsla(0., 0., 0., 0.3),
+                                    offset: point(px(0.), px(0.5)),
+                                    blur_radius: px(2.),
+                                    spread_radius: px(0.),
+                                    inset: false,
+                                }]),
+                            (None, None) => this.bg(bar_color.opacity(0.5)).size_4().p(px(1.)),
                         })
-                        .p(px(1.))
                         .on_hover({
                             let interaction = ring.interaction.clone();
                             move |entered, _, cx| {
@@ -244,7 +262,7 @@ impl RenderOnce for Slider {
                         .on_mouse_up_out(MouseButton::Left, ring.press_listener(false))
                         // The ring grows outward from the thumb's edge: inset by
                         // its own width so its inner edge sits flush against it.
-                        .child(
+                        .when(mac.is_none(), |this| this.child(
                             div()
                                 .flex_none()
                                 .absolute()
@@ -255,7 +273,7 @@ impl RenderOnce for Slider {
                                 .rounded_full_style(cx)
                                 .border(ring.width)
                                 .border_color(ring.color),
-                        )
+                        ))
                         .child(
                             div()
                                 .flex_shrink_0()
@@ -297,6 +315,7 @@ impl RenderOnce for Slider {
                             .when(axis.is_vertical(), |this| this.h_full().w_1p5())
                             .bg(breeze.map_or(bar_color.opacity(0.2), |breeze| breeze.groove.into()))
                             .active(|this| this.bg(breeze.map_or(bar_color.opacity(0.4), |breeze| breeze.groove.into())))
+                            .when_some(mac, |this, mac| this.bg(mac.well).active(|this| this.bg(mac.well)))
                             .corner_radii(radius)
                             .child(
                                 div()

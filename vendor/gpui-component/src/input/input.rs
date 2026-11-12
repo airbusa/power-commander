@@ -705,6 +705,10 @@ impl RenderOnce for Input {
         };
 
         let (bg, _) = input_style(presentation.is_disabled(), cx);
+        let mac = cx
+            .try_global::<crate::MacControls>()
+            .copied()
+            .filter(|_| !cx.has_global::<crate::BreezeControls>() && !presentation.is_code_editor());
         let bg = if presentation.is_code_editor() {
             cx.theme().editor_background()
         } else {
@@ -758,7 +762,7 @@ impl RenderOnce for Input {
                 styles.focused(|style| {
                     style.when(
                         self.appearance && self.bordered && self.focus_bordered,
-                        |style| style.border_1().border_color(cx.theme().ring),
+                        |style| style.border_1().border_color(mac.map_or(cx.theme().ring, |mac| mac.accent)),
                     )
                 })
             })
@@ -796,6 +800,13 @@ impl RenderOnce for Input {
                     .rounded(cx.theme().radius)
                     .when(self.bordered, |this| {
                         this.border_1().border_color(cx.theme().input)
+                    })
+                    // PowerCommander patch: AppKit's text field, see `MacControls`: a
+                    // faint frame, 6 px corners, 24 px as the push buttons beside it.
+                    .when_some(mac, |this, mac| {
+                        this.rounded(px(6.))
+                            .when(self.bordered, |this| this.border_color(mac.field_frame))
+                            .when(!is_multi_line && matches!(self.size, Size::Medium), |this| this.h(px(24.)).py_0())
                     })
             })
             .items_center()

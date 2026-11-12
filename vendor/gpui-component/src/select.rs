@@ -518,6 +518,12 @@ where
         let outline_visible = self.state.open || (is_focused && !self.state.disabled);
 
         let (bg, fg) = input_style(self.state.disabled, cx);
+        // PowerCommander patch: AppKit's pop-up button, see `MacControls`: filled
+        // as a push button, 24 px, with its up and down chevrons.
+        let mac = cx
+            .try_global::<crate::MacControls>()
+            .copied()
+            .filter(|_| !cx.has_global::<crate::BreezeControls>() && self.state.appearance);
 
         self.state.list.update(cx, |list, cx| {
             list.set_searchable(searchable, cx);
@@ -550,9 +556,19 @@ where
                         })
                         .input_size(self.state.size)
                         .input_text_size(self.state.size)
+                        .when_some(mac, |this, mac| {
+                            this.bg(mac.button)
+                                .text_color(mac.text)
+                                .border_color(cx.theme().transparent)
+                                .rounded(px(6.))
+                                .when(matches!(self.state.size, Size::Medium | Size::Large), |this| {
+                                    this.h(px(24.)).py_0()
+                                })
+                        })
                         .refine_style(&self.state.style)
                         .when(outline_visible && self.state.appearance, |this| {
-                            this.border_1().border_color(cx.theme().ring)
+                            let ring = mac.map_or(cx.theme().ring, |mac| mac.accent);
+                            this.border_1().border_color(ring)
                         })
                         .when(
                             outline_visible && self.state.appearance && self.focus_ring_enabled,
@@ -595,6 +611,10 @@ where
                                         Some(icon) => icon
                                             .xsmall()
                                             .text_color(cx.theme().muted_foreground)
+                                            .into_any_element(),
+                                        None if mac.is_some() => Icon::new(IconName::ChevronsUpDown)
+                                            .xsmall()
+                                            .text_color(cx.theme().foreground)
                                             .into_any_element(),
                                         None => Caret::new(self.state.size)
                                             .text_color(cx.theme().muted_foreground)

@@ -552,7 +552,8 @@ fn mac(dark: bool) -> Palette {
             selection_text: 0xffffff,
             marked: 0xff453a,
             font: None,
-            font_size: None,
+            // AppKit's system font size.
+            font_size: Some(13.),
         },
         false => Palette {
             dark,
@@ -567,7 +568,7 @@ fn mac(dark: bool) -> Palette {
             selection_text: 0xffffff,
             marked: 0xff3b30,
             font: None,
-            font_size: None,
+            font_size: Some(13.),
         },
     }
 }

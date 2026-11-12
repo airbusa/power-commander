@@ -2,7 +2,7 @@
 // its title, can open centred over a part of the window, and fades in
 // without sliding. Changes are marked "WDS patch".
 // Modified for PowerCommander: the title is smaller and ends in "…" when
-// long. Changes are marked "PowerCommander patch".
+// long; on macOS the frame is a window's. Changes are marked "PowerCommander patch".
 
 use super::entrance::{DialogEntrance, EntranceSurface};
 use crate::root::WindowState;
@@ -352,6 +352,31 @@ pub(crate) fn overlay_color(overlay: bool, cx: &App) -> Hsla {
     cx.theme().overlay
 }
 
+/// PowerCommander patch: AppKit's red close button, grey while the window
+/// is not in front, its cross shown under the pointer.
+fn mac_close_button(button: gpui_base::Button, mac: crate::MacControls, active: bool) -> impl IntoElement {
+    let (fill, rim) = match active {
+        true => (gpui::rgb(0xff5f57).into(), gpui::rgb(0xe0443e).into()),
+        false => (mac.well, mac.well),
+    };
+    button
+        .group("dialog-close")
+        .size(px(14.))
+        .rounded_full()
+        .bg(fill)
+        .border(px(0.5))
+        .border_color(rim)
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .opacity(0.)
+                .group_hover("dialog-close", |this| this.opacity(1.))
+                .child(crate::Icon::new(IconName::Close).size(px(10.)).text_color(gpui::black().opacity(0.55))),
+        )
+}
+
 fn dialog_shadow(delta: f32) -> Vec<BoxShadow> {
     vec![
         BoxShadow {
@@ -687,6 +712,15 @@ impl RenderOnce for Dialog {
         };
         let laid_out = moving.clone();
         let has_title = self.title.is_some();
+        // PowerCommander patch: AppKit's window, see `MacControls`: 16 px corners,
+        // a 32 px title bar of the dialog's colour, the close button on the left.
+        let mac = cx
+            .try_global::<crate::MacControls>()
+            .copied()
+            .filter(|_| !cx.has_global::<crate::BreezeControls>());
+        let band = px(if mac.is_some() { 32. } else { TITLE_BAND_HEIGHT });
+        let corner = mac.map_or(cx.theme().radius_lg, |_| px(16.));
+        let active = window.is_window_active();
 
         let mut paddings = Edges::all(px(16.));
         if let Some(pl) = self.style.padding.left {
@@ -778,8 +812,8 @@ impl RenderOnce for Dialog {
                                         .debug_selector(move || format!("dialog-{layer_ix}"))
                                         .bg(cx.theme().tokens.background)
                                         .border_1()
-                                        .border_color(cx.theme().border)
-                                        .rounded(cx.theme().radius_lg)
+                                        .border_color(mac.map_or(cx.theme().border, |mac| mac.window_frame))
+                                        .rounded(corner)
                                         .min_h_24()
                                         .pt(paddings.top)
                                         .pb(paddings.bottom)
@@ -801,19 +835,23 @@ impl RenderOnce for Dialog {
                                                 div()
                                                     .id("dialog-move")
                                                     .flex_none()
-                                                    .h(px(TITLE_BAND_HEIGHT))
+                                                    .h(band)
                                                     .flex()
                                                     .items_center()
                                                     .pl(paddings.left)
                                                     .pr(paddings.right + px(28.))
-                                                    .bg(theme.muted)
-                                                    .border_b_1()
-                                                    .border_color(theme.border)
-                                                    .rounded_t(theme.radius_lg - px(1.))
+                                                    .map(|this| match mac {
+                                                        Some(_) => this.pl(px(36.)).pr(paddings.right),
+                                                        None => this.bg(theme.muted).border_b_1().border_color(theme.border),
+                                                    })
+                                                    .rounded_t(corner - px(1.))
                                                     // PowerCommander patch: the window title's size; a long one ends in "…".
                                                     .child(
                                                         DialogTitle::new()
                                                             .text_sm()
+                                                            .when(mac.is_some(), |this| {
+                                                                this.font_semibold().text_color(theme.muted_foreground)
+                                                            })
                                                             .flex_1()
                                                             .min_w_0()
                                                             .truncate()
@@ -882,23 +920,25 @@ impl RenderOnce for Dialog {
                                         .children(self.props.close_button.then(|| {
                                             // WDS patch: in the middle of the title's band.
                                             let top = if has_title {
-                                                px((TITLE_BAND_HEIGHT - 24.) / 2.)
+                                                (band - px(24.)) / 2.
                                             } else {
                                                 (paddings.top - px(10.)).max(px(8.))
                                             };
                                             let right = (paddings.right - px(10.)).max(px(8.));
 
-                                            gpui_base::DialogClose::new()
-                                                .absolute()
-                                                .top(top)
-                                                .right(right)
-                                                .trigger(|button| {
+                                            let close = gpui_base::DialogClose::new().absolute();
+                                            match mac {
+                                                Some(mac) => close.top((band - px(14.)) / 2.).left(px(11.)).trigger(|button| {
+                                                    mac_close_button(button, mac, active)
+                                                }),
+                                                None => close.top(top).right(right).trigger(|button| {
                                                     Button::new("close")
                                                         .with_base(button)
                                                         .small()
                                                         .ghost()
                                                         .icon(IconName::Close)
-                                                })
+                                                }),
+                                            }
                                         }))
                                         .map(|surface| {
                                             if animated {

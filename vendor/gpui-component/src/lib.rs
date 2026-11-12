@@ -26,6 +26,9 @@ pub use breeze::BreezeControls;
 // PowerCommander patch: see `QtControls`.
 mod qt;
 pub use qt::{QtControls, StateImages};
+// PowerCommander patch: see `MacControls`.
+mod mac;
+pub use mac::MacControls;
 mod window_ext;
 
 pub(crate) mod actions {

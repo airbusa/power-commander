@@ -1,6 +1,6 @@
 use gpui::{
     AnyElement, App, Background, ElementId, InteractiveElement as _, IntoElement, ParentElement,
-    RenderOnce, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, relative,
+    RenderOnce, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px, relative,
 };
 use smallvec::SmallVec;
 
@@ -140,8 +140,15 @@ impl GroupBoxVariants for GroupBox {
 
 impl RenderOnce for GroupBox {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        // PowerCommander patch: AppKit's box, see `MacControls`: faintly filled,
+        // unframed, 12 px corners, its title small above it.
+        let mac = cx
+            .try_global::<crate::MacControls>()
+            .copied()
+            .filter(|_| !cx.has_global::<crate::BreezeControls>());
         let (bg, border, has_paddings): (Option<Background>, _, _) = match self.variant {
             GroupBoxVariant::Normal => (None, None, false),
+            _ if mac.is_some() => (mac.map(|mac| mac.group.into()), None, true),
             GroupBoxVariant::Fill => (Some(cx.theme().tokens.group_box.into()), None, true),
             GroupBoxVariant::Outline => (None, Some(cx.theme().border), true),
         };
@@ -151,12 +158,14 @@ impl RenderOnce for GroupBox {
             .w_full()
             .when(has_paddings, |this| this.gap_3())
             .when(!has_paddings, |this| this.gap_4())
+            .when(mac.is_some() && has_paddings, |this| this.gap_1p5())
             .refine_style(&self.style)
             .when_some(self.title, |this, title| {
                 this.child(
                     div()
                         .text_color(cx.theme().muted_foreground)
                         .line_height(relative(1.25))
+                        .when_some(mac, |this, mac| this.text_xs().text_color(mac.text).pl(px(10.)))
                         .refine_style(&self.title_style)
                         .child(title),
                 )
@@ -174,6 +183,7 @@ impl RenderOnce for GroupBox {
                             .when(has_paddings, |this| this.p_4())
                             .gap_4()
                             .rounded(cx.theme().radius)
+                            .when(mac.is_some(), |this| this.rounded(px(12.)))
                             .refine_style(&self.content_style)
                             .children(self.children),
                     )

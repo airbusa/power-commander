@@ -1,6 +1,6 @@
 diff -ruN a/src/breeze.rs b/src/breeze.rs
 --- a/src/breeze.rs	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/breeze.rs	2026-11-12 22:30:56.237340031 +0100
++++ b/src/breeze.rs	2026-11-12 22:39:45.309412900 +0100
 @@ -0,0 +1,32 @@
 +// PowerCommander patch: this file is new.
 +use gpui::{Global, Hsla};
@@ -35,9 +35,9 @@ diff -ruN a/src/breeze.rs b/src/breeze.rs
 +
 +impl Global for BreezeControls {}
 diff -ruN a/src/button/button.rs b/src/button/button.rs
---- a/src/button/button.rs	2026-11-12 22:30:56.217716806 +0100
-+++ b/src/button/button.rs	2026-11-12 22:30:56.228779361 +0100
-@@ -159,6 +159,29 @@
+--- a/src/button/button.rs	2026-11-12 22:39:45.265485894 +0100
++++ b/src/button/button.rs	2026-11-12 22:39:45.355683616 +0100
+@@ -159,6 +159,52 @@
  }
  
  impl ButtonVariant {
@@ -64,10 +64,33 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
 +        Some(ButtonVariantStyle { bg: bg.into(), border, fg: breeze.mark, underline: false, shadow: false })
 +    }
 +
++    /// PowerCommander patch: AppKit's push buttons, see `MacControls`: filled,
++    /// unframed, the default (primary) one in the accent; no change on hover.
++    fn mac(&self, state: Option<ButtonStyleState>, cx: &App) -> Option<ButtonVariantStyle> {
++        let mac = cx.try_global::<crate::MacControls>().copied()?;
++        if cx.has_global::<crate::BreezeControls>() || !self.is_mac_push() {
++            return None;
++        }
++        let primary = matches!(self, Self::Primary);
++        let (bg, fg) = match (primary, state) {
++            (_, None) => (mac.button_disabled, mac.disabled_text),
++            (true, Some(ButtonStyleState::Active)) => (mac.accent.blend(gpui::black().opacity(0.15)), mac.on_accent),
++            (true, _) => (mac.accent, mac.on_accent),
++            (false, Some(ButtonStyleState::Active)) => (mac.button_pressed, mac.text),
++            (false, _) => (mac.button, mac.text),
++        };
++        let border = cx.theme().transparent;
++        Some(ButtonVariantStyle { bg: bg.into(), border, fg, underline: false, shadow: false })
++    }
++
++    fn is_mac_push(&self) -> bool {
++        matches!(self, Self::Default | Self::Primary | Self::Secondary)
++    }
++
      #[inline]
      pub fn is_link(&self) -> bool {
          matches!(self, Self::Link)
-@@ -608,6 +631,14 @@
+@@ -608,6 +654,18 @@
  impl RenderOnce for Button {
      fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
          let style: ButtonVariant = self.variant;
@@ -79,10 +102,49 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
 +            && !self.shows_selected_style();
 +        let qt = qt.then(|| cx.try_global::<crate::QtControls>().cloned()).flatten();
 +        let qt_default = self.variant == ButtonVariant::Primary;
++        // PowerCommander patch: AppKit's push buttons are 24 px, see `MacControls`.
++        let mac_push = cx.has_global::<crate::MacControls>()
++            && !cx.has_global::<crate::BreezeControls>()
++            && self.variant.is_mac_push();
          let interactive = self.interactive();
          let hoverable = self.hoverable();
          let disabled = self.disabled;
-@@ -707,13 +738,15 @@
+@@ -644,6 +702,10 @@
+         let is_focused = focus_handle.is_focused(window);
+ 
+         let rounding = match self.rounded {
++            _ if mac_push => match self.size {
++                Size::XSmall | Size::Small => gpui::px(5.),
++                _ => gpui::px(6.),
++            },
+             ButtonRounded::Small => cx.theme().radius * 0.5,
+             ButtonRounded::Medium => cx.theme().radius,
+             ButtonRounded::Large => cx.theme().radius * 2.0,
+@@ -670,6 +732,8 @@
+                 if self.label.is_none() && children.is_empty() {
+                     // Icon Button
+                     match self.size {
++                        Size::Medium | Size::Large if mac_push => this.size(gpui::px(24.)),
++                        Size::Small if mac_push => this.size(gpui::px(20.)),
+                         Size::Size(px) => this.size(px),
+                         Size::XSmall => this.size_5(),
+                         Size::Small => this.size_6(),
+@@ -678,6 +742,14 @@
+                 } else {
+                     // Normal Button
+                     match self.size {
++                        Size::Medium | Size::Large if mac_push => this
++                            .h(gpui::px(24.))
++                            .px(gpui::px(9.))
++                            .when(self.compact, |this| this.min_w(gpui::px(24.)).px(gpui::px(6.))),
++                        Size::Small if mac_push => this
++                            .h(gpui::px(20.))
++                            .px(gpui::px(7.))
++                            .when(self.compact, |this| this.min_w(gpui::px(20.)).px(gpui::px(5.))),
+                         Size::Size(size) => this.px(size * 0.2),
+                         Size::XSmall => this.h_5().px_1().when(self.compact, |this| this.min_w_5()),
+                         Size::Small => this
+@@ -707,13 +779,15 @@
              .when(self.border_corners.bottom_right, |this| {
                  this.rounded_br(rounding)
              })
@@ -100,7 +162,7 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
                  this.border_color(normal_style.border)
                      .bg(normal_style.bg)
                      .text_color(normal_style.fg)
-@@ -806,10 +839,13 @@
+@@ -806,10 +880,13 @@
                          .refine_style(&instance_style)
                  })
                  .disabled(|style| {
@@ -116,7 +178,7 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
                          .shadow_none()
                          .refine_style(&instance_style)
                  })
-@@ -827,6 +863,12 @@
+@@ -827,6 +904,12 @@
          .track_focus(&focus_handle)
          .tab_index(self.tab_index)
          .tab_stop(self.tab_stop)
@@ -129,40 +191,59 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
          .child(content)
          // Fade the whole button while loading, so every variant is dimmed by
          // the same amount. Fading `bg`, `border` and `fg` one by one instead
-@@ -1115,6 +1157,9 @@
+@@ -1115,6 +1198,12 @@
      }
  
      fn normal(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
 +        if let Some(style) = self.breeze(outline, ButtonStyleState::Normal, cx) {
 +            return style;
 +        }
++        if let Some(style) = self.mac(Some(ButtonStyleState::Normal), cx) {
++            return style;
++        }
          let bg = self.bg_color(outline, cx);
          let border = self.border_color(outline, cx);
          let fg = self.text_color(outline, cx);
-@@ -1131,6 +1176,9 @@
+@@ -1131,6 +1220,12 @@
      }
  
      fn hovered(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
 +        if let Some(style) = self.breeze(outline, ButtonStyleState::Hovered, cx) {
 +            return style;
 +        }
++        if let Some(style) = self.mac(Some(ButtonStyleState::Hovered), cx) {
++            return style;
++        }
          let bg: Background = match self {
              Self::Default => {
                  if outline {
-@@ -1215,6 +1263,9 @@
+@@ -1215,6 +1310,12 @@
      }
  
      fn active(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
 +        if let Some(style) = self.breeze(outline, ButtonStyleState::Active, cx) {
 +            return style;
 +        }
++        if let Some(style) = self.mac(Some(ButtonStyleState::Active), cx) {
++            return style;
++        }
          let bg = match self {
              Self::Default => {
                  if outline {
+@@ -1331,6 +1432,9 @@
+     }
+ 
+     fn disabled(&self, outline: bool, cx: &mut App) -> ButtonVariantStyle {
++        if let Some(style) = self.mac(None, cx) {
++            return style;
++        }
+         let bg = match self {
+             Self::Default | Self::Link | Self::Ghost | Self::Text => cx.theme().transparent.into(),
+             Self::Primary => cx.theme().tokens.button_primary.background.opacity(0.15),
 diff -ruN a/src/checkbox.rs b/src/checkbox.rs
---- a/src/checkbox.rs	2026-11-12 22:30:56.218494294 +0100
-+++ b/src/checkbox.rs	2026-11-12 22:30:56.229542491 +0100
-@@ -197,11 +197,11 @@
+--- a/src/checkbox.rs	2026-11-12 22:39:45.266448027 +0100
++++ b/src/checkbox.rs	2026-11-12 22:39:45.356578377 +0100
+@@ -197,11 +197,16 @@
          window,
          cx,
      );
@@ -170,16 +251,34 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
 -        cx.theme().primary_foreground.opacity(0.5)
 -    } else {
 -        cx.theme().primary_foreground
--    };
-+    // PowerCommander patch: Breeze marks in the text colour, see `BreezeControls`.
-+    let color = cx
-+        .try_global::<crate::BreezeControls>()
-+        .map_or(cx.theme().primary_foreground, |breeze| breeze.mark);
-+    let color = if disabled { color.opacity(0.5) } else { color };
++    // PowerCommander patch: Breeze marks in the text colour, see `BreezeControls`;
++    // AppKit's, bolder, on the accent, see `MacControls`.
++    let mac = cx.try_global::<crate::MacControls>().copied();
++    let color = match (cx.try_global::<crate::BreezeControls>(), mac) {
++        (Some(breeze), _) => breeze.mark,
++        (None, Some(mac)) if disabled => mac.disabled_text,
++        (None, Some(mac)) => mac.on_accent,
++        (None, None) => cx.theme().primary_foreground,
+     };
++    let color = if disabled && mac.is_none() { color.opacity(0.5) } else { color };
  
      svg()
          .absolute()
-@@ -253,7 +253,10 @@
+@@ -214,9 +219,11 @@
+             Size::Large => this.size_3p5(),
+             _ => this.size_3(),
+         })
++        .when(mac.is_some(), |this| this.size_3())
+         .text_color(color)
+-        .when(opacity > 0., |this| {
+-            this.path(IconName::Check.path()).opacity(opacity)
++        .when(opacity > 0., |this| match mac {
++            Some(_) => this.data(crate::mac::CHECK_MARK).opacity(opacity),
++            None => this.path(IconName::Check.path()).opacity(opacity),
+         })
+ }
+ 
+@@ -253,7 +260,10 @@
          let radius = cx.theme().radius.min(px(4.));
          let disabled_text_color = cx.theme().muted_foreground;
          let instance_style = self.style.clone();
@@ -190,7 +289,7 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
              .checked(checked)
              .disabled(self.disabled)
              .styles(|styles| {
-@@ -299,32 +302,58 @@
+@@ -299,32 +309,66 @@
                      .when(has_content, |this| this.mt(indicator_size * 0.125))
                      .flex_shrink_0()
                      .border_1()
@@ -210,9 +309,10 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
 -                                style
 -                                    .border_color(disabled_indicator_color)
 -                                    .when(checked, |style| style.bg(disabled_indicator_color))
-+                    // PowerCommander patch: the Qt style's box, else Breeze's, see `QtControls`, `BreezeControls`.
-+                    .map(|this| match (&qt, cx.try_global::<crate::BreezeControls>().copied()) {
-+                        (Some(qt), _) => {
++                    // PowerCommander patch: the Qt style's box, else Breeze's, see `QtControls`, `BreezeControls`;
++                    // AppKit's, see `MacControls`.
++                    .map(|this| match (&qt, cx.try_global::<crate::BreezeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
++                        (Some(qt), _, _) => {
 +                            let images = &qt.checkbox[checked as usize];
 +                            let (width, height) = qt.size(&images.0[crate::qt::NORMAL]);
 +                            this.w(width).h(height).border_0().child(crate::qt::layers(
@@ -221,7 +321,14 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
 +                                |state| crate::qt::picture(images.0[state].clone()),
 +                            ))
 +                        }
-+                        (None, Some(breeze)) => {
++                        (None, None, Some(mac)) => {
++                            let fill = if checked && !self.disabled { mac.accent } else { mac.well };
++                            this.size(px(16.))
++                                .rounded(px(5.))
++                                .border_color(cx.theme().transparent)
++                                .bg(if self.disabled { fill.opacity(0.5) } else { fill })
++                        }
++                        (None, Some(breeze), _) => {
 +                            let (border, fill) = match checked {
 +                                true => (breeze.highlight, breeze.checked),
 +                                false => (breeze.frame, breeze.button),
@@ -232,7 +339,7 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
 +                                .border_color(border.opacity(dim))
 +                                .bg(fill.opacity(dim))
 +                        }
-+                        (None, None) => this
++                        (None, None, None) => this
 +                            .rounded(radius)
 +                            .when(!checked, |this| {
 +                                this.bg(cx.theme().input_background())
@@ -274,14 +381,14 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
              .when(self.label.is_some() || !children.is_empty(), |this| {
                  this.child(
 diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
---- a/src/dialog/dialog.rs	2026-11-12 22:30:56.219019171 +0100
-+++ b/src/dialog/dialog.rs	2026-11-12 22:30:56.230060806 +0100
+--- a/src/dialog/dialog.rs	2026-11-12 22:39:45.267878727 +0100
++++ b/src/dialog/dialog.rs	2026-11-12 22:39:45.351173982 +0100
 @@ -1,13 +1,20 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a dialog moves by
 +// its title, can open centred over a part of the window, and fades in
 +// without sliding. Changes are marked "WDS patch".
 +// Modified for PowerCommander: the title is smaller and ends in "…" when
-+// long. Changes are marked "PowerCommander patch".
++// long; on macOS the frame is a window's. Changes are marked "PowerCommander patch".
 +
  use super::entrance::{DialogEntrance, EntranceSurface};
  use crate::root::WindowState;
@@ -350,7 +457,39 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
          }
      }
  }
-@@ -475,6 +500,13 @@
+@@ -327,6 +352,31 @@
+     cx.theme().overlay
+ }
+ 
++/// PowerCommander patch: AppKit's red close button, grey while the window
++/// is not in front, its cross shown under the pointer.
++fn mac_close_button(button: gpui_base::Button, mac: crate::MacControls, active: bool) -> impl IntoElement {
++    let (fill, rim) = match active {
++        true => (gpui::rgb(0xff5f57).into(), gpui::rgb(0xe0443e).into()),
++        false => (mac.well, mac.well),
++    };
++    button
++        .group("dialog-close")
++        .size(px(14.))
++        .rounded_full()
++        .bg(fill)
++        .border(px(0.5))
++        .border_color(rim)
++        .flex()
++        .items_center()
++        .justify_center()
++        .child(
++            div()
++                .opacity(0.)
++                .group_hover("dialog-close", |this| this.opacity(1.))
++                .child(crate::Icon::new(IconName::Close).size(px(10.)).text_color(gpui::black().opacity(0.55))),
++        )
++}
++
+ fn dialog_shadow(delta: f32) -> Vec<BoxShadow> {
+     vec![
+         BoxShadow {
+@@ -475,6 +525,13 @@
          self
      }
  
@@ -364,7 +503,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
      /// Sets the width of the dialog, defaults to 448px.
      ///
      /// The dialog is never wider than the viewport minus a margin on each side.
-@@ -598,6 +630,13 @@
+@@ -598,6 +655,13 @@
  
          let layer_ix = self.layer_ix;
          let selection_scope = self.selection_scope;
@@ -378,7 +517,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
          let on_close = self.button_props.close_handler();
          let on_ok = self.button_props.ok_handler();
          let on_cancel = self.button_props.cancel_handler();
-@@ -632,6 +671,23 @@
+@@ -632,6 +696,32 @@
          let base_size = window.text_style().font_size;
          let rem_size = window.rem_size();
  
@@ -398,11 +537,20 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
 +        };
 +        let laid_out = moving.clone();
 +        let has_title = self.title.is_some();
++        // PowerCommander patch: AppKit's window, see `MacControls`: 16 px corners,
++        // a 32 px title bar of the dialog's colour, the close button on the left.
++        let mac = cx
++            .try_global::<crate::MacControls>()
++            .copied()
++            .filter(|_| !cx.has_global::<crate::BreezeControls>());
++        let band = px(if mac.is_some() { 32. } else { TITLE_BAND_HEIGHT });
++        let corner = mac.map_or(cx.theme().radius_lg, |_| px(16.));
++        let active = window.is_window_active();
 +
          let mut paddings = Edges::all(px(16.));
          if let Some(pl) = self.style.padding.left {
              paddings.left = pl.to_pixels(base_size, rem_size);
-@@ -708,9 +764,12 @@
+@@ -708,9 +798,12 @@
                              })
                              .popup(
                                  gpui_base::Positioner::corner(
@@ -417,7 +565,16 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
                                  .margin(margin)
                                  .child(
                                      v_flex()
-@@ -726,11 +785,55 @@
+@@ -719,18 +812,66 @@
+                                         .debug_selector(move || format!("dialog-{layer_ix}"))
+                                         .bg(cx.theme().tokens.background)
+                                         .border_1()
+-                                        .border_color(cx.theme().border)
+-                                        .rounded(cx.theme().radius_lg)
++                                        .border_color(mac.map_or(cx.theme().border, |mac| mac.window_frame))
++                                        .rounded(corner)
+                                         .min_h_24()
+                                         .pt(paddings.top)
                                          .pb(paddings.bottom)
                                          .gap(paddings.top.max(px(8.)))
                                          .refine_style(&self.style)
@@ -437,19 +594,23 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
 +                                                div()
 +                                                    .id("dialog-move")
 +                                                    .flex_none()
-+                                                    .h(px(TITLE_BAND_HEIGHT))
++                                                    .h(band)
 +                                                    .flex()
 +                                                    .items_center()
 +                                                    .pl(paddings.left)
 +                                                    .pr(paddings.right + px(28.))
-+                                                    .bg(theme.muted)
-+                                                    .border_b_1()
-+                                                    .border_color(theme.border)
-+                                                    .rounded_t(theme.radius_lg - px(1.))
++                                                    .map(|this| match mac {
++                                                        Some(_) => this.pl(px(36.)).pr(paddings.right),
++                                                        None => this.bg(theme.muted).border_b_1().border_color(theme.border),
++                                                    })
++                                                    .rounded_t(corner - px(1.))
 +                                                    // PowerCommander patch: the window title's size; a long one ends in "…".
 +                                                    .child(
 +                                                        DialogTitle::new()
 +                                                            .text_sm()
++                                                            .when(mac.is_some(), |this| {
++                                                                this.font_semibold().text_color(theme.muted_foreground)
++                                                            })
 +                                                            .flex_1()
 +                                                            .min_w_0()
 +                                                            .truncate()
@@ -473,7 +634,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
                                          .child(
                                              v_flex()
                                                  .flex_1()
-@@ -744,14 +847,6 @@
+@@ -744,14 +885,6 @@
                                                              .child(header),
                                                      )
                                                  })
@@ -488,21 +649,42 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
                                                  .when_some(self.content_builder, |this, builder| {
                                                      this.child(builder(
                                                          DialogContent::new()
-@@ -785,7 +880,12 @@
+@@ -785,20 +918,27 @@
                                              )
                                          })
                                          .children(self.props.close_button.then(|| {
 -                                            let top = (paddings.top - px(10.)).max(px(8.));
 +                                            // WDS patch: in the middle of the title's band.
 +                                            let top = if has_title {
-+                                                px((TITLE_BAND_HEIGHT - 24.) / 2.)
++                                                (band - px(24.)) / 2.
 +                                            } else {
 +                                                (paddings.top - px(10.)).max(px(8.))
 +                                            };
                                              let right = (paddings.right - px(10.)).max(px(8.));
  
-                                             gpui_base::DialogClose::new()
-@@ -841,7 +941,8 @@
+-                                            gpui_base::DialogClose::new()
+-                                                .absolute()
+-                                                .top(top)
+-                                                .right(right)
+-                                                .trigger(|button| {
++                                            let close = gpui_base::DialogClose::new().absolute();
++                                            match mac {
++                                                Some(mac) => close.top((band - px(14.)) / 2.).left(px(11.)).trigger(|button| {
++                                                    mac_close_button(button, mac, active)
++                                                }),
++                                                None => close.top(top).right(right).trigger(|button| {
+                                                     Button::new("close")
+                                                         .with_base(button)
+                                                         .small()
+                                                         .ghost()
+                                                         .icon(IconName::Close)
+-                                                })
++                                                }),
++                                            }
+                                         }))
+                                         .map(|surface| {
+                                             if animated {
+@@ -841,7 +981,8 @@
                                          }),
                                  )
                                  .map(|positioner| {
@@ -512,7 +694,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
                                          positioner
                                              .with_animation(
                                                  "slide-down",
-@@ -876,6 +977,38 @@
+@@ -876,6 +1017,38 @@
      }
  }
  
@@ -551,9 +733,59 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
  #[cfg(test)]
  pub(crate) mod tests {
      use super::*;
+diff -ruN a/src/group_box.rs b/src/group_box.rs
+--- a/src/group_box.rs	2026-11-12 22:31:13.000000000 +0100
++++ b/src/group_box.rs	2026-11-12 22:39:45.346555685 +0100
+@@ -1,6 +1,6 @@
+ use gpui::{
+     AnyElement, App, Background, ElementId, InteractiveElement as _, IntoElement, ParentElement,
+-    RenderOnce, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, relative,
++    RenderOnce, StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px, relative,
+ };
+ use smallvec::SmallVec;
+ 
+@@ -140,8 +140,15 @@
+ 
+ impl RenderOnce for GroupBox {
+     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
++        // PowerCommander patch: AppKit's box, see `MacControls`: faintly filled,
++        // unframed, 12 px corners, its title small above it.
++        let mac = cx
++            .try_global::<crate::MacControls>()
++            .copied()
++            .filter(|_| !cx.has_global::<crate::BreezeControls>());
+         let (bg, border, has_paddings): (Option<Background>, _, _) = match self.variant {
+             GroupBoxVariant::Normal => (None, None, false),
++            _ if mac.is_some() => (mac.map(|mac| mac.group.into()), None, true),
+             GroupBoxVariant::Fill => (Some(cx.theme().tokens.group_box.into()), None, true),
+             GroupBoxVariant::Outline => (None, Some(cx.theme().border), true),
+         };
+@@ -151,12 +158,14 @@
+             .w_full()
+             .when(has_paddings, |this| this.gap_3())
+             .when(!has_paddings, |this| this.gap_4())
++            .when(mac.is_some() && has_paddings, |this| this.gap_1p5())
+             .refine_style(&self.style)
+             .when_some(self.title, |this, title| {
+                 this.child(
+                     div()
+                         .text_color(cx.theme().muted_foreground)
+                         .line_height(relative(1.25))
++                        .when_some(mac, |this, mac| this.text_xs().text_color(mac.text).pl(px(10.)))
+                         .refine_style(&self.title_style)
+                         .child(title),
+                 )
+@@ -174,6 +183,7 @@
+                             .when(has_paddings, |this| this.p_4())
+                             .gap_4()
+                             .rounded(cx.theme().radius)
++                            .when(mac.is_some(), |this| this.rounded(px(12.)))
+                             .refine_style(&self.content_style)
+                             .children(self.children),
+                     )
 diff -ruN a/src/highlighter/input_adapter.rs b/src/highlighter/input_adapter.rs
---- a/src/highlighter/input_adapter.rs	2026-11-12 22:30:56.220375689 +0100
-+++ b/src/highlighter/input_adapter.rs	2026-11-12 22:30:56.232003799 +0100
+--- a/src/highlighter/input_adapter.rs	2026-11-12 22:39:45.268385001 +0100
++++ b/src/highlighter/input_adapter.rs	2026-11-12 22:39:45.379725110 +0100
 @@ -1,3 +1,7 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the highlighter
 +// factory is public, and a background parse leaves the fold candidates alone
@@ -589,8 +821,8 @@ diff -ruN a/src/highlighter/input_adapter.rs b/src/highlighter/input_adapter.rs
          });
          parse_task.borrow_mut().replace(task);
 diff -ruN a/src/highlighter/mod.rs b/src/highlighter/mod.rs
---- a/src/highlighter/mod.rs	2026-11-12 22:30:56.221149660 +0100
-+++ b/src/highlighter/mod.rs	2026-11-12 22:30:56.231914429 +0100
+--- a/src/highlighter/mod.rs	2026-11-12 22:39:45.268766612 +0100
++++ b/src/highlighter/mod.rs	2026-11-12 22:39:45.378869389 +0100
 @@ -1,3 +1,7 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the editor's
 +// highlighter factory is public, so an app can wrap it. Changes are marked
@@ -614,9 +846,46 @@ diff -ruN a/src/highlighter/mod.rs b/src/highlighter/mod.rs
      std::rc::Rc::new(|_| None)
  }
  
+diff -ruN a/src/input/input.rs b/src/input/input.rs
+--- a/src/input/input.rs	2026-11-12 22:31:13.000000000 +0100
++++ b/src/input/input.rs	2026-11-12 22:39:45.327460936 +0100
+@@ -705,6 +705,10 @@
+         };
+ 
+         let (bg, _) = input_style(presentation.is_disabled(), cx);
++        let mac = cx
++            .try_global::<crate::MacControls>()
++            .copied()
++            .filter(|_| !cx.has_global::<crate::BreezeControls>() && !presentation.is_code_editor());
+         let bg = if presentation.is_code_editor() {
+             cx.theme().editor_background()
+         } else {
+@@ -758,7 +762,7 @@
+                 styles.focused(|style| {
+                     style.when(
+                         self.appearance && self.bordered && self.focus_bordered,
+-                        |style| style.border_1().border_color(cx.theme().ring),
++                        |style| style.border_1().border_color(mac.map_or(cx.theme().ring, |mac| mac.accent)),
+                     )
+                 })
+             })
+@@ -797,6 +801,13 @@
+                     .when(self.bordered, |this| {
+                         this.border_1().border_color(cx.theme().input)
+                     })
++                    // PowerCommander patch: AppKit's text field, see `MacControls`: a
++                    // faint frame, 6 px corners, 24 px as the push buttons beside it.
++                    .when_some(mac, |this, mac| {
++                        this.rounded(px(6.))
++                            .when(self.bordered, |this| this.border_color(mac.field_frame))
++                            .when(!is_multi_line && matches!(self.size, Size::Medium), |this| this.h(px(24.)).py_0())
++                    })
+             })
+             .items_center()
+             .gap(gap_x)
 diff -ruN a/src/input/popovers/completion_menu.rs b/src/input/popovers/completion_menu.rs
---- a/src/input/popovers/completion_menu.rs	2026-11-12 22:30:56.221918511 +0100
-+++ b/src/input/popovers/completion_menu.rs	2026-11-12 22:30:56.232613237 +0100
+--- a/src/input/popovers/completion_menu.rs	2026-11-12 22:39:45.269390757 +0100
++++ b/src/input/popovers/completion_menu.rs	2026-11-12 22:39:45.325863492 +0100
 @@ -1,3 +1,7 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the completion
 +// menu is as wide as the editor's configured width. Changes are marked
@@ -638,8 +907,8 @@ diff -ruN a/src/input/popovers/completion_menu.rs b/src/input/popovers/completio
                      )
                      .when_some(selected_documentation, |this, documentation| {
 diff -ruN a/src/kbd.rs b/src/kbd.rs
---- a/src/kbd.rs	2026-11-12 22:30:56.222258267 +0100
-+++ b/src/kbd.rs	2026-11-12 22:30:56.237277963 +0100
+--- a/src/kbd.rs	2026-11-12 22:39:45.269948321 +0100
++++ b/src/kbd.rs	2026-11-12 22:39:45.310204498 +0100
 @@ -1,3 +1,8 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a binding of
 +// several keystrokes shows them all. Changes are marked "WDS patch".
@@ -735,9 +1004,9 @@ diff -ruN a/src/kbd.rs b/src/kbd.rs
      }
  }
 diff -ruN a/src/lib.rs b/src/lib.rs
---- a/src/lib.rs	2026-11-12 22:30:56.222318632 +0100
-+++ b/src/lib.rs	2026-11-12 22:30:56.232923747 +0100
-@@ -20,6 +20,12 @@
+--- a/src/lib.rs	2026-11-12 22:39:45.270355807 +0100
++++ b/src/lib.rs	2026-11-12 22:39:45.329588654 +0100
+@@ -20,6 +20,15 @@
  mod touch_selection;
  mod virtual_list;
  mod window_border;
@@ -747,10 +1016,13 @@ diff -ruN a/src/lib.rs b/src/lib.rs
 +// PowerCommander patch: see `QtControls`.
 +mod qt;
 +pub use qt::{QtControls, StateImages};
++// PowerCommander patch: see `MacControls`.
++mod mac;
++pub use mac::MacControls;
  mod window_ext;
  
  pub(crate) mod actions {
-@@ -121,7 +127,7 @@
+@@ -121,7 +130,7 @@
  pub use time::{calendar, date_picker, time_field};
  pub use title_bar::*;
  pub use virtual_list::{VirtualList, VirtualListScrollHandle, h_virtual_list, v_virtual_list};
@@ -760,8 +1032,8 @@ diff -ruN a/src/lib.rs b/src/lib.rs
  
  rust_i18n::i18n!("locales", fallback = "en");
 diff -ruN a/src/list/list.rs b/src/list/list.rs
---- a/src/list/list.rs	2026-11-12 22:30:56.222459790 +0100
-+++ b/src/list/list.rs	2026-11-12 22:30:56.233054756 +0100
+--- a/src/list/list.rs	2026-11-12 22:39:45.271280483 +0100
++++ b/src/list/list.rs	2026-11-12 22:39:45.365103746 +0100
 @@ -1,3 +1,6 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a list can take
 +// a single click as selecting only. Changes are marked "WDS patch".
@@ -812,9 +1084,53 @@ diff -ruN a/src/list/list.rs b/src/list/list.rs
                      this.on_action_confirm(
                          &Confirm {
                              secondary: e.modifiers().secondary(),
+diff -ruN a/src/mac.rs b/src/mac.rs
+--- a/src/mac.rs	1970-01-01 01:00:00.000000000 +0100
++++ b/src/mac.rs	2026-11-12 22:39:45.353716060 +0100
+@@ -0,0 +1,40 @@
++// PowerCommander patch: this file is new.
++use gpui::{Global, Hsla};
++
++/// Controls drawn as AppKit draws them (macOS 26, measured), in the system's
++/// colours; without it, GPUI Kit's own look.
++#[derive(Clone, Copy, Debug)]
++pub struct MacControls {
++    /// The user's accent: checked boxes, the default button, a slider's fill.
++    pub accent: Hsla,
++    /// Marks and text on the accent.
++    pub on_accent: Hsla,
++    /// Push buttons', pop-up buttons' and segments' fill.
++    pub button: Hsla,
++    pub button_pressed: Hsla,
++    pub button_disabled: Hsla,
++    /// Unchecked boxes and radio buttons, a slider's groove.
++    pub well: Hsla,
++    /// A progress bar's groove and its rim.
++    pub groove: Hsla,
++    pub groove_rim: Hsla,
++    /// A slider's knob.
++    pub knob: Hsla,
++    /// A group box's fill.
++    pub group: Hsla,
++    /// A text field's frame.
++    pub field_frame: Hsla,
++    pub text: Hsla,
++    pub disabled_text: Hsla,
++    /// A dialog's rim.
++    pub window_frame: Hsla,
++    /// Window tabs: the bar's track, the selected tab and its rim.
++    pub tab_track: Hsla,
++    pub tab: Hsla,
++    pub tab_rim: Hsla,
++}
++
++impl Global for MacControls {}
++
++/// The check box's mark, bolder than GPUI Kit's, as AppKit's.
++pub(crate) const CHECK_MARK: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path d="M2.4 6.4 4.9 8.9 9.7 3.2" fill="none" stroke="black" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>"#;
 diff -ruN a/src/menu/app_menu_bar.rs b/src/menu/app_menu_bar.rs
---- a/src/menu/app_menu_bar.rs	2026-11-12 22:30:56.222645934 +0100
-+++ b/src/menu/app_menu_bar.rs	2026-11-12 22:30:56.233349627 +0100
+--- a/src/menu/app_menu_bar.rs	2026-11-12 22:39:45.272116954 +0100
++++ b/src/menu/app_menu_bar.rs	2026-11-12 22:39:45.367154090 +0100
 @@ -1,7 +1,13 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): menu-bar menus may
 +// use the window's height. Changes are marked "WDS patch".
@@ -972,8 +1288,8 @@ diff -ruN a/src/menu/app_menu_bar.rs b/src/menu/app_menu_bar.rs
                      .open(is_open)
                      .on_mouse_down(
 diff -ruN a/src/menu/menu_item.rs b/src/menu/menu_item.rs
---- a/src/menu/menu_item.rs	2026-11-12 22:30:56.222768797 +0100
-+++ b/src/menu/menu_item.rs	2026-11-12 22:30:56.233304080 +0100
+--- a/src/menu/menu_item.rs	2026-11-12 22:39:45.272587729 +0100
++++ b/src/menu/menu_item.rs	2026-11-12 22:39:45.366332036 +0100
 @@ -102,6 +102,10 @@
              .px_2()
              .text_base()
@@ -999,8 +1315,8 @@ diff -ruN a/src/menu/menu_item.rs b/src/menu/menu_item.rs
                  .when_some(self.on_click, |this, on_click| {
                      this.on_mouse_down(MouseButton::Left, move |_, _, cx| {
 diff -ruN a/src/menu/mod.rs b/src/menu/mod.rs
---- a/src/menu/mod.rs	2026-11-12 22:30:56.222792392 +0100
-+++ b/src/menu/mod.rs	2026-11-12 22:30:56.233325481 +0100
+--- a/src/menu/mod.rs	2026-11-12 22:39:45.272996173 +0100
++++ b/src/menu/mod.rs	2026-11-12 22:39:45.366853809 +0100
 @@ -1,3 +1,6 @@
 +// Modified for PowerCommander: exports MenuBuilder. Changes are marked
 +// "PowerCommander patch".
@@ -1019,8 +1335,8 @@ diff -ruN a/src/menu/mod.rs b/src/menu/mod.rs
  pub use dropdown_menu::DropdownMenu;
  pub use popup_menu::{PopupMenu, PopupMenuItem};
 diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
---- a/src/menu/popup_menu.rs	2026-11-12 22:30:56.222840313 +0100
-+++ b/src/menu/popup_menu.rs	2026-11-12 22:30:56.233390595 +0100
+--- a/src/menu/popup_menu.rs	2026-11-12 22:39:45.274310502 +0100
++++ b/src/menu/popup_menu.rs	2026-11-12 22:39:45.367524536 +0100
 @@ -1,8 +1,13 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a long menu's
 +// scrollbar shows while it scrolls. Changes are marked "WDS patch".
@@ -1126,40 +1442,45 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
  }
  
 diff -ruN a/src/progress/progress.rs b/src/progress/progress.rs
---- a/src/progress/progress.rs	2026-11-12 22:30:56.223368577 +0100
-+++ b/src/progress/progress.rs	2026-11-12 22:30:56.233874945 +0100
-@@ -93,7 +93,10 @@
+--- a/src/progress/progress.rs	2026-11-12 22:39:45.274737820 +0100
++++ b/src/progress/progress.rs	2026-11-12 22:39:45.314836586 +0100
+@@ -93,7 +93,13 @@
          let mut inner_style = StyleRefinement::default();
          inner_style.corner_radii = radius;
  
 +        // PowerCommander patch: Breeze's 6 px groove and fill, see `BreezeControls`.
 +        let breeze = cx.try_global::<crate::BreezeControls>().copied();
++        // AppKit's 8 px groove, rimmed, see `MacControls`.
++        let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| breeze.is_none());
          let (height, pill_radius) = match self.size {
 +            _ if breeze.is_some() => (px(6.), px(3.)),
++            _ if mac.is_some() => (px(8.), px(4.)),
              Size::XSmall => (px(4.), px(2.)),
              Size::Small => (px(6.), px(3.)),
              Size::Medium => (px(8.), px(4.)),
-@@ -132,7 +135,7 @@
+@@ -132,7 +138,8 @@
                  ProgressTrack::new()
                      .absolute()
                      .size_full()
 -                    .bg(bg.opacity(0.2))
 +                    .bg(breeze.map_or(bg.opacity(0.2), |breeze| breeze.groove.into()))
++                    .when_some(mac, |this, mac| this.bg(mac.groove).border(px(0.5)).border_color(mac.groove_rim))
                      .rounded(radius)
                      .refine_style(&inner_style),
              )
-@@ -142,7 +145,7 @@
+@@ -142,7 +149,8 @@
                      .top_0()
                      .left_0()
                      .h_full()
 -                    .bg(bg)
 +                    .bg(breeze.map_or(bg, |breeze| breeze.fill.into()))
++                    .when_some(mac, |this, mac| this.bg(mac.accent))
                      .rounded(radius)
                      .refine_style(&inner_style)
                      .map(|this| {
 diff -ruN a/src/qt.rs b/src/qt.rs
 --- a/src/qt.rs	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/qt.rs	2026-11-12 22:30:56.237392360 +0100
++++ b/src/qt.rs	2026-11-12 22:39:45.315990337 +0100
 @@ -0,0 +1,103 @@
 +// PowerCommander patch: this file is new.
 +use std::sync::Arc;
@@ -1265,8 +1586,8 @@ diff -ruN a/src/qt.rs b/src/qt.rs
 +    div().size_full().child(canvas.absolute().inset_0())
 +}
 diff -ruN a/src/radio.rs b/src/radio.rs
---- a/src/radio.rs	2026-11-12 22:30:56.223530735 +0100
-+++ b/src/radio.rs	2026-11-12 22:30:56.237368034 +0100
+--- a/src/radio.rs	2026-11-12 22:39:45.275774326 +0100
++++ b/src/radio.rs	2026-11-12 22:39:45.382339393 +0100
 @@ -8,7 +8,7 @@
  use gpui::{
      AnyElement, App, Axis, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
@@ -1276,7 +1597,7 @@ diff -ruN a/src/radio.rs b/src/radio.rs
  };
  use gpui_base::{Radio as BaseRadio, RadioGroup as BaseRadioGroup};
  
-@@ -238,15 +238,35 @@
+@@ -238,15 +238,46 @@
                      .flex_shrink_0()
                      .rounded_full_style(cx)
                      .border_1()
@@ -1289,9 +1610,20 @@ diff -ruN a/src/radio.rs b/src/radio.rs
 -                    .child(checkbox_check_icon(
 -                        self.id, self.size, checked, disabled, window, cx,
 -                    )),
-+                    // PowerCommander patch: Breeze's circle and dot, see `BreezeControls`.
-+                    .map(|this| match cx.try_global::<crate::BreezeControls>().copied() {
-+                        Some(breeze) => {
++                    // PowerCommander patch: Breeze's circle and dot, see `BreezeControls`; AppKit's, see `MacControls`.
++                    .map(|this| match (cx.try_global::<crate::BreezeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
++                        (None, Some(mac)) => {
++                            let fill = if checked && !disabled { mac.accent } else { mac.well };
++                            let dot = if disabled { mac.disabled_text } else { mac.on_accent };
++                            this.size(px(16.))
++                                .flex()
++                                .items_center()
++                                .justify_center()
++                                .border_color(cx.theme().transparent)
++                                .bg(if disabled { fill.opacity(0.5) } else { fill })
++                                .when(checked, |this| this.child(div().size(px(5.)).rounded_full().bg(dot)))
++                        }
++                        (Some(breeze), _) => {
 +                            let (border, fill) = match checked {
 +                                true => (breeze.highlight, breeze.checked),
 +                                false => (breeze.frame, breeze.button),
@@ -1307,7 +1639,7 @@ diff -ruN a/src/radio.rs b/src/radio.rs
 +                                    this.child(div().size(px(6.)).rounded_full().bg(breeze.mark.opacity(dim)))
 +                                })
 +                        }
-+                        None => this
++                        (None, None) => this
 +                            .border_color(border_color)
 +                            .map(|this| match self.checked {
 +                                false => this.bg(cx.theme().input_background()),
@@ -1322,8 +1654,8 @@ diff -ruN a/src/radio.rs b/src/radio.rs
              .when(!self.children.is_empty() || self.label.is_some(), |this| {
                  this.child(
 diff -ruN a/src/root.rs b/src/root.rs
---- a/src/root.rs	2026-11-12 22:30:56.223609996 +0100
-+++ b/src/root.rs	2026-11-12 22:30:56.234092208 +0100
+--- a/src/root.rs	2026-11-12 22:39:45.276450802 +0100
++++ b/src/root.rs	2026-11-12 22:39:45.363145147 +0100
 @@ -1,3 +1,6 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): notifications paint
 +// above dialogs. Changes are marked "WDS patch".
@@ -1403,23 +1735,87 @@ diff -ruN a/src/root.rs b/src/root.rs
 +            )
      }
  }
+diff -ruN a/src/select.rs b/src/select.rs
+--- a/src/select.rs	2026-11-12 22:31:13.000000000 +0100
++++ b/src/select.rs	2026-11-12 22:39:45.363522717 +0100
+@@ -518,6 +518,12 @@
+         let outline_visible = self.state.open || (is_focused && !self.state.disabled);
+ 
+         let (bg, fg) = input_style(self.state.disabled, cx);
++        // PowerCommander patch: AppKit's pop-up button, see `MacControls`: filled
++        // as a push button, 24 px, with its up and down chevrons.
++        let mac = cx
++            .try_global::<crate::MacControls>()
++            .copied()
++            .filter(|_| !cx.has_global::<crate::BreezeControls>() && self.state.appearance);
+ 
+         self.state.list.update(cx, |list, cx| {
+             list.set_searchable(searchable, cx);
+@@ -550,9 +556,19 @@
+                         })
+                         .input_size(self.state.size)
+                         .input_text_size(self.state.size)
++                        .when_some(mac, |this, mac| {
++                            this.bg(mac.button)
++                                .text_color(mac.text)
++                                .border_color(cx.theme().transparent)
++                                .rounded(px(6.))
++                                .when(matches!(self.state.size, Size::Medium | Size::Large), |this| {
++                                    this.h(px(24.)).py_0()
++                                })
++                        })
+                         .refine_style(&self.state.style)
+                         .when(outline_visible && self.state.appearance, |this| {
+-                            this.border_1().border_color(cx.theme().ring)
++                            let ring = mac.map_or(cx.theme().ring, |mac| mac.accent);
++                            this.border_1().border_color(ring)
+                         })
+                         .when(
+                             outline_visible && self.state.appearance && self.focus_ring_enabled,
+@@ -596,6 +612,10 @@
+                                             .xsmall()
+                                             .text_color(cx.theme().muted_foreground)
+                                             .into_any_element(),
++                                        None if mac.is_some() => Icon::new(IconName::ChevronsUpDown)
++                                            .xsmall()
++                                            .text_color(cx.theme().foreground)
++                                            .into_any_element(),
+                                         None => Caret::new(self.state.size)
+                                             .text_color(cx.theme().muted_foreground)
+                                             .into_any_element(),
 diff -ruN a/src/slider.rs b/src/slider.rs
---- a/src/slider.rs	2026-11-12 22:30:56.224696331 +0100
-+++ b/src/slider.rs	2026-11-12 22:30:56.235097278 +0100
-@@ -155,6 +155,8 @@
+--- a/src/slider.rs	2026-11-12 22:39:45.277061364 +0100
++++ b/src/slider.rs	2026-11-12 22:39:45.386312713 +0100
+@@ -5,10 +5,10 @@
+ use gpui_base::{Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack, spring};
+ 
+ use gpui::{
+-    App, Axis, Background, Corners, DefiniteLength, ElementId, Entity, EntityId, Hsla,
++    App, Axis, Background, BoxShadow, Corners, DefiniteLength, ElementId, Entity, EntityId, Hsla,
+     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels, RenderOnce,
+     StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+-    prelude::FluentBuilder as _, px, relative,
++    hsla, point, prelude::FluentBuilder as _, px, relative,
+ };
+ 
+ /// Width of the translucent ring that grows outside a hovered thumb.
+@@ -155,6 +155,10 @@
              (relative(percentage.start), relative(1. - percentage.end))
          };
          let rem_size = window.rem_size();
-+        // PowerCommander patch: Breeze's groove and handle, see `BreezeControls`.
++        // PowerCommander patch: Breeze's groove and handle, see `BreezeControls`;
++        // AppKit's groove and pill-shaped knob, see `MacControls`.
 +        let breeze = cx.try_global::<crate::BreezeControls>().copied();
++        let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| breeze.is_none());
  
          let bar_color = self
              .style
-@@ -162,12 +164,14 @@
+@@ -162,12 +166,16 @@
              .clone()
              .and_then(|bg| bg.color())
              .unwrap_or(cx.theme().tokens.slider_bar.into());
 +        let bar_color = breeze.map_or(bar_color, |breeze| breeze.fill.into());
++        let bar_color = mac.map_or(bar_color, |mac| mac.accent.into());
          let thumb_bg: Background = self
              .style
              .text
@@ -1427,24 +1823,27 @@ diff -ruN a/src/slider.rs b/src/slider.rs
              .map(Into::into)
              .unwrap_or_else(|| cx.theme().tokens.slider_thumb.into());
 +        let thumb_bg = breeze.map_or(thumb_bg, |breeze| breeze.button.into());
++        let thumb_bg = mac.map_or(thumb_bg, |mac| mac.knob.into());
          let corner_radii = self.style.corner_radii.clone();
          // The track is a pill by default, and square when the theme squares its
          // corners. A caller's own corner radii still win.
-@@ -203,19 +207,23 @@
+@@ -203,20 +211,38 @@
                  .disabled(self.disabled)
                  .when(!self.disabled, |this| {
                      this.absolute()
 -                        .when(axis.is_horizontal(), |this| {
 -                            this.top(px(-5.)).left(position).ml(-px(8.))
-+                        .when(axis.is_horizontal(), |this| match breeze {
-+                            Some(_) => this.top(px(-7.)).left(position).ml(-px(10.)),
-+                            None => this.top(px(-5.)).left(position).ml(-px(8.)),
++                        .when(axis.is_horizontal(), |this| match (breeze, mac) {
++                            (Some(_), _) => this.top(px(-7.)).left(position).ml(-px(10.)),
++                            (None, Some(_)) => this.top(px(-5.)).left(position).ml(-px(10.)),
++                            (None, None) => this.top(px(-5.)).left(position).ml(-px(8.)),
                          })
 -                        .when(axis.is_vertical(), |this| {
 -                            this.bottom(position).left(px(-5.)).mb(-px(8.))
-+                        .when(axis.is_vertical(), |this| match breeze {
-+                            Some(_) => this.bottom(position).left(px(-7.)).mb(-px(10.)),
-+                            None => this.bottom(position).left(px(-5.)).mb(-px(8.)),
++                        .when(axis.is_vertical(), |this| match (breeze, mac) {
++                            (Some(_), _) => this.bottom(position).left(px(-7.)).mb(-px(10.)),
++                            (None, Some(_)) => this.bottom(position).left(px(-5.)).mb(-px(10.)),
++                            (None, None) => this.bottom(position).left(px(-5.)).mb(-px(8.)),
                          })
                          .flex()
                          .items_center()
@@ -1453,14 +1852,46 @@ diff -ruN a/src/slider.rs b/src/slider.rs
                          .rounded_full_style(cx)
 -                        .bg(bar_color.opacity(0.5))
 -                        .size_4()
-+                        .map(|this| match breeze {
-+                            Some(breeze) => this.bg(breeze.handle_frame).size(px(20.)),
-+                            None => this.bg(bar_color.opacity(0.5)).size_4(),
+-                        .p(px(1.))
++                        .map(|this| match (breeze, mac) {
++                            (Some(breeze), _) => this.bg(breeze.handle_frame).size(px(20.)).p(px(1.)),
++                            (None, Some(mac)) => this
++                                .bg(mac.knob)
++                                .map(|this| match axis.is_horizontal() {
++                                    true => this.w(px(20.)).h(px(16.)),
++                                    false => this.w(px(16.)).h(px(20.)),
++                                })
++                                .shadow(vec![BoxShadow {
++                                    color: hsla(0., 0., 0., 0.3),
++                                    offset: point(px(0.), px(0.5)),
++                                    blur_radius: px(2.),
++                                    spread_radius: px(0.),
++                                    inset: false,
++                                }]),
++                            (None, None) => this.bg(bar_color.opacity(0.5)).size_4().p(px(1.)),
 +                        })
-                         .p(px(1.))
                          .on_hover({
                              let interaction = ring.interaction.clone();
-@@ -287,8 +295,8 @@
+                             move |entered, _, cx| {
+@@ -236,7 +262,7 @@
+                         .on_mouse_up_out(MouseButton::Left, ring.press_listener(false))
+                         // The ring grows outward from the thumb's edge: inset by
+                         // its own width so its inner edge sits flush against it.
+-                        .child(
++                        .when(mac.is_none(), |this| this.child(
+                             div()
+                                 .flex_none()
+                                 .absolute()
+@@ -247,7 +273,7 @@
+                                 .rounded_full_style(cx)
+                                 .border(ring.width)
+                                 .border_color(ring.color),
+-                        )
++                        ))
+                         .child(
+                             div()
+                                 .flex_shrink_0()
+@@ -287,8 +313,9 @@
                              .relative()
                              .when(axis.is_horizontal(), |this| this.w_full().h_1p5())
                              .when(axis.is_vertical(), |this| this.h_full().w_1p5())
@@ -1468,12 +1899,13 @@ diff -ruN a/src/slider.rs b/src/slider.rs
 -                            .active(|this| this.bg(bar_color.opacity(0.4)))
 +                            .bg(breeze.map_or(bar_color.opacity(0.2), |breeze| breeze.groove.into()))
 +                            .active(|this| this.bg(breeze.map_or(bar_color.opacity(0.4), |breeze| breeze.groove.into())))
++                            .when_some(mac, |this, mac| this.bg(mac.well).active(|this| this.bg(mac.well)))
                              .corner_radii(radius)
                              .child(
                                  div()
 diff -ruN a/src/styled.rs b/src/styled.rs
---- a/src/styled.rs	2026-11-12 22:30:56.225225446 +0100
-+++ b/src/styled.rs	2026-11-12 22:30:56.235638387 +0100
+--- a/src/styled.rs	2026-11-12 22:39:45.277654968 +0100
++++ b/src/styled.rs	2026-11-12 22:39:45.369688544 +0100
 @@ -25,6 +25,7 @@
  /// as part of one grounded surface rather than as an outline with a separate
  /// shadow below it. An opaque border cannot reproduce that — a border composites
@@ -1492,9 +1924,81 @@ diff -ruN a/src/styled.rs b/src/styled.rs
  }
  
  /// shadcn/ui's popup surface shadow — a hairline `ring` plus `shadow-md` — at
+diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
+--- a/src/tab/tab.rs	2026-11-12 22:39:45.280000887 +0100
++++ b/src/tab/tab.rs	2026-11-12 22:39:45.341247788 +0100
+@@ -634,6 +634,36 @@
+                 hover_style.borders.left = px(0.);
+             }
+         }
++        // PowerCommander patch: Breeze's document-mode tabs, see `BreezeControls`:
++        // the selected one tinted by the selection, the others in the view colour.
++        let breeze = match self.variant {
++            TabVariant::Tab => cx.try_global::<crate::BreezeControls>().copied(),
++            _ => None,
++        };
++        if let Some(breeze) = breeze {
++            normal_style.bg = breeze.tab_inactive.into();
++            normal_style.fg = breeze.mark;
++            selected_style.bg = breeze.tab.into();
++            selected_style.fg = breeze.mark;
++        }
++        // PowerCommander patch: AppKit's window tabs, see `MacControls`: pills in
++        // the bar's track, the selected one lighter and rimmed.
++        let mac = match self.variant {
++            TabVariant::Tab if breeze.is_none() => cx.try_global::<crate::MacControls>().copied(),
++            _ => None,
++        };
++        if let Some(mac) = mac {
++            let transparent = cx.theme().transparent;
++            for style in [&mut normal_style, &mut hover_style, &mut disabled_style] {
++                style.bg = transparent.into();
++                style.borders = Edges::default();
++                style.border_color = transparent;
++            }
++            hover_style.bg = mac.group.into();
++            selected_style.bg = mac.tab.into();
++            selected_style.borders = Edges::all(px(0.5));
++            selected_style.border_color = mac.tab_rim;
++        }
+         let tab_style = if self.disabled {
+             &disabled_style
+         } else if self.selected {
+@@ -641,12 +671,17 @@
+         } else {
+             &normal_style
+         };
+-        let radius = self.variant.radius(self.size, cx);
++        let radius = if mac.is_some() { px(12.) } else { self.variant.radius(self.size, cx) };
+         let inner_radius = self.variant.inner_radius(self.size, cx);
+         let inner_paddings = self.variant.inner_paddings(self.size);
+         let inner_margins = self.variant.inner_margins(self.size);
+         let inner_height = self.variant.inner_height(self.size);
+-        let height = self.variant.height(self.size);
++        // Breeze's: a 3 px line over 31 px.
++        let height = match (breeze, mac) {
++            (Some(_), _) => px(34.),
++            (None, Some(_)) => px(24.),
++            (None, None) => self.variant.height(self.size),
++        };
+         let aria_label = self.a11y_label();
+ 
+         let segmented_indicator_active =
+@@ -861,6 +896,11 @@
+                 )
+             })
+             .child(inner_element)
++            // PowerCommander patch: the selected tab's accent line on top, as Breeze draws it.
++            .when(self.selected && !self.disabled && self.variant == TabVariant::Tab && mac.is_none(), |this| {
++                let (line, color) = breeze.map_or((px(2.), cx.theme().primary), |breeze| (px(3.), breeze.highlight));
++                this.child(div().absolute().top_0().left_0().right_0().h(line).bg(color))
++            })
+             .when_some(self.suffix, |this, suffix| {
+                 this.child(
+                     div()
 diff -ruN a/src/tab/tab_bar.rs b/src/tab/tab_bar.rs
---- a/src/tab/tab_bar.rs	2026-11-12 22:30:56.225396001 +0100
-+++ b/src/tab/tab_bar.rs	2026-11-12 22:30:56.235792319 +0100
+--- a/src/tab/tab_bar.rs	2026-11-12 22:39:45.278954548 +0100
++++ b/src/tab/tab_bar.rs	2026-11-12 22:39:45.340881926 +0100
 @@ -1,3 +1,6 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the segmented
 +// indicator uses the active tab colour. Changes are marked "WDS patch".
@@ -1512,53 +2016,54 @@ diff -ruN a/src/tab/tab_bar.rs b/src/tab/tab_bar.rs
                          .rounded(inner_radius)
                          .shadow(raised_shadow()),
                  ),
-diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
---- a/src/tab/tab.rs	2026-11-12 22:30:56.225343902 +0100
-+++ b/src/tab/tab.rs	2026-11-12 22:30:56.235743046 +0100
-@@ -634,6 +634,18 @@
-                 hover_style.borders.left = px(0.);
-             }
-         }
-+        // PowerCommander patch: Breeze's document-mode tabs, see `BreezeControls`:
-+        // the selected one tinted by the selection, the others in the view colour.
-+        let breeze = match self.variant {
-+            TabVariant::Tab => cx.try_global::<crate::BreezeControls>().copied(),
+@@ -365,7 +369,19 @@
+             Size::Large => px(16.),
+             _ => px(12.),
+         };
++        // PowerCommander patch: AppKit's window tab bar, see `MacControls`: a
++        // rounded track holding tabs of equal width.
++        let mac = match self.variant {
++            TabVariant::Tab if !cx.has_global::<crate::BreezeControls>() => {
++                cx.try_global::<crate::MacControls>().copied()
++            }
 +            _ => None,
 +        };
-+        if let Some(breeze) = breeze {
-+            normal_style.bg = breeze.tab_inactive.into();
-+            normal_style.fg = breeze.mark;
-+            selected_style.bg = breeze.tab.into();
-+            selected_style.fg = breeze.mark;
-+        }
-         let tab_style = if self.disabled {
-             &disabled_style
-         } else if self.selected {
-@@ -646,7 +658,8 @@
-         let inner_paddings = self.variant.inner_paddings(self.size);
-         let inner_margins = self.variant.inner_margins(self.size);
-         let inner_height = self.variant.inner_height(self.size);
--        let height = self.variant.height(self.size);
-+        // Breeze's: a 3 px line over 31 px.
-+        let height = if breeze.is_some() { px(34.) } else { self.variant.height(self.size) };
-         let aria_label = self.a11y_label();
- 
-         let segmented_indicator_active =
-@@ -861,6 +874,11 @@
-                 )
-             })
-             .child(inner_element)
-+            // PowerCommander patch: the selected tab's accent line on top, as Breeze draws it.
-+            .when(self.selected && !self.disabled && self.variant == TabVariant::Tab, |this| {
-+                let (line, color) = breeze.map_or((px(2.), cx.theme().primary), |breeze| (px(3.), breeze.highlight));
-+                this.child(div().absolute().top_0().left_0().right_0().h(line).bg(color))
-+            })
-             .when_some(self.suffix, |this, suffix| {
-                 this.child(
-                     div()
+         let (bg, paddings, gap): (Background, _, _) = match self.variant {
++            TabVariant::Tab if mac.is_some() => {
++                let track = mac.map_or(cx.theme().transparent, |mac| mac.tab_track);
++                (track.into(), Edges::all(px(2.)), px(0.))
++            }
+             TabVariant::Tab => {
+                 let padding = Edges::all(px(0.));
+                 (cx.theme().tokens.tab_bar.into(), padding, px(0.))
+@@ -466,6 +482,7 @@
+         for (ix, child) in self.children.into_iter().enumerate() {
+             item_metas.push((child.label.clone(), child.icon.clone(), child.disabled));
+             let tab_bar_prefix = child.tab_bar_prefix.unwrap_or(true);
++            let child = if mac.is_some() { child.flex_1() } else { child };
+             let mut tab = child
+                 .ix(ix)
+                 .tab_bar_prefix(tab_bar_prefix)
+@@ -540,7 +557,7 @@
+             .bg(bg)
+             .text_color(cx.theme().tab_foreground)
+             .when(
+-                self.variant == TabVariant::Underline || self.variant == TabVariant::Tab,
++                self.variant == TabVariant::Underline || (self.variant == TabVariant::Tab && mac.is_none()),
+                 |this| {
+                     this.child(
+                         div()
+@@ -555,6 +572,7 @@
+                 },
+             )
+             .rounded(self.variant.tab_bar_radius(self.size, cx))
++            .when(mac.is_some(), |this| this.rounded(px(14.)).m(px(4.)))
+             .paddings(paddings)
+             .refine_style(&self.style)
+             .when_some(self.prefix, |this, prefix| this.child(prefix))
 diff -ruN a/src/table/data_table.rs b/src/table/data_table.rs
---- a/src/table/data_table.rs	2026-11-12 22:30:56.225510047 +0100
-+++ b/src/table/data_table.rs	2026-11-12 22:30:56.235878513 +0100
+--- a/src/table/data_table.rs	2026-11-12 22:39:45.280469745 +0100
++++ b/src/table/data_table.rs	2026-11-12 22:39:45.361393458 +0100
 @@ -1,5 +1,10 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): optional lines
 +// between columns; shift and an arrow extends a range of cells; no focus
@@ -1653,8 +2158,8 @@ diff -ruN a/src/table/data_table.rs b/src/table/data_table.rs
      }
  }
 diff -ruN a/src/table/delegate.rs b/src/table/delegate.rs
---- a/src/table/delegate.rs	2026-11-12 22:30:56.225537750 +0100
-+++ b/src/table/delegate.rs	2026-11-12 22:30:56.236004001 +0100
+--- a/src/table/delegate.rs	2026-11-12 22:39:45.281028059 +0100
++++ b/src/table/delegate.rs	2026-11-12 22:39:45.360125419 +0100
 @@ -1,7 +1,10 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a cell can have a
 +// context menu and a background of its own. Changes are marked "WDS patch".
@@ -1694,8 +2199,8 @@ diff -ruN a/src/table/delegate.rs b/src/table/delegate.rs
      fn render_td(
          &mut self,
 diff -ruN a/src/table/state.rs b/src/table/state.rs
---- a/src/table/state.rs	2026-11-12 22:30:56.225654101 +0100
-+++ b/src/table/state.rs	2026-11-12 22:30:56.236085005 +0100
+--- a/src/table/state.rs	2026-11-12 22:39:45.283571553 +0100
++++ b/src/table/state.rs	2026-11-12 22:39:45.361097844 +0100
 @@ -1,3 +1,11 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): in cell selection,
 +// the row header shows row numbers, and the selected cell's row number and
@@ -2227,8 +2732,8 @@ diff -ruN a/src/table/state.rs b/src/table/state.rs
                  }
              })
 diff -ruN a/src/title_bar.rs b/src/title_bar.rs
---- a/src/title_bar.rs	2026-11-12 22:30:56.226604357 +0100
-+++ b/src/title_bar.rs	2026-11-12 22:30:56.237313590 +0100
+--- a/src/title_bar.rs	2026-11-12 22:39:45.284232905 +0100
++++ b/src/title_bar.rs	2026-11-12 22:39:45.352903255 +0100
 @@ -1,3 +1,7 @@
 +// Modified for PowerCommander (Apache-2.0, section 4b): the window's buttons
 +// are those the desktop's layout names, and may be the icon theme's pictures
@@ -2358,8 +2863,8 @@ diff -ruN a/src/title_bar.rs b/src/title_bar.rs
          h_flex()
              .id("window-controls")
 diff -ruN a/src/tree.rs b/src/tree.rs
---- a/src/tree.rs	2026-11-12 22:30:56.226803255 +0100
-+++ b/src/tree.rs	2026-11-12 22:30:56.237157644 +0100
+--- a/src/tree.rs	2026-11-12 22:39:45.284620767 +0100
++++ b/src/tree.rs	2026-11-12 22:39:45.347193996 +0100
 @@ -1,3 +1,8 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a context menu
 +// builder gets the menu's context, so it can add submenus; the row renderer
@@ -2434,8 +2939,8 @@ diff -ruN a/src/tree.rs b/src/tree.rs
                              .into_any_element()
                      })
 diff -ruN a/src/window_border.rs b/src/window_border.rs
---- a/src/window_border.rs	2026-11-12 22:30:56.226858340 +0100
-+++ b/src/window_border.rs	2026-11-12 22:30:56.237206286 +0100
+--- a/src/window_border.rs	2026-11-12 22:39:45.285349283 +0100
++++ b/src/window_border.rs	2026-11-12 22:39:45.386658492 +0100
 @@ -21,6 +21,24 @@
  /// corners, so keep the generic window wrapper square until rounded content masks exist.
  pub(crate) const BORDER_RADIUS: Pixels = px(0.0);
@@ -2500,8 +3005,8 @@ diff -ruN a/src/window_border.rs b/src/window_border.rs
                      .when(!tiling.top, |div| div.border_t(BORDER_SIZE))
                      .when(!tiling.bottom, |div| div.border_b(BORDER_SIZE))
 diff -ruN a/src/window_ext.rs b/src/window_ext.rs
---- a/src/window_ext.rs	2026-11-12 22:30:56.226889729 +0100
-+++ b/src/window_ext.rs	2026-11-12 22:30:56.237249629 +0100
+--- a/src/window_ext.rs	2026-11-12 22:39:45.285882098 +0100
++++ b/src/window_ext.rs	2026-11-12 22:39:45.387555628 +0100
 @@ -11,6 +11,10 @@
  
  /// Extension trait for [`Window`] to add dialog, sheet .. functionality.

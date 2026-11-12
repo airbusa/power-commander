@@ -4,7 +4,7 @@ use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::radio::RadioGroup;
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
-use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, MacControls, StyledExt, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::settings::{MenuStyle, PAGES, Settings, SidebarBlur, SidebarOpacity, StartFont, StartMode};
@@ -162,21 +162,27 @@ impl SettingsDialog {
 
     fn render_pages(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        // macOS: a sidebar, its selection a rounded row of the accent.
+        let mac = cx.try_global::<MacControls>().copied();
         v_flex()
             .id("settings-pages")
             .w(px(190.))
             .h_full()
             .p_1()
-            .border_1()
-            .border_color(theme.border)
+            .map(|el| match mac {
+                Some(mac) => el.p(px(6.)).bg(mac.group).rounded(px(10.)),
+                None => el.border_1().border_color(theme.border),
+            })
             .overflow_y_scroll()
             .children(PAGES.iter().enumerate().map(|(ix, &(depth, label))| {
                 div()
                     .id(("settings-page", ix))
                     .pl(px(6. + 14. * depth as f32))
                     .pr_2()
-                    .when(ix == self.page, |el| {
-                        el.bg(theme.accent).text_color(theme.accent_foreground)
+                    .when(mac.is_some(), |el| el.flex_none().h(px(22.)).flex().items_center().rounded(px(5.)))
+                    .when(ix == self.page, |el| match mac {
+                        Some(mac) => el.bg(mac.accent).text_color(mac.on_accent),
+                        None => el.bg(theme.accent).text_color(theme.accent_foreground),
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.page = ix;
@@ -423,6 +429,8 @@ impl SettingsDialog {
             _ => Vec::new(),
         };
         let theme = cx.theme();
+        // macOS: the page's name as a pane's title, bold, unboxed.
+        let mac = cx.has_global::<MacControls>();
         v_flex()
             .flex_1()
             .h_full()
@@ -430,10 +438,10 @@ impl SettingsDialog {
             .child(
                 div()
                     .py_1()
-                    .text_center()
-                    .bg(theme.muted)
-                    .border_1()
-                    .border_color(theme.border)
+                    .map(|el| match mac {
+                        true => el.text_base().font_semibold(),
+                        false => el.text_center().bg(theme.muted).border_1().border_color(theme.border),
+                    })
                     .child(title),
             )
             .child(

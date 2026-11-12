@@ -646,6 +646,24 @@ impl RenderOnce for Tab {
             selected_style.bg = breeze.tab.into();
             selected_style.fg = breeze.mark;
         }
+        // PowerCommander patch: AppKit's window tabs, see `MacControls`: pills in
+        // the bar's track, the selected one lighter and rimmed.
+        let mac = match self.variant {
+            TabVariant::Tab if breeze.is_none() => cx.try_global::<crate::MacControls>().copied(),
+            _ => None,
+        };
+        if let Some(mac) = mac {
+            let transparent = cx.theme().transparent;
+            for style in [&mut normal_style, &mut hover_style, &mut disabled_style] {
+                style.bg = transparent.into();
+                style.borders = Edges::default();
+                style.border_color = transparent;
+            }
+            hover_style.bg = mac.group.into();
+            selected_style.bg = mac.tab.into();
+            selected_style.borders = Edges::all(px(0.5));
+            selected_style.border_color = mac.tab_rim;
+        }
         let tab_style = if self.disabled {
             &disabled_style
         } else if self.selected {
@@ -653,13 +671,17 @@ impl RenderOnce for Tab {
         } else {
             &normal_style
         };
-        let radius = self.variant.radius(self.size, cx);
+        let radius = if mac.is_some() { px(12.) } else { self.variant.radius(self.size, cx) };
         let inner_radius = self.variant.inner_radius(self.size, cx);
         let inner_paddings = self.variant.inner_paddings(self.size);
         let inner_margins = self.variant.inner_margins(self.size);
         let inner_height = self.variant.inner_height(self.size);
         // Breeze's: a 3 px line over 31 px.
-        let height = if breeze.is_some() { px(34.) } else { self.variant.height(self.size) };
+        let height = match (breeze, mac) {
+            (Some(_), _) => px(34.),
+            (None, Some(_)) => px(24.),
+            (None, None) => self.variant.height(self.size),
+        };
         let aria_label = self.a11y_label();
 
         let segmented_indicator_active =
@@ -875,7 +897,7 @@ impl RenderOnce for Tab {
             })
             .child(inner_element)
             // PowerCommander patch: the selected tab's accent line on top, as Breeze draws it.
-            .when(self.selected && !self.disabled && self.variant == TabVariant::Tab, |this| {
+            .when(self.selected && !self.disabled && self.variant == TabVariant::Tab && mac.is_none(), |this| {
                 let (line, color) = breeze.map_or((px(2.), cx.theme().primary), |breeze| (px(3.), breeze.highlight));
                 this.child(div().absolute().top_0().left_0().right_0().h(line).bg(color))
             })
