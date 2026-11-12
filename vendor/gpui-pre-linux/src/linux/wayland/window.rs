@@ -29,6 +29,8 @@ use wayland_protocols::{
     xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1,
 };
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
+// PowerCommander patch: see `background_effect`.
+use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
 use crate::linux::wayland::{display::WaylandDisplay, serial::SerialKind};
@@ -109,6 +111,8 @@ pub struct WaylandWindowState {
     app_id: Option<String>,
     appearance: WindowAppearance,
     blur: Option<org_kde_kwin_blur::OrgKdeKwinBlur>,
+    // PowerCommander patch: the blur of ext-background-effect-v1.
+    background_effect: Option<ExtBackgroundEffectSurfaceV1>,
     viewport: Option<wp_viewport::WpViewport>,
     outputs: HashMap<ObjectId, Output>,
     display: Option<(ObjectId, Output)>,
@@ -611,6 +615,7 @@ impl WaylandWindowState {
             surface,
             app_id: options.app_id,
             blur: None,
+            background_effect: None,
             viewport,
             globals,
             outputs: HashMap::default(),
@@ -785,6 +790,10 @@ impl Drop for WaylandWindow {
         // Destroy blur first, this has no dependencies.
         if let Some(blur) = &state.blur {
             blur.release();
+        }
+        // PowerCommander patch.
+        if let Some(effect) = &state.background_effect {
+            effect.destroy();
         }
 
         // Decorations must be destroyed before the xdg state.
@@ -2332,6 +2341,20 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
             if let Some(b) = state.blur.take() {
                 b.release()
             }
+        }
+    }
+
+    // PowerCommander patch: KWin 6.8 blurs only through ext-background-effect-v1,
+    // which blurs no more than the region given: the window's.
+    let manager = state.globals.background_effect.clone();
+    if let (None, Some(manager)) = (&state.globals.blur_manager, manager) {
+        let blurred = state.background_appearance == WindowBackgroundAppearance::Blurred;
+        if blurred && state.background_effect.is_none() {
+            let qh = state.globals.qh.clone();
+            state.background_effect = Some(manager.get_background_effect(&state.surface, &qh, ()));
+        }
+        if let Some(effect) = &state.background_effect {
+            effect.set_blur_region(blurred.then_some(&region));
         }
     }
 

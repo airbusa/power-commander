@@ -178,11 +178,13 @@ fn on_desktop(name: &str) -> bool {
 }
 
 /// How much of the window colour the sidebar paints over the system's own
-/// material behind it, macOS's blur, Windows 11's Mica, from its opacity in
-/// percent. None: solid, at 100% and on Linux, where only the compositor
-/// could blur what is behind.
+/// material behind it, macOS's blur, Windows 11's Mica, KWin's blur on
+/// Wayland, from its opacity in percent. None: solid, at 100% and on other
+/// Linux desktops, which do not blur what is behind.
 pub fn sidebar_tint(opacity: u8) -> Option<f32> {
-    let see_through = cfg!(any(target_os = "macos", windows)) && opacity < 100;
+    // shortcut: KWin with its blur effect off shows the desktop sharp; ask its capability if that matters.
+    let kwin = on_kde() && std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let see_through = (cfg!(any(target_os = "macos", windows)) || kwin) && opacity < 100;
     see_through.then_some(f32::from(opacity) / 100.)
 }
 
