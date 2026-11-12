@@ -1527,6 +1527,8 @@ impl WaylandWindowStatePtr {
             if let Some(scale) = scale {
                 state.scale = scale;
             }
+            // PowerCommander patch: see `update_background_effect`.
+            update_background_effect(&mut state);
             let device_bounds = state.bounds.to_device_pixels(state.scale);
             if let Some(renderer) = &mut state.renderer {
                 renderer.update_drawable_size(device_bounds.size);
@@ -2344,20 +2346,34 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
         }
     }
 
-    // PowerCommander patch: KWin 6.8 blurs only through ext-background-effect-v1,
-    // which blurs no more than the region given: the window's.
-    let manager = state.globals.background_effect.clone();
-    if let (None, Some(manager)) = (&state.globals.blur_manager, manager) {
-        let blurred = state.background_appearance == WindowBackgroundAppearance::Blurred;
-        if blurred && state.background_effect.is_none() {
-            let qh = state.globals.qh.clone();
-            state.background_effect = Some(manager.get_background_effect(&state.surface, &qh, ()));
-        }
-        if let Some(effect) = &state.background_effect {
-            effect.set_blur_region(blurred.then_some(&region));
-        }
-    }
+    update_background_effect(&mut state);
+    region.destroy();
+}
 
+// PowerCommander patch: KWin 6.8 blurs only through ext-background-effect-v1,
+// which blurs no more than the region given: the window inside its shadow, so
+// it is given again on every resize.
+fn update_background_effect(state: &mut WaylandWindowState) {
+    let manager = state.globals.background_effect.clone();
+    let (None, Some(manager)) = (&state.globals.blur_manager, manager) else {
+        return;
+    };
+    let blurred = state.background_appearance == WindowBackgroundAppearance::Blurred;
+    if blurred && state.background_effect.is_none() {
+        let qh = state.globals.qh.clone();
+        state.background_effect = Some(manager.get_background_effect(&state.surface, &qh, ()));
+    }
+    let Some(effect) = &state.background_effect else {
+        return;
+    };
+    if !blurred {
+        return effect.set_blur_region(None);
+    }
+    let inset = f32::from(state.inset()) as i32;
+    let size = state.bounds.size.map(|length| f32::from(length) as i32);
+    let region = state.globals.compositor.create_region(&state.globals.qh, ());
+    region.add(inset, inset, size.width - 2 * inset, size.height - 2 * inset);
+    effect.set_blur_region(Some(&region));
     region.destroy();
 }
 
