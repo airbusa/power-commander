@@ -608,8 +608,16 @@ pub(crate) mod tests {
 
     /// A listing waiting for its archive (a pipe nobody writes) stops when asked.
     #[cfg(unix)]
+    /// The run's folders (`scratch()`, `tars()`) are the whole test process's,
+    /// and one test removes them: those using them take turns.
+    pub(crate) fn shared() -> std::sync::MutexGuard<'static, ()> {
+        static TURNS: Mutex<()> = Mutex::new(());
+        TURNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn stops_a_listing() {
+        let _alone = shared();
         if !executable().exists() {
             return eprintln!("no 7-Zip here: vendor/7zip/fetch.sh");
         }
@@ -663,6 +671,7 @@ pub(crate) mod tests {
     /// one renamed, two deleted; a compressed tar says it cannot be changed.
     #[test]
     fn edits_archives() {
+        let _alone = shared();
         if !executable().exists() {
             return eprintln!("no 7-Zip here: vendor/7zip/fetch.sh");
         }
@@ -713,6 +722,7 @@ pub(crate) mod tests {
 
     #[test]
     fn browses_archives_with_the_bundled_7zip() {
+        let _alone = shared();
         assert!(
             executable().exists(),
             "run vendor/7zip/fetch.sh or fetch.bat first"

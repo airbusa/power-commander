@@ -1050,6 +1050,7 @@ mod tests {
 
     #[test]
     fn searches_archives_and_office_files() {
+        let _alone = crate::archive::tests::shared();
         let root = tree();
         let pack = |kind: &str, archive: &str, what: &str, dir: &Path| {
             let status = archive::seven_zip(&["a", "-bso0", kind], Some(&root.join(archive)))
