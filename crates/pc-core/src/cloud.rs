@@ -66,7 +66,7 @@ fn rclone() -> io::Result<PathBuf> {
         true => Ok(ours),
         // shortcut: no download on first use yet; releases ship it, source builds run vendor/rclone/build.sh.
         false => crate::convert::on_path(name)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "rclone is missing: run vendor/rclone/build.sh, or install rclone")),
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "rclone is missing: Settings > Add-ons downloads it")),
     }
 }
 

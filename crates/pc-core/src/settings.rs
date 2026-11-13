@@ -31,6 +31,16 @@ impl Default for SidebarBlur {
     }
 }
 
+/// Look for add-ons' updates at start and daily.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddonUpdates(pub bool);
+
+impl Default for AddonUpdates {
+    fn default() -> Self {
+        AddonUpdates(true)
+    }
+}
+
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -47,6 +57,7 @@ pub struct Settings {
     /// Files' own programs for Enter, F3 and F4.
     pub associations: Vec<crate::associations::Association>,
     pub keys: crate::keymap::KeySettings,
+    pub addon_updates: AddonUpdates,
 }
 
 /// Where the menus are: a bar under the title, or behind a ☰ button in the
@@ -186,6 +197,7 @@ pub const PAGES: &[(u8, &str)] = &[
     (1, "Zip packer"),
     (1, "7-Zip packer"),
     (0, "Misc."),
+    (0, "Add-ons"),
 ];
 
 pub fn config_dir() -> Option<PathBuf> {

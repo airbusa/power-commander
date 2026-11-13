@@ -1,6 +1,7 @@
 // No console window beside the app on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod addons;
 mod app_icons;
 mod appearance;
 mod associations_dialog;
@@ -200,6 +201,7 @@ fn main() {
         viewer::bind_keys(cx);
         search_window::bind_keys(cx);
         editor::bind_keys(cx);
+        addons::init(cx);
         register_xml();
         header::round_corners(cx);
         #[cfg(debug_assertions)]
@@ -223,6 +225,11 @@ fn main() {
             commander
         })
         .expect("open the main window");
+        // Debug builds open Settings on a page by its name, for looking at it.
+        #[cfg(debug_assertions)]
+        if let Some(page) = std::env::var("PC_SETTINGS_PAGE").ok().and_then(|name| settings::PAGES.iter().position(|&(_, page)| page == name)) {
+            cx.defer(move |cx| configure(Some(page), cx));
+        }
     });
 }
 
@@ -266,6 +273,20 @@ fn dock_icon() {
 struct MainWindow(AnyWindowHandle, WeakEntity<Commander>);
 
 impl Global for MainWindow {}
+
+/// The settings in use, once the main window is up.
+fn current_settings(cx: &App) -> Option<Settings> {
+    let MainWindow(_, commander) = cx.try_global::<MainWindow>()?;
+    Some(commander.upgrade()?.read(cx).settings.clone())
+}
+
+/// A notification on the main window, for what happens apart from any.
+fn notify_main(notification: Notification, cx: &mut App) {
+    let Some(MainWindow(main, _)) = cx.try_global::<MainWindow>().cloned() else {
+        return;
+    };
+    let _ = main.update(cx, |_, window, cx| window.push_notification(notification, cx));
+}
 
 /// While a command goes to the main window: one it does not take goes on.
 struct Forwarding;

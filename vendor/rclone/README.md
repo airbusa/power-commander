@@ -1,4 +1,4 @@
-# rclone 1.75.2, our build (bundled)
+# rclone 1.75.2, our build (an add-on)
 
 Online storage connects through rclone: `rclone serve sftp --stdio` for each
 connection, which the app's own SFTP client speaks. This build has only the
@@ -12,5 +12,5 @@ uses an `rclone` on `PATH`.
 
 Releases copy the platform's folder to `rclone/` beside the executable
 (`packaging/linux/package.sh`);
-the macOS app has `rclone` in `Contents/MacOS`, signed with the app, and its
-license as `Contents/Resources/licenses/rclone.txt` (`packaging/macos/bundle.sh`).
+on macOS it is an add-on, apart from the app: `packaging/addons.sh` zips it
+with its license, signed as the app is, and Settings > Add-ons downloads it.

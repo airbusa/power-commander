@@ -9,3 +9,6 @@
 # Built by vendor/rclone/build.sh, with rclone's source in .build.
 /vendor/rclone/*/
 /vendor/rclone/.build/
+# Built by vendor/craft/build.sh, with the Craft tools' source in .build.
+/vendor/craft/*/
+/vendor/craft/.build/

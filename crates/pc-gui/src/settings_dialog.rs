@@ -7,7 +7,8 @@ use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::{ActiveTheme, Disableable, MacControls, StyledExt, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use pc_core::settings::{MenuStyle, PAGES, Settings, SidebarBlur, SidebarOpacity, StartFont, StartMode};
+use pc_core::addons::{Addon, Presence};
+use pc_core::settings::{AddonUpdates, MenuStyle, PAGES, Settings, SidebarBlur, SidebarOpacity, StartFont, StartMode};
 
 use crate::Commander;
 
@@ -102,12 +103,16 @@ pub fn open(
             external,
             opacity,
             _opacity: trying,
+            _addons: cx.observe(&crate::addons::entity(cx), |_, _, cx| cx.notify()),
             commander,
             saved: settings.clone(),
             draft: settings,
             page,
         }
     });
+    if PAGES[page].1 == "Add-ons" {
+        crate::addons::shown(cx);
+    }
     window.open_dialog(cx, move |dialog, _, _| {
         let closing = view.clone();
         dialog
@@ -132,6 +137,7 @@ struct SettingsDialog {
     opacity: Entity<SliderState>,
     _inputs: [Subscription; 4],
     _opacity: Subscription,
+    _addons: Subscription,
 }
 
 impl SettingsDialog {
@@ -186,6 +192,9 @@ impl SettingsDialog {
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.page = ix;
+                        if label == "Add-ons" {
+                            crate::addons::shown(cx);
+                        }
                         cx.notify();
                     }))
                     .child(label)
@@ -373,6 +382,125 @@ impl SettingsDialog {
         )
     }
 
+    /// Each add-on with what it gives, whether it is there, and its download;
+    /// then the look-ups for updates.
+    fn render_addons(&self, cx: &mut Context<Self>) -> Vec<GroupBox> {
+        let state = crate::addons::entity(cx).read(cx);
+        let dim = cx.theme().muted_foreground;
+        let mut groups: Vec<GroupBox> = Addon::ALL
+            .into_iter()
+            .map(|addon| {
+                let offer = state.manifest.as_ref().and_then(|manifest| manifest.offer(addon));
+                let offered = offer.map(|(release, download)| (release.version.clone(), download.size));
+                let presence = state.presence.get(&addon).cloned().unwrap_or(Presence::Missing);
+                let installed = match &presence {
+                    Presence::Ours(version) => version.clone(),
+                    Presence::Elsewhere(_) => "the system's".to_owned(),
+                    Presence::Missing => "none".to_owned(),
+                };
+                let online = match &offered {
+                    Some((version, size)) => format!("{version} ({})", crate::addons::megabytes(*size)),
+                    None if state.checking => "looking...".to_owned(),
+                    None if state.check_error.is_some() => "unknown".to_owned(),
+                    None if state.manifest.is_some() => "none for this system".to_owned(),
+                    None => "not looked up yet".to_owned(),
+                };
+                let progress = state.progress.get(&addon).copied();
+                // Something to get: none here, or another version online.
+                let newer = offered.as_ref().is_some_and(|(version, _)| match &presence {
+                    Presence::Ours(installed) => installed != version,
+                    _ => true,
+                });
+                let row = |label: &'static str, value: String| {
+                    h_flex().gap_2().child(div().w(px(80.)).flex_none().text_color(dim).child(label)).child(
+                        div().flex_1().min_w_0().truncate().child(value),
+                    )
+                };
+                let buttons = h_flex()
+                    .flex_none()
+                    .gap_2()
+                    .child(
+                        Button::new(("addon-get", addon as usize))
+                            .label("Download")
+                            .disabled(!newer || progress.is_some())
+                            .on_click(move |_, _, cx| crate::addons::install(addon, cx)),
+                    )
+                    .when(matches!(presence, Presence::Ours(_)), |el| {
+                        el.child(
+                            Button::new(("addon-remove", addon as usize))
+                                .label("Remove")
+                                .disabled(progress.is_some())
+                                .on_click(move |_, _, cx| crate::addons::remove(addon, cx)),
+                        )
+                    });
+                GroupBox::new().outline().title(addon.title()).child(
+                    v_flex()
+                        .gap_2()
+                        .child(div().text_color(dim).child(addon.purpose()))
+                        .child(
+                            h_flex()
+                                .gap_4()
+                                .items_end()
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .gap_1()
+                                        .child(row("File", addon.files().join(", ")))
+                                        .child(row("Installed", installed))
+                                        .child(row("Online", online)),
+                                )
+                                .child(buttons),
+                        )
+                        .when_some(progress, |el, (done, of)| {
+                            el.child(format!(
+                                "Downloading: {} of {}",
+                                crate::addons::megabytes(done),
+                                crate::addons::megabytes(of)
+                            ))
+                        })
+                        .when_some(state.failed.get(&addon), |el, why| {
+                            el.child(div().text_color(cx.theme().danger).child(why.clone()))
+                        }),
+                )
+            })
+            .collect();
+        let looked_up = match (state.checking, &state.check_error, &state.manifest) {
+            (true, _, _) => "Looking for updates...".to_owned(),
+            (false, Some(err), _) => format!("Could not look for updates: {err}"),
+            (false, None, Some(_)) => "The list of add-ons is up to date.".to_owned(),
+            (false, None, None) => String::new(),
+        };
+        let checking = state.checking;
+        groups.push(
+            GroupBox::new().outline().title("Updates").child(
+                v_flex()
+                    .gap_2()
+                    .child(
+                        Checkbox::new("addon-updates")
+                            .label("Look for add-on updates at start and daily, and offer them")
+                            .checked(self.draft.addon_updates.0)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.draft.addon_updates = AddonUpdates(*checked);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_4()
+                            .child(
+                                Button::new("addon-check")
+                                    .label("Look now")
+                                    .disabled(checking)
+                                    .on_click(|_, _, cx| crate::addons::check(false, cx)),
+                            )
+                            .child(div().text_color(dim).child(looked_up)),
+                    ),
+            ),
+        );
+        groups
+    }
+
     fn render_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (_, title) = PAGES[self.page];
         let content = match title {
@@ -415,6 +543,7 @@ impl SettingsDialog {
                 ),
             ],
             "Edit/View" => vec![self.render_viewer(cx), self.render_editor(cx)],
+            "Add-ons" => self.render_addons(cx),
             "Folder Tabs" => vec![
                 GroupBox::new().outline().title("Folder tab headers").child(
                     Checkbox::new("tab-header-always")
@@ -433,6 +562,7 @@ impl SettingsDialog {
         let mac = cx.has_global::<MacControls>();
         v_flex()
             .flex_1()
+            .min_w_0()
             .h_full()
             .gap_3()
             .child(

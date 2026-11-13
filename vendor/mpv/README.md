@@ -48,9 +48,9 @@ What is built:
 - Everything else with all optional features off, but FreeType in HarfBuzz,
   Core Text in libass and OpenGL in libplacebo.
 
-The app (`packaging/macos/bundle.sh`) copies the libraries to
-`Contents/Frameworks` and signs them with itself; this file goes with them
-as their notice.
+It is an add-on, apart from the app: `packaging/addons.sh` zips the
+libraries, signed as the app is, with this file as their notice, and Settings
+> Add-ons downloads them into the user's data folder.
 
 ## What is in it
 

@@ -1,6 +1,7 @@
 //! Office documents as PDF, by the Craft tools (WordCraft, GridCraft,
-//! DeckCraft) when they are on the PATH (on macOS also in the usual bin
-//! folders or inside the app); converted once, then cached.
+//! DeckCraft): the system's on the PATH (on macOS also in the usual bin
+//! folders or inside the app), else ours (vendor/craft); converted once, then
+//! cached.
 
 use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
@@ -31,7 +32,17 @@ pub fn converter_for(path: &Path) -> Option<Converter> {
         .find(|(_, _, extensions)| extensions.contains(&extension.as_str()))?;
     Some(Converter {
         name,
-        program: on_path(program).or_else(|| in_app(dirs::home_dir().as_deref(), name, program))?,
+        program: on_path(program)
+            .or_else(|| in_app(dirs::home_dir().as_deref(), name, program))
+            .or_else(|| Some(crate::bundled::path("craft", program)).filter(|ours| ours.is_file()))?,
+    })
+}
+
+/// A Craft tool the system has, not ours.
+pub(crate) fn system_tool() -> Option<PathBuf> {
+    TOOLS.iter().find_map(|(name, program, _)| {
+        let program = if cfg!(windows) { format!("{program}.exe") } else { program.to_string() };
+        on_path(&program).or_else(|| in_app(dirs::home_dir().as_deref(), name, &program))
     })
 }
 

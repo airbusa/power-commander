@@ -519,22 +519,27 @@ struct Mpv {
 /// Linux's; macOS and Windows have none, Power Commander ships its own (vendor/mpv).
 const NAMES: &[&str] = &["libmpv.so.2", "libmpv.so"];
 /// The shipped one, and what makes it.
-const BUNDLED: Option<(&str, &str)> = match () {
+pub(crate) const BUNDLED: Option<(&str, &str)> = match () {
     _ if cfg!(target_os = "macos") => Some(("libmpv.2.dylib", "build.sh")),
     _ if cfg!(windows) => Some(("libmpv-2.dll", "fetch.bat")),
     _ => None,
 };
 
+/// Loaded once found; tried again while missing, as an add-on may come meanwhile.
 fn library() -> Result<&'static Mpv, String> {
-    static MPV: OnceLock<Result<Mpv, String>> = OnceLock::new();
-    MPV.get_or_init(load).as_ref().map_err(Clone::clone)
+    static MPV: OnceLock<Mpv> = OnceLock::new();
+    if let Some(mpv) = MPV.get() {
+        return Ok(mpv);
+    }
+    let mpv = load()?;
+    Ok(MPV.get_or_init(|| mpv))
 }
 
 fn load() -> Result<Mpv, String> {
     let library = if let Some((name, script)) = BUNDLED {
         let path = crate::bundled::path("mpv", name);
         if !path.exists() {
-            return Err(format!("libmpv is missing: {} (run vendor/mpv/{script})", path.display()));
+            return Err(format!("libmpv is missing: Settings > Add-ons downloads it (a source build: vendor/mpv/{script})"));
         }
         // SAFETY: loading libmpv runs only its libraries' initialisers.
         unsafe { libloading::Library::new(&path) }.map_err(|err| format!("libmpv: {err}"))?
