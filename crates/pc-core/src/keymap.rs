@@ -86,6 +86,8 @@ const POWER_COMMANDER: Table = &[
     (Properties, "alt-enter", mac("cmd-i")),
     // Krusader's and Dolphin's filter bar.
     (QuickFilter, "ctrl-i", ""),
+    // GNOME Files' and Dolphin's.
+    (HiddenFiles, "ctrl-h", "alt-."),
     (EditExternally, "ctrl-shift-f4", ""),
     (CalculateOccupiedSpace, "ctrl-l", ""),
     (MultiRenameTool, "ctrl-m", ""),
@@ -239,6 +241,7 @@ const KRUSADER: Table = &[
     (SplitFile, "ctrl-p", ""),
     (Search, "ctrl-s", ""),
     (QuickFilter, "ctrl-i", ""),
+    (HiddenFiles, "ctrl-.", ""),
     (SynchronizeDirs, "ctrl-y", ""),
     (SwapPanels, "ctrl-u", ""),
     (Bookmarks, "ctrl-d", ""),
@@ -295,6 +298,7 @@ const MIDNIGHT_COMMANDER: Table = &[
     (QuickViewPanel, "ctrl-x q", ""),
     (GoBack, "alt-y", ""),
     (GoForward, "alt-u", ""),
+    (HiddenFiles, "alt-.", ""),
     (TargetEqualsSource, "alt-o", ""),
 ];
 
@@ -324,6 +328,7 @@ const FORKLIFT: Table = &[
     (GoBack, "secondary-[", ""),
     (GoForward, "secondary-]", ""),
     (GoHome, "secondary-shift-h", ""),
+    (HiddenFiles, "secondary-shift-.", ""),
     (SelectAll, "secondary-a", ""),
     (UnselectAll, "secondary-alt-a", ""),
     (SelectGroup, "secondary-s", ""),

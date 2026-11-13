@@ -71,6 +71,8 @@ pub enum Command {
     SidebarPlaces,
     ToggleSidebar,
     ThumbnailView,
+    /// Dot files, and Windows' hidden and system files, shown or not.
+    HiddenFiles,
     QuickViewPanel,
     VerticalArrangement,
     DuplicateTab,
@@ -299,6 +301,8 @@ pub const MENUS: &[Menu] = &[
             cmd("Full", Full),
             cmd("Thumbnail View", ThumbnailView),
             SEP,
+            cmd("Hidden Files", HiddenFiles),
+            SEP,
             Item::Submenu {
                 label: "Sidebar",
                 items: &[
@@ -419,6 +423,7 @@ const FULL_NAMES: &[(Command, &str)] = &[
     (AllWithExtension, "Show *.*"),
     (CustomFilter, "Custom Filter"),
     (QuickFilter, "Quick Filter"),
+    (HiddenFiles, "Show Hidden Files"),
     (OnlySelectedFiles, "Show Only Selected Files"),
     (SortByName, "Sort by Name"),
     (SortByExtension, "Sort by Extension"),

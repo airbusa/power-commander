@@ -646,7 +646,10 @@ impl Commander {
 
     /// The menus show these commands checked.
     fn checked(&self, command: Command) -> bool {
-        self.sidebar.shows(command) || (command == Command::QuickViewPanel && self.quick.is_some()) || self.filter_checked(command)
+        self.sidebar.shows(command)
+            || (command == Command::QuickViewPanel && self.quick.is_some())
+            || (command == Command::HiddenFiles && self.settings.show_hidden)
+            || self.filter_checked(command)
     }
 
     /// What is typed in panel `ix`, while its cursor stays on the row it found.
@@ -1891,6 +1894,17 @@ impl Commander {
         let target = cx.theme().accent.opacity(0.35);
         div()
             .id(("row", row))
+            // A middle click opens a folder in a new tab, as a browser's link.
+            .when(entry.is_dir && !entry.is_parent(), |el| {
+                el.on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |this, _, window, cx| {
+                        this.active = ix;
+                        this.panels[ix].tabs.current_mut().set_cursor(row);
+                        this.open_in_new_tab(false, window, cx);
+                    }),
+                )
+            })
             .on_drag(Dragged { side: ix, row }, move |dragged, grab, _, cx| {
                 let text = labels.read(cx).drag_label(*dragged);
                 cx.new(|_| DragLabel { text, grab })
@@ -2133,6 +2147,14 @@ impl Render for Commander {
                     }
                     Command::CustomFilter => this.custom_filter(window, cx),
                     Command::QuickFilter => this.quick_filter(cx),
+                    Command::HiddenFiles => {
+                        // As Total Commander's button: hidden and system files together.
+                        let mut settings = this.settings.clone();
+                        settings.show_hidden = !settings.show_hidden;
+                        settings.show_system = settings.show_hidden;
+                        this.apply_settings(settings, window, cx);
+                        this.reload_menus(cx);
+                    }
                     Command::About => about::open(window, cx),
                     Command::Website => cx.open_url(pc_core::about::WEBSITE),
                     Command::OnlySelectedFiles => {
