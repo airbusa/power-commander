@@ -60,6 +60,15 @@ impl Addon {
         }
     }
 
+    /// Its licence, as its own files say.
+    pub fn licence(self) -> &'static str {
+        match self {
+            Addon::Office => "MIT or Apache 2.0",
+            Addon::Media => "LGPL 2.1 or later, with FFmpeg's; libass ISC, dav1d BSD, HarfBuzz MIT",
+            Addon::Cloud => "MIT",
+        }
+    }
+
     /// The files it is in; the first tells it is installed.
     pub fn files(self) -> &'static [&'static str] {
         match self {
@@ -121,6 +130,13 @@ impl Builtin {
         match self {
             Builtin::SevenZip => ("7-zip.org", "https://www.7-zip.org"),
             Builtin::Pdfium => ("pdfium.googlesource.com", "https://pdfium.googlesource.com/pdfium/"),
+        }
+    }
+
+    pub fn licence(self) -> &'static str {
+        match self {
+            Builtin::SevenZip => "LGPL 2.1 or later, BSD, unRAR restriction",
+            Builtin::Pdfium => "BSD 3-Clause, Apache 2.0",
         }
     }
 

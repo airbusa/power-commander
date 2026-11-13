@@ -1,10 +1,9 @@
 # libmpv 0.42.0 (built for macOS and Linux), and for Windows
 
-The viewer plays video and sound with libmpv. macOS and Windows have none, so
-Power Commander has its own there and uses only that one. On Linux it uses
-ours when installed, else the system's (`libmpv.so.2`: `libmpv2` on Debian and
-Ubuntu, `mpv-libs` on Fedora, whose FFmpeg lacks H.264 and HEVC). Like PDFium
-it is not in git: get it once after cloning, and again after an update.
+The viewer plays video and sound with libmpv, and shows HEIC and AVIF photos.
+Power Commander uses only its own, on every system, never the system's (on
+Fedora its FFmpeg lacks H.264 and HEVC). Like PDFium it is not in git: get it
+once after cloning, and again after an update.
 
 - macOS: `vendor/mpv/build.sh` (needs Xcode's command line tools, and
   Homebrew's `ninja` and `pkg-config`, on Intel `nasm` too; it can take most

@@ -41,7 +41,7 @@ actions!(pc, [HideApp, HideOtherApps, ShowAllApps, MinimizeWindow, ZoomWindow]);
 
 /// macOS: the application menu has these, not the window's menus.
 #[cfg(target_os = "macos")]
-const IN_APP_MENU: [Command; 2] = [Command::Settings, Command::Quit];
+const IN_APP_MENU: [Command; 3] = [Command::About, Command::Settings, Command::Quit];
 
 /// The commands' keys. Keys bound `before` are unbound first: the new
 /// bindings come after that, so they win.
@@ -310,6 +310,8 @@ pub fn show(window: &Window, menus: Vec<Menu>, cx: &mut App) {
     }
     cx.set_global(Installed(hash));
     let app = Menu::new("Power Commander").items([
+        item("About Power Commander".into(), false, Box::new(Run(Command::About)), false),
+        MenuItem::separator(),
         item("Settings...".into(), false, Box::new(Run(Command::Settings)), false),
         MenuItem::separator(),
         MenuItem::os_submenu("Services", SystemMenuType::Services),

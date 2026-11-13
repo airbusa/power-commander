@@ -91,6 +91,9 @@ pub enum Command {
     // Configuration
     Settings,
     Shortcuts,
+    // Help
+    Website,
+    About,
     // Button bar
     View,
     Edit,
@@ -357,6 +360,10 @@ pub const MENUS: &[Menu] = &[
             cmd("Settings...", Settings),
             cmd("Shortcuts...", Shortcuts),
         ],
+    },
+    Menu {
+        label: "Help",
+        items: &[cmd("Power Commander Website", Website), SEP, cmd("About Power Commander", About)],
     },
 ];
 

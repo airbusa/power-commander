@@ -7,6 +7,7 @@ mod appearance;
 mod associations_dialog;
 mod attributes_dialog;
 mod compare_view;
+mod about;
 mod connections_dialog;
 mod context_menu;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -2100,6 +2101,8 @@ impl Render for Commander {
                     }
                     Command::CustomFilter => this.custom_filter(window, cx),
                     Command::QuickFilter => this.quick_filter(cx),
+                    Command::About => about::open(window, cx),
+                    Command::Website => cx.open_url(pc_core::about::WEBSITE),
                     Command::OnlySelectedFiles => {
                         this.show_files(pc_core::FileFilter::Selected(Default::default()), window, cx)
                     }

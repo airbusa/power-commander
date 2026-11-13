@@ -1,3 +1,4 @@
+pub mod about;
 pub mod addons;
 pub mod archive;
 pub mod associations;
