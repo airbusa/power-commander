@@ -1,13 +1,34 @@
-# libmpv 0.42.0 (built for macOS)
+# libmpv 0.42.0 (built for macOS), and for Windows
 
 The viewer plays video and sound with libmpv. Linux has it from the system
-(`libmpv.so.2`, in every distribution); macOS has none, so Power Commander
-ships its own there, built from source, and uses only that one. Like PDFium
-it is not in git: build it once after cloning, and again after an update.
+(`libmpv.so.2`, in every distribution); macOS and Windows have none, so Power
+Commander ships its own there and uses only that one. Like PDFium it is not
+in git: get it once after cloning, and again after an update.
 
 - macOS: `vendor/mpv/build.sh` (needs Xcode's command line tools, and
   Homebrew's `ninja` and `pkg-config`, on Intel `nasm` too; it can take most
   of an hour)
+- Windows: `vendor\mpv\fetch.bat` (Windows 10 or later)
+
+## Windows
+
+`fetch.bat` downloads shinchiro's prebuilt libmpv
+(https://github.com/shinchiro/mpv-winbuild-cmake/releases/tag/20261111, the
+builds mpv's site links to), `mpv-dev-x86_64-…` and `mpv-dev-aarch64-…`,
+checks them against `SHA256SUMS` (GitHub's digests) and puts
+`libmpv-2.dll` into `windows-x86_64` and `windows-aarch64`: one library
+with FFmpeg and the rest in it, 120 MB. It is a GPL build, as the app is
+GPL; the build scripts and the sources' versions are in that repository.
+It unpacks them with 7-Zip's `7zr.exe`, downloaded beside them.
+Releases have it in `mpv/` beside the executable.
+
+mpv draws with OpenGL (WGL); where it is too old for mpv, as Windows' own
+1.1 in Remote Desktop, on the CPU (mpv's software renderer), slower.
+
+To update: change `BUILD` and `URL` in `fetch.bat` and the two digests in
+`SHA256SUMS`, run it, and `cargo test -p pc-core media -- --ignored`.
+
+## macOS
 
 It downloads the sources below, checks them against `SHA256SUMS` (the
 digests Homebrew's formulas and GitHub publish), builds them for this Mac's

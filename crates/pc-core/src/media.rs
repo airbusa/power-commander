@@ -23,7 +23,7 @@ pub fn is_media(path: &Path) -> bool {
 
 /// libmpv is there, and this system's OpenGL is drawn with.
 pub fn available() -> bool {
-    cfg!(any(target_os = "linux", target_os = "macos")) && library().is_ok()
+    cfg!(any(target_os = "linux", target_os = "macos", windows)) && library().is_ok()
 }
 
 /// A frame in BGRA, top row first.
@@ -277,33 +277,36 @@ unsafe extern "C" fn on_update(shared: *mut c_void) {
     shared.poke(|wake| wake.frame = true);
 }
 
-/// Draws frames on a thread of its own, where its OpenGL context is current.
+/// Draws frames on a thread of its own, where its OpenGL context is current;
+/// on the CPU where OpenGL is too old for mpv (Windows' own 1.1, in Remote Desktop).
 fn render(mpv: &'static Mpv, handle: Raw, shared: Arc<Shared>, ready: mpsc::Sender<Result<(), String>>) {
-    let opengl = match gl::Context::new() {
-        Ok(opengl) => opengl,
-        Err(err) => return drop(ready.send(Err(err))),
-    };
-    let mut init = GlInit {
-        get_proc_address: gl::proc_address,
-        context: &*opengl as *const gl::Context as *mut c_void,
-    };
-    let mut params = [
-        Param::new(PARAM_API_TYPE, c"opengl".as_ptr() as *mut c_void),
-        Param::new(PARAM_OPENGL_INIT, &mut init as *mut GlInit as *mut c_void),
-        Param::END,
-    ];
     let mut context = null_mut();
-    // SAFETY: the parameters live through the call; the context is current.
-    let code = unsafe { (mpv.render_create)(&mut context, handle.0, params.as_mut_ptr()) };
-    if code < 0 {
-        let why = format!("mpv cannot draw with OpenGL: {}", error(mpv, code));
-        return drop(ready.send(Err(why)));
+    let opengl = gl::Context::new().ok().filter(|opengl| {
+        let mut init = GlInit {
+            get_proc_address: gl::proc_address,
+            context: &**opengl as *const gl::Context as *mut c_void,
+        };
+        let mut params = [
+            Param::new(PARAM_API_TYPE, c"opengl".as_ptr() as *mut c_void),
+            Param::new(PARAM_OPENGL_INIT, &mut init as *mut GlInit as *mut c_void),
+            Param::END,
+        ];
+        // SAFETY: the parameters live through the call; the context is current.
+        unsafe { (mpv.render_create)(&mut context, handle.0, params.as_mut_ptr()) >= 0 }
+    });
+    if opengl.is_none() {
+        let mut params = [Param::new(PARAM_API_TYPE, c"sw".as_ptr() as *mut c_void), Param::END];
+        // SAFETY: as above.
+        let code = unsafe { (mpv.render_create)(&mut context, handle.0, params.as_mut_ptr()) };
+        if code < 0 {
+            return drop(ready.send(Err(format!("mpv cannot draw: {}", error(mpv, code)))));
+        }
     }
     let callback = Arc::as_ptr(&shared) as *mut c_void;
     // SAFETY: `shared` outlives the callback, removed below.
     unsafe { (mpv.render_set_update_callback)(context, Some(on_update), callback) };
     let _ = ready.send(Ok(()));
-    let mut target = gl::Target::new(&opengl);
+    let mut target = opengl.as_deref().map(gl::Target::new);
     loop {
         let (resized, (width, height)) = {
             let mut wake = shared.wake.lock().unwrap();
@@ -322,20 +325,41 @@ fn render(mpv: &'static Mpv, handle: Raw, shared: Arc<Shared>, ready: mpsc::Send
         if flags & UPDATE_FRAME == 0 && !resized || width == 0 || height == 0 {
             continue;
         }
-        let mut fbo = Fbo {
-            fbo: target.bind(width, height) as c_int,
-            w: width as c_int,
-            h: height as c_int,
-            internal_format: GL_RGBA8,
+        let bgra = match &mut target {
+            Some(target) => {
+                let mut fbo = Fbo {
+                    fbo: target.bind(width, height) as c_int,
+                    w: width as c_int,
+                    h: height as c_int,
+                    internal_format: GL_RGBA8,
+                };
+                // Not flipped: in a framebuffer of its own mpv draws the top row first.
+                let mut params = [
+                    Param::new(PARAM_OPENGL_FBO, &mut fbo as *mut Fbo as *mut c_void),
+                    Param::END,
+                ];
+                // SAFETY: as above; waits for the frame's time.
+                unsafe { (mpv.render_render)(context, params.as_mut_ptr()) };
+                target.read(width, height)
+            }
+            None => {
+                let mut bgra = vec![0u8; width as usize * height as usize * 4];
+                let mut size = [width as c_int, height as c_int];
+                let mut stride = width as usize * 4;
+                let mut params = [
+                    Param::new(PARAM_SW_SIZE, size.as_mut_ptr() as *mut c_void),
+                    Param::new(PARAM_SW_FORMAT, c"bgr0".as_ptr() as *mut c_void),
+                    Param::new(PARAM_SW_STRIDE, &mut stride as *mut usize as *mut c_void),
+                    Param::new(PARAM_SW_POINTER, bgra.as_mut_ptr() as *mut c_void),
+                    Param::END,
+                ];
+                // SAFETY: as above; the buffer has `stride` bytes for each row.
+                unsafe { (mpv.render_render)(context, params.as_mut_ptr()) };
+                // The fourth byte is left as it was.
+                bgra.chunks_exact_mut(4).for_each(|pixel| pixel[3] = 255);
+                bgra
+            }
         };
-        // Not flipped: in a framebuffer of its own mpv draws the top row first.
-        let mut params = [
-            Param::new(PARAM_OPENGL_FBO, &mut fbo as *mut Fbo as *mut c_void),
-            Param::END,
-        ];
-        // SAFETY: as above; waits for the frame's time.
-        unsafe { (mpv.render_render)(context, params.as_mut_ptr()) };
-        let bgra = target.read(width, height);
         *shared.frame.lock().unwrap() = Some(Frame {
             width,
             height,
@@ -450,6 +474,10 @@ const END_FILE_ERROR: c_int = 4;
 const PARAM_API_TYPE: c_int = 1;
 const PARAM_OPENGL_INIT: c_int = 2;
 const PARAM_OPENGL_FBO: c_int = 3;
+const PARAM_SW_SIZE: c_int = 17;
+const PARAM_SW_FORMAT: c_int = 18;
+const PARAM_SW_STRIDE: c_int = 19;
+const PARAM_SW_POINTER: c_int = 20;
 const UPDATE_FRAME: u64 = 1;
 const GL_RGBA8: c_int = 0x8058;
 
@@ -488,10 +516,13 @@ struct Mpv {
     _library: libloading::Library,
 }
 
-/// The system's; macOS has none, Power Commander ships its own (vendor/mpv).
-const NAMES: &[&str] = match () {
-    _ if cfg!(windows) => &["libmpv-2.dll", "mpv-2.dll"],
-    _ => &["libmpv.so.2", "libmpv.so"],
+/// Linux's; macOS and Windows have none, Power Commander ships its own (vendor/mpv).
+const NAMES: &[&str] = &["libmpv.so.2", "libmpv.so"];
+/// The shipped one, and what makes it.
+const BUNDLED: Option<(&str, &str)> = match () {
+    _ if cfg!(target_os = "macos") => Some(("libmpv.2.dylib", "build.sh")),
+    _ if cfg!(windows) => Some(("libmpv-2.dll", "fetch.bat")),
+    _ => None,
 };
 
 fn library() -> Result<&'static Mpv, String> {
@@ -500,10 +531,10 @@ fn library() -> Result<&'static Mpv, String> {
 }
 
 fn load() -> Result<Mpv, String> {
-    let library = if cfg!(target_os = "macos") {
-        let path = crate::bundled::path("mpv", "libmpv.2.dylib");
+    let library = if let Some((name, script)) = BUNDLED {
+        let path = crate::bundled::path("mpv", name);
         if !path.exists() {
-            return Err(format!("libmpv is missing: {} (run vendor/mpv/build.sh)", path.display()));
+            return Err(format!("libmpv is missing: {} (run vendor/mpv/{script})", path.display()));
         }
         // SAFETY: loading libmpv runs only its libraries' initialisers.
         unsafe { libloading::Library::new(&path) }.map_err(|err| format!("libmpv: {err}"))?
@@ -540,9 +571,9 @@ fn load() -> Result<Mpv, String> {
     })
 }
 
-/// OpenGL with no window, EGL's on Linux and CGL's on macOS; a framebuffer
-/// to draw in.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// OpenGL with no window, EGL's on Linux, CGL's on macOS, WGL's on Windows;
+/// a framebuffer to draw in.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod gl {
     use std::ffi::{CStr, c_char, c_void};
 
@@ -552,6 +583,8 @@ mod gl {
     pub use cgl::Context;
     #[cfg(target_os = "linux")]
     pub use egl::Context;
+    #[cfg(windows)]
+    pub use wgl::Context;
 
     #[cfg(target_os = "linux")]
     mod egl {
@@ -705,6 +738,88 @@ mod gl {
         }
     }
 
+    /// WGL wants a window's device context: a hidden one, never shown.
+    #[cfg(windows)]
+    mod wgl {
+        use std::ffi::{CString, c_void};
+        use std::ptr::null;
+
+        use windows::Win32::Foundation::{HMODULE, HWND};
+        use windows::Win32::Graphics::Gdi::{GetDC, HDC, ReleaseDC};
+        use windows::Win32::Graphics::OpenGL::{
+            ChoosePixelFormat, HGLRC, PFD_DOUBLEBUFFER, PFD_DRAW_TO_WINDOW, PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA,
+            PIXELFORMATDESCRIPTOR, SetPixelFormat, wglCreateContext, wglDeleteContext, wglGetProcAddress,
+            wglMakeCurrent,
+        };
+        use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_POPUP};
+        use windows::core::{PCSTR, w};
+
+        pub struct Context {
+            window: HWND,
+            dc: HDC,
+            context: HGLRC,
+            /// OpenGL 1.1's functions, which wglGetProcAddress does not give.
+            opengl32: HMODULE,
+        }
+
+        impl Context {
+            /// Current on this thread from now on; boxed, as mpv keeps its address.
+            pub fn new() -> Result<Box<Context>, String> {
+                let failed = |err: windows::core::Error| format!("OpenGL (WGL): {err}");
+                // SAFETY: a hidden window of this thread, destroyed with the context.
+                let window = unsafe {
+                    CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"), w!(""), WS_POPUP, 0, 0, 1, 1, None, None, None, None)
+                }
+                .map_err(failed)?;
+                // SAFETY: the window's own device context, released in drop.
+                let dc = unsafe { GetDC(Some(window)) };
+                let mut context = Context { window, dc, context: HGLRC::default(), opengl32: HMODULE::default() };
+                let format = PIXELFORMATDESCRIPTOR {
+                    nSize: size_of::<PIXELFORMATDESCRIPTOR>() as u16,
+                    nVersion: 1,
+                    dwFlags: PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,
+                    iPixelType: PFD_TYPE_RGBA,
+                    cColorBits: 32,
+                    ..Default::default()
+                };
+                // SAFETY: OpenGL calls on a live device context; the context is current from here.
+                unsafe {
+                    let chosen = ChoosePixelFormat(dc, &format);
+                    if chosen == 0 {
+                        return Err("OpenGL (WGL): no pixel format".into());
+                    }
+                    SetPixelFormat(dc, chosen, &format).map_err(failed)?;
+                    context.context = wglCreateContext(dc).map_err(failed)?;
+                    wglMakeCurrent(dc, context.context).map_err(failed)?;
+                    context.opengl32 = GetModuleHandleW(w!("opengl32.dll")).map_err(failed)?;
+                }
+                Ok(Box::new(context))
+            }
+
+            pub fn address(&self, name: &str) -> *const c_void {
+                let Ok(name) = CString::new(name) else { return null() };
+                let name = PCSTR(name.as_ptr() as *const u8);
+                // SAFETY: the context is current; some drivers answer 1, 2, 3 or -1 for none.
+                let found = unsafe { wglGetProcAddress(name) }.filter(|f| !matches!(*f as usize, 1..=3 | usize::MAX));
+                let found = found.or_else(|| unsafe { GetProcAddress(self.opengl32, name) });
+                found.map_or(null(), |function| function as *const c_void)
+            }
+        }
+
+        impl Drop for Context {
+            fn drop(&mut self) {
+                // SAFETY: made current on this thread, which drops it.
+                unsafe {
+                    let _ = wglMakeCurrent(HDC::default(), HGLRC::default());
+                    let _ = wglDeleteContext(self.context);
+                    ReleaseDC(Some(self.window), self.dc);
+                    let _ = DestroyWindow(self.window);
+                }
+            }
+        }
+    }
+
     /// For mpv: OpenGL's functions by name.
     pub unsafe extern "C" fn proc_address(context: *mut c_void, name: *const c_char) -> *mut c_void {
         // SAFETY: mpv passes back the Context it was given, and a C string.
@@ -807,7 +922,7 @@ mod gl {
 }
 
 /// Elsewhere for now: no OpenGL context to draw with.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 mod gl {
     use std::ffi::{c_char, c_void};
 
@@ -815,7 +930,7 @@ mod gl {
 
     impl Context {
         pub fn new() -> Result<Box<Context>, String> {
-            Err("video is played only on Linux and macOS yet".into())
+            Err("video is played only on Linux, macOS and Windows yet".into())
         }
     }
 
@@ -854,24 +969,14 @@ mod tests {
         assert_eq!(clock(-1.), "0:00");
     }
 
-    /// Plays a second of generated video with the system's libmpv and OpenGL.
+    /// Plays a second of video mpv makes itself (FFmpeg's lavfi), with the shipped or system libmpv.
     #[test]
-    #[ignore = "needs libmpv, OpenGL (EGL on Linux) and ffmpeg"]
+    #[ignore = "needs libmpv"]
     fn draws_frames() {
-        let dir = std::env::temp_dir().join(format!("pc-media-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("bars.mkv");
-        let made = std::process::Command::new("ffmpeg")
-            .args(["-loglevel", "error", "-y", "-f", "lavfi", "-i"])
-            .args(["color=c=black:size=320x240:rate=25:duration=1", "-c:v", "ffv1"])
-            // White above, black below: the frame must come the right way up.
-            .args(["-vf", "drawbox=x=0:y=0:w=320:h=120:color=white:t=fill"])
-            .arg(&file)
-            .status()
-            .unwrap();
-        assert!(made.success());
+        // White above, black below: the frame must come the right way up.
+        let file = Path::new("av://lavfi:color=c=black:size=320x240:rate=25:duration=1,drawbox=x=0:y=0:w=320:h=120:color=white:t=fill");
         let (sent, frames) = mpsc::channel();
-        let player = Player::open(&file, false, move || {
+        let player = Player::open(file, false, move || {
             let _ = sent.send(());
         })
         .unwrap();
@@ -893,6 +998,5 @@ mod tests {
         let state = player.state();
         assert!(state.duration > 0.9 && state.video && state.error.is_none(), "{state:?}");
         drop(player);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -1,5 +1,5 @@
-//! What Power Commander ships with (vendor/): 7-Zip, PDFium and, on macOS,
-//! libmpv.
+//! What Power Commander ships with (vendor/): 7-Zip, PDFium and, on macOS
+//! and Windows, libmpv.
 
 use std::path::{Path, PathBuf};
 

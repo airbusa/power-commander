@@ -4,7 +4,7 @@
 /vendor/7zip/*.tar.xz
 # Fetched by vendor/pdfium/fetch.sh or fetch.bat.
 /vendor/pdfium/*/
-# Built by vendor/mpv/build.sh, with its sources and work in .build.
+# Built by vendor/mpv/build.sh (its sources and work in .build), fetched by fetch.bat.
 /vendor/mpv/*/
 # Built by vendor/rclone/build.sh, with rclone's source in .build.
 /vendor/rclone/*/
