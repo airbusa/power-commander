@@ -1,4 +1,5 @@
 //! Configuration > Shortcuts: each command's keys, a preset's, changed one by one.
+use gpui_kit::component::scroll::ScrollableElement as _;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -358,7 +359,7 @@ impl KeysDialog {
                     .id("keys-list")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
+                    .overflow_y_scrollbar()
                     .child(list),
             )
     }

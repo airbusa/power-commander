@@ -1,6 +1,7 @@
 //! Find Files in a window of its own, as Total Commander's: the General,
 //! Advanced and Load/Save pages, the results below as they come, F3 and F4
 //! on them, Go to file and Feed to listbox.
+use gpui_kit::component::scroll::ScrollableElement as _;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -893,7 +894,7 @@ impl FindFiles {
                     .id("saved-searches")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
+                    .overflow_y_scrollbar()
                     .border_1()
                     .border_color(theme.border)
                     .rounded(theme.radius)

@@ -1,6 +1,7 @@
 //! The Multi-Rename Tool (Ctrl+M): masks, search and replace, case and
 //! counter, with the new names previewed as they are typed. Start renames,
 //! Undo takes it back.
+use gpui_kit::component::scroll::ScrollableElement as _;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -439,7 +440,7 @@ impl Render for RenameDialog {
                         div()
                             .id("rename-list")
                             .h(px(280.))
-                            .overflow_y_scroll()
+                            .overflow_y_scrollbar()
                             .border_1()
                             .border_color(border)
                             .p_1()

@@ -1,3 +1,4 @@
+use gpui_kit::component::scroll::ScrollableElement as _;
 use std::collections::HashSet;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -977,7 +978,7 @@ impl SettingsDialog {
                     .flex_1()
                     .min_h_0()
                     .gap_3()
-                    .overflow_y_scroll()
+                    .overflow_y_scrollbar()
                     .children(content),
             )
     }

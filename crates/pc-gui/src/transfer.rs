@@ -1,5 +1,6 @@
 //! F5 and F6: their dialog, the queue's progress strip and manager, and
 //! the questions a running job asks.
+use gpui_kit::component::scroll::ScrollableElement as _;
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -693,7 +694,7 @@ impl Render for QueueDialog {
                 v_flex()
                     .id("queue-jobs")
                     .max_h(px(360.))
-                    .overflow_y_scroll()
+                    .overflow_y_scrollbar()
                     .when(jobs.is_empty(), |el| {
                         el.child(
                             div()
