@@ -25,6 +25,8 @@ case $PLATFORM in
     windows-aarch64) EXE=.exe TARGET=aarch64-pc-windows-msvc OUTDIR=$TARGET/release ;;
     macos-x86_64) TARGET=x86_64-apple-darwin OUTDIR=$TARGET/release ;;
     macos-aarch64) TARGET=aarch64-apple-darwin OUTDIR=$TARGET/release ;;
+    # From an x86_64 Linux too, with that target's linker (packaging/linux/Dockerfile.arm64).
+    linux-aarch64) TARGET=aarch64-unknown-linux-gnu OUTDIR=$TARGET/release ;;
 esac
 TOOLS="wordcraft:v0.18.1:079f478bd85df7bcc567e3bafa7d7219096f9c3c
 gridcraft:v0.19.1:476448d7d9f3a5f8e93fcf7d98b47fd52293fe7f

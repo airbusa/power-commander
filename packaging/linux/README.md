@@ -23,6 +23,39 @@ build: `vendor/mpv/build.sh`), else the system's (`libmpv2` on Debian and
 Ubuntu, `mpv-libs` on Fedora); without either they do not play. Office
 documents need the Craft tools, the add-on or the system's.
 
+## Building in a container
+
+`Dockerfile` is the release's build machine: Ubuntu 24.04, the oldest the
+release is for (glibc 2.38 and later run what it builds), with Rust and what
+the app and libmpv build with. Built there, the programs run on newer
+distributions too:
+
+```sh
+docker build -t powercommander-build packaging/linux
+docker run --rm --user "$(id -u):$(id -g)" -e CARGO_HOME=/src/target/cargo -v "$PWD:/src" -w /src \
+    powercommander-build cargo build --release -p pc-gui -p pc-tui
+```
+
+## 64-bit ARM (aarch64)
+
+Cross-built on x86_64: `Dockerfile.arm64` adds Ubuntu's arm64 libraries and
+the aarch64 compilers to the image above.
+
+```sh
+docker build -t powercommander-build-arm64 -f packaging/linux/Dockerfile.arm64 packaging/linux
+docker run --rm --user "$(id -u):$(id -g)" -e CARGO_HOME=/src/target/cargo -v "$PWD:/src" -w /src \
+    powercommander-build-arm64 cargo build --release --target aarch64-unknown-linux-gnu -p pc-gui -p pc-tui
+vendor/rclone/build.sh linux-aarch64
+ARCH=aarch64 BIN=target/aarch64-unknown-linux-gnu/release packaging/linux/package.sh
+```
+
+Its add-ons build in the same image with `PLATFORM=linux-aarch64`
+(`vendor/craft/build.sh`, `vendor/mpv/build.sh`), and `PLATFORM=linux-aarch64
+packaging/addons.sh` zips them. `pc-qtstyle` and `pc-gtkstyle` are not
+cross-built (Qt's and GTK's arm64 development files need arm64's Python):
+built on an ARM machine with their `build.sh`, into `BIN`; without them the
+app draws those controls itself.
+
 ## Installing
 
 Also over a running copy, which keeps running until closed:

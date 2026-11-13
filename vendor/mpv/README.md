@@ -10,7 +10,9 @@ it is not in git: get it once after cloning, and again after an update.
   Homebrew's `ninja` and `pkg-config`, on Intel `nasm` too; it can take most
   of an hour)
 - Linux: `vendor/mpv/build.sh`, in the oldest distribution the release is for
-  (Ubuntu 24.04; see the script for what it needs), a few minutes
+  (Ubuntu 24.04: `packaging/linux/Dockerfile` has what it needs), a few
+  minutes; for 64-bit ARM with `PLATFORM=linux-aarch64`, cross-built in
+  `packaging/linux/Dockerfile.arm64`
 - Windows: `vendor\mpv\fetch.bat` (Windows 10 or later)
 
 ## Windows

@@ -8,15 +8,20 @@
 # release is for (Ubuntu 24.04); needs a C/C++ compiler, python3, ninja,
 # pkg-config, patchelf, nasm (x86_64), and the development files of what
 # every desktop has, which it uses: PulseAudio, ALSA, FreeType, HarfBuzz,
-# FriBidi, fontconfig and zlib.
+# FriBidi, fontconfig and zlib. PLATFORM=linux-aarch64 builds for 64-bit ARM
+# on an x86_64 Linux, with the aarch64-linux-gnu- compilers, and pkg-config
+# for arm64's libraries as aarch64-linux-gnu-pkg-config.
 set -eu
 cd "$(dirname "$0")"
-case "$(uname -s)-$(uname -m)" in
+CROSS=
+case "${PLATFORM:-$(uname -s)-$(uname -m)}" in
     Darwin-arm64) OS=macos ARCH=aarch64 TOOLS="ninja pkg-config" ;;
     Darwin-x86_64) OS=macos ARCH=x86_64 TOOLS="ninja pkg-config nasm" ;;
     Linux-x86_64) OS=linux ARCH=x86_64 TOOLS="ninja pkg-config patchelf nasm python3" ;;
     Linux-aarch64) OS=linux ARCH=aarch64 TOOLS="ninja pkg-config patchelf python3" ;;
-    *) echo "No libmpv build for $(uname -s) $(uname -m)." >&2; exit 1 ;;
+    linux-aarch64) OS=linux ARCH=aarch64 CROSS=aarch64-linux-gnu
+        TOOLS="ninja patchelf python3 $CROSS-gcc $CROSS-pkg-config" ;;
+    *) echo "No libmpv build for ${PLATFORM:-$(uname -s) $(uname -m)}." >&2; exit 1 ;;
 esac
 for tool in $TOOLS; do
     command -v $tool >/dev/null || { echo "$tool is missing" >&2; exit 1; }
@@ -75,10 +80,26 @@ meson() { "$PYTHON" "$SRC/meson-1.11.2/meson.py" "$@"; }
 build() {
     name=$(basename "$1")
     shift
+    [ -z "$CROSS" ] || set -- --cross-file "$BUILD/cross.txt" -Dpkg_config_path="$PREFIX/lib/pkgconfig" "$@"
     meson setup "$BUILD/$name" "$SRC/$name" --prefix="$PREFIX" --libdir=lib \
         --buildtype=release --default-library=shared -Db_ndebug=true "$@"
     ninja -C "$BUILD/$name" install
 }
+if [ -n "$CROSS" ]; then
+    cat > "$BUILD/cross.txt" <<CROSSFILE
+[binaries]
+c = '$CROSS-gcc'
+cpp = '$CROSS-g++'
+ar = '$CROSS-ar'
+strip = '$CROSS-strip'
+pkg-config = '$CROSS-pkg-config'
+[host_machine]
+system = 'linux'
+cpu_family = '$ARCH'
+cpu = '$ARCH'
+endian = 'little'
+CROSSFILE
+fi
 
 # Features are off unless asked for: nothing more is built than is needed.
 build "$SRC/dav1d-1.5.4" -Denable_tools=false -Denable_examples=false -Denable_tests=false -Denable_docs=false
@@ -91,6 +112,9 @@ if [ $OS = macos ]; then
     set -- --disable-avdevice --install-name-dir=@rpath --enable-audiotoolbox --enable-videotoolbox --enable-bzlib \
         --extra-cflags="-mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" \
         --extra-ldflags="-mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" --extra-libs=-liconv
+elif [ -n "$CROSS" ]; then
+    set -- --enable-cross-compile --arch="$ARCH" --target-os=linux --cross-prefix="$CROSS-" \
+        --pkg-config="$CROSS-pkg-config"
 else
     set --
 fi
@@ -153,12 +177,14 @@ if [ $OS = linux ]; then
     # Each finds the others beside libmpv; no symbols but the exported ones.
     for lib in "$OUT"/*.so*; do
         patchelf --set-rpath '$ORIGIN' "$lib"
-        strip --strip-unneeded "$lib"
+        ${CROSS:+$CROSS-}strip --strip-unneeded "$lib"
     done
-    # Loaded binding every symbol, as the app loads it.
-    "$PYTHON" -I -c 'import ctypes, os, sys; ctypes.CDLL(sys.argv[1], os.RTLD_NOW)' "$OUT/libmpv.so.2"
+    # Loaded binding every symbol, as the app loads it; not another processor's.
+    [ -n "$CROSS" ] || "$PYTHON" -I -c 'import ctypes, os, sys; ctypes.CDLL(sys.argv[1], os.RTLD_NOW)' "$OUT/libmpv.so.2"
     echo "libmpv is in $OUT; from the system it takes:"
-    ldd "$OUT/libmpv.so.2" | grep -v "$OUT" | awk '{print "  " $1}'
+    for lib in "$OUT"/*.so*; do
+        readelf -d "$lib" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'
+    done | sort -u | while read -r dep; do [ -e "$OUT/$dep" ] || echo "  $dep"; done
     exit 0
 fi
 collect() {

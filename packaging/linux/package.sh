@@ -6,7 +6,8 @@
 # (for another distribution, in its container); unset, they are built here.
 set -eu
 cd "$(dirname "$0")/../.."
-ARCH=$(uname -m)
+# ARCH: another processor's, for programs built for it elsewhere (BIN).
+ARCH=${ARCH:-$(uname -m)}
 case "$ARCH" in
     x86_64 | aarch64) ;;
     *) echo "No Linux build for $ARCH." >&2; exit 1 ;;
@@ -19,6 +20,7 @@ done
 VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
 
 if [ -z "${BIN:-}" ]; then
+    [ "$ARCH" = "$(uname -m)" ] || { echo "BIN: a folder with the programs built for $ARCH" >&2; exit 1; }
     cargo build --release -p pc-gui -p pc-tui
     BIN=${CARGO_TARGET_DIR:-target}/release
 fi
@@ -34,7 +36,7 @@ for helper in pc-qtstyle:Qt6Widgets pc-gtkstyle:gtk+-3.0; do
     name=${helper%%:*}
     if [ -e "$BIN/$name" ]; then
         cp "$BIN/$name" "$DIR/"
-    elif pkg-config --exists "${helper#*:}"; then
+    elif [ "$ARCH" = "$(uname -m)" ] && pkg-config --exists "${helper#*:}"; then
         "crates/$name/build.sh" "$DIR" >/dev/null
     else
         echo "No $name (no ${helper#*:} development files): the app draws those controls itself." >&2
