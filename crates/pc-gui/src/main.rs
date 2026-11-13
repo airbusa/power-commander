@@ -1711,6 +1711,8 @@ impl Commander {
                     .on_action(cx.listener(|this, _: &CancelPathEdit, window, cx| {
                         this.cancel_path_edit(window, cx)
                     }))
+                    // Not the panel's: a click in the field would focus the panel and end the edit.
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     // Input::h sizes only multi-line boxes.
                     .child(Styled::h(Input::new(&input).small(), PATH_HEIGHT))
                     .into_any_element(),
