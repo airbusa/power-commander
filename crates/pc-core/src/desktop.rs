@@ -1159,6 +1159,46 @@ fn icon_theme() -> String {
         .clone()
 }
 
+/// Whether the Wayland compositor blurs behind a window on request: the
+/// standard ext-background-effect-v1 with its blur (KWin 6.8, GNOME 51…), or
+/// KWin's own older protocol. Asked once; never on X11.
+pub(crate) fn compositor_blurs() -> bool {
+    static BLURS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *BLURS.get_or_init(|| std::env::var_os("WAYLAND_DISPLAY").is_some() && ask_compositor().unwrap_or(false))
+}
+
+fn ask_compositor() -> Option<bool> {
+    use wayland_client::globals::{GlobalListContents, registry_queue_init};
+    use wayland_client::protocol::wl_registry::WlRegistry;
+    use wayland_client::{Connection, Dispatch, QueueHandle};
+    use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::{
+        Capability, Event, ExtBackgroundEffectManagerV1,
+    };
+    struct Blurs(bool);
+    impl Dispatch<WlRegistry, GlobalListContents> for Blurs {
+        fn event(_: &mut Self, _: &WlRegistry, _: <WlRegistry as wayland_client::Proxy>::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    }
+    impl Dispatch<ExtBackgroundEffectManagerV1, ()> for Blurs {
+        fn event(blurs: &mut Self, _: &ExtBackgroundEffectManagerV1, event: Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+            if let Event::Capabilities { flags } = event {
+                blurs.0 = flags.into_result().is_ok_and(|flags| flags.contains(Capability::Blur));
+            }
+        }
+    }
+    let connection = Connection::connect_to_env().ok()?;
+    let (globals, mut queue) = registry_queue_init::<Blurs>(&connection).ok()?;
+    // KWin before 6.8 offers its own, while its blur effect is on.
+    let kwin = globals.contents().with_list(|list| list.iter().any(|global| global.interface == "org_kde_kwin_blur_manager"));
+    if kwin {
+        return Some(true);
+    }
+    let manager: ExtBackgroundEffectManagerV1 = globals.bind(&queue.handle(), 1..=1, ()).ok()?;
+    let mut blurs = Blurs(false);
+    queue.roundtrip(&mut blurs).ok()?;
+    manager.destroy();
+    Some(blurs.0)
+}
+
 /// A key of kdeglobals' group.
 pub(crate) fn kde_setting(group: &str, key: &str) -> Option<String> {
     let path = dirs::config_dir()?.join("kdeglobals");
@@ -1379,6 +1419,14 @@ mod tests {
 #[cfg(test)]
 mod system {
     use super::*;
+
+    /// Prints whether this Wayland compositor blurs on request: `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn asks_the_compositor() {
+        let started = std::time::Instant::now();
+        println!("blurs: {:?} in {:?}", ask_compositor(), started.elapsed());
+    }
 
     /// Prints what this desktop offers (it reads the system's): `--ignored --nocapture`.
     #[test]

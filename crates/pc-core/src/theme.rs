@@ -241,18 +241,20 @@ pub(crate) fn on_desktop(name: &str) -> bool {
 }
 
 /// How much of the window colour the sidebar paints over the system's own
-/// material behind it, macOS's blur, Windows 11's Mica, KWin's blur on
-/// Wayland, from its opacity in percent. None: solid, at 100% and on other
-/// Linux desktops, which do not blur what is behind.
+/// material behind it, macOS's blur, Windows 11's Mica, a Wayland
+/// compositor's blur, from its opacity in percent. None: solid, at 100% and
+/// where nothing blurs what is behind.
 pub fn sidebar_tint(opacity: u8) -> Option<f32> {
     (sidebar_see_through() && opacity < 100).then_some(f32::from(opacity) / 100.)
 }
 
-/// Whether the desktop can show through the sidebar: macOS, Windows, KWin on Wayland.
+/// Whether the desktop can show through the sidebar, blurred: macOS, Windows,
+/// and Wayland compositors that blur on request (KWin, GNOME 51 and later…).
 pub fn sidebar_see_through() -> bool {
-    // shortcut: KWin with its blur effect off shows the desktop sharp; ask its capability if that matters.
-    let kwin = on_kde() && std::env::var_os("WAYLAND_DISPLAY").is_some();
-    cfg!(any(target_os = "macos", windows)) || kwin
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    return crate::desktop::compositor_blurs();
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    cfg!(any(target_os = "macos", windows))
 }
 
 /// The desktop style whose controls the app draws.

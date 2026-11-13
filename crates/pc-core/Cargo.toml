@@ -61,6 +61,9 @@ glow = "0.17"
 # The file manager's own properties dialog (FileManager1); the keyring builds it already.
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 zbus = "5"
+# Whether the Wayland compositor blurs behind the sidebar; GPUI builds both already.
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 
 # Explorer's context menu for files, as Total Commander shows it; GPUI builds it already.
 [target.'cfg(windows)'.dependencies]
