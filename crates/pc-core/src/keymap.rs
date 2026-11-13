@@ -183,6 +183,7 @@ const TOTAL_COMMANDER: Table = &[
     (GoBack, "alt-left", ""),
     (GoForward, "alt-right", ""),
     (BranchView, "ctrl-b", ""),
+    (BranchViewSelected, "ctrl-shift-b", ""),
     (SwapPanels, "ctrl-u", ""),
     (Disconnect, "ctrl-shift-f", ""),
     (Brief, "ctrl-f1", ""),

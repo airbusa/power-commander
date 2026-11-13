@@ -337,8 +337,10 @@ pub struct Panel {
     file_filter: FileFilter,
     sort: Sort,
     view: View,
-    /// Search results fed to the panel, listed by their path from `path`.
+    /// Search results fed to the panel, or Branch View's files, listed by their path from `path`.
     found: Option<Vec<PathBuf>>,
+    /// What the path bar calls them.
+    found_label: &'static str,
     /// Where the tab has been, for Back and Forward.
     pub history: History,
 }
@@ -414,6 +416,7 @@ impl Panel {
             sort: Sort::default(),
             view: View::Full,
             found: None,
+            found_label: "Search results:",
             history: History::default(),
         };
         panel.reload()?;
@@ -1160,6 +1163,38 @@ impl Panel {
         for path in &paths {
             while !path.starts_with(&root) && root.pop() {}
         }
+        self.show_listed(root, paths, "Search results:");
+    }
+
+    /// Branch View (Total Commander's Ctrl+B): every file under this folder,
+    /// or under the marked folders, as one list by their paths from it; `..`
+    /// leaves it, and so does asking again. Hidden ones as the panel shows them.
+    pub fn toggle_branch(&mut self, marked_only: bool) -> io::Result<()> {
+        if self.found.is_some() {
+            return self.go_to(self.path.clone(), None);
+        }
+        if self.remote.is_some() || self.archive.is_some() {
+            return Err(io::Error::new(io::ErrorKind::Unsupported, "Branch View lists this computer's folders"));
+        }
+        let roots: Vec<PathBuf> = match marked_only {
+            true => self.chosen().into_iter().filter(|entry| entry.is_dir && !entry.is_parent()).map(|entry| self.path.join(&entry.name)).collect(),
+            false => vec![self.path.clone()],
+        };
+        let mut files = Vec::new();
+        for root in &roots {
+            files_under(root, self.filter, &mut files);
+        }
+        self.show_listed(self.path.clone(), files, "Branch view:");
+        Ok(())
+    }
+
+    /// The path bar's word for a list of found files.
+    pub fn found_label(&self) -> Option<&'static str> {
+        self.found.is_some().then_some(self.found_label)
+    }
+
+    fn show_listed(&mut self, root: PathBuf, paths: Vec<PathBuf>, label: &'static str) {
+        self.found_label = label;
         self.remote = None;
         self.archive = None;
         self.marked.clear();
@@ -1641,6 +1676,25 @@ fn attributes(_: &OsStr, meta: Option<&fs::Metadata>) -> (bool, bool, String) {
     )
 }
 
+/// The files under `dir`, as `filter` shows hidden and system ones; links to folders are not followed.
+fn files_under(dir: &Path, filter: Filter, out: &mut Vec<PathBuf>) {
+    let Ok(read) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read.flatten() {
+        let meta = entry.metadata().ok();
+        let (hidden, system, _) = attributes(&entry.file_name(), meta.as_ref());
+        if hidden && !filter.hidden || system && !filter.system {
+            continue;
+        }
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => files_under(&entry.path(), filter, out),
+            Ok(_) => out.push(entry.path()),
+            Err(_) => {}
+        }
+    }
+}
+
 /// Hidden, system, and the Attr column's text.
 #[cfg(unix)]
 fn attributes(name: &OsStr, meta: Option<&fs::Metadata>) -> (bool, bool, String) {
@@ -2032,6 +2086,37 @@ mod tests {
         panel.set_cursor(1);
         panel.open().unwrap();
         assert!(chosen(&panel).is_empty(), "a new folder, no marks");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Ctrl+B: every file under the folder by its path from it; hidden ones as shown; again, the folder.
+    #[test]
+    fn shows_a_branch() {
+        let root = std::env::temp_dir().join(format!("pc-branch-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for file in ["a/b/c.txt", "a/d.txt", "e.txt", "f/g.txt", ".hid/h.txt"] {
+            fs::create_dir_all(root.join(file).parent().unwrap()).unwrap();
+            fs::write(root.join(file), "x").unwrap();
+        }
+        let mut panel = Panel::new(&root, Filter::default()).unwrap();
+        let names = |panel: &Panel| {
+            let mut names: Vec<String> = panel.entries().iter().skip(1).map(|e| e.name.to_string_lossy().into_owned()).collect();
+            names.sort();
+            names
+        };
+        panel.toggle_branch(false).unwrap();
+        assert_eq!(panel.found_label(), Some("Branch view:"));
+        assert_eq!(panel.path(), root, "the folder it is of");
+        assert_eq!(names(&panel), ["a/b/c.txt", "a/d.txt", "e.txt", "f/g.txt"]);
+        panel.toggle_branch(false).unwrap();
+        assert_eq!(panel.found_label(), None);
+        assert!(names(&panel).contains(&"a".to_owned()), "the folder again");
+        // Only the marked folders'.
+        let at = panel.entries().iter().position(|e| e.name == "f").unwrap();
+        panel.set_cursor(at);
+        panel.toggle_mark();
+        panel.toggle_branch(true).unwrap();
+        assert_eq!(names(&panel), ["f/g.txt"]);
         fs::remove_dir_all(&root).unwrap();
     }
 

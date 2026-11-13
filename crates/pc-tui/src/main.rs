@@ -489,6 +489,10 @@ impl App {
                     self.navigate(move |panel| panel.go_to_folder(PathBuf::from(place)));
                 }
             }
+            Command::BranchView | Command::BranchViewSelected => {
+                let selected = command == Command::BranchViewSelected;
+                self.navigate(move |panel| panel.toggle_branch(selected));
+            }
             Command::GoHome => {
                 let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("/"));
                 self.navigate(move |panel| panel.go_to_folder(home));

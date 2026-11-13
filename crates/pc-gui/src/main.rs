@@ -649,6 +649,7 @@ impl Commander {
         self.sidebar.shows(command)
             || (command == Command::QuickViewPanel && self.quick.is_some())
             || (command == Command::HiddenFiles && self.settings.show_hidden)
+            || (command == Command::BranchView && self.panels[self.active].tabs.current().found_label() == Some("Branch view:"))
             || self.filter_checked(command)
     }
 
@@ -1746,7 +1747,7 @@ impl Commander {
                         cx.listener(move |this, _, window, cx| this.edit_path(ix, window, cx)),
                     )
                     // Search results say so, as Total Commander's listbox.
-                    .when(panel.is_found(), |el| el.child(div().flex_none().pr_2().font_weight(FontWeight::BOLD).child("Search results:")))
+                    .children(panel.found_label().map(|label| div().flex_none().pr_2().font_weight(FontWeight::BOLD).child(label)))
                     .child(div().flex_1().min_w_0().truncate().child(panel.location()))
                     // The filter stays in sight however long the path.
                     .children(filter_suffix(panel).map(|filter| div().flex_none().child(filter)))
@@ -2147,6 +2148,12 @@ impl Render for Commander {
                     }
                     Command::CustomFilter => this.custom_filter(window, cx),
                     Command::QuickFilter => this.quick_filter(cx),
+                    // Walked in the background: a big tree takes a while.
+                    Command::BranchView | Command::BranchViewSelected => {
+                        let selected = *command == Command::BranchViewSelected;
+                        this.navigate_on(this.active, true, move |panel| panel.toggle_branch(selected), window, cx);
+                        this.reload_menus(cx);
+                    }
                     Command::HiddenFiles => {
                         // As Total Commander's button: hidden and system files together.
                         let mut settings = this.settings.clone();

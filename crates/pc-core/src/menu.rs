@@ -56,6 +56,8 @@ pub enum Command {
     GoHome,
     OpenTerminal,
     BranchView,
+    /// Branch View of the marked folders only.
+    BranchViewSelected,
     OpenDesktopFolder,
     BackgroundTransferManager,
     SwapPanels,
@@ -288,6 +290,7 @@ pub const MENUS: &[Menu] = &[
             SEP,
             cmd("Open Terminal Here", OpenTerminal),
             cmd("Branch View (With Subdirs)", BranchView),
+            cmd("Branch View of Selected Folders", BranchViewSelected),
             SEP,
             cmd("Swap Panels", SwapPanels),
             cmd("Swap Panels With Their Tabs", SwapPanelsAndTabs),
