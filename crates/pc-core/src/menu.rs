@@ -68,6 +68,8 @@ pub enum Command {
     BranchViewSelected,
     OpenDesktopFolder,
     BackgroundTransferManager,
+    /// What was done to files, and how each ended (`activity`).
+    ActivityLog,
     SwapPanels,
     TargetEqualsSource,
     // Show
@@ -300,6 +302,7 @@ pub const MENUS: &[Menu] = &[
             cmd("Synchronize Dirs...", SynchronizeDirs),
             SEP,
             cmd("Operation Queue...", OperationQueue),
+            cmd("Activity Log...", ActivityLog),
             SEP,
             cmd("Open Terminal Here", OpenTerminal),
             cmd("Branch View (With Subdirs)", BranchView),

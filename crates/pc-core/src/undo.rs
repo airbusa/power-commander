@@ -46,11 +46,16 @@ pub fn take() -> Option<Undo> {
 /// Undoes `undo`: moves go back through `queue`, as a copy goes, unrecorded;
 /// copies and the trash here, which blocks.
 pub fn run(undo: Undo, queue: &Queue) -> io::Result<()> {
+    let title = format!("Undo: {}", undo.title);
     match undo.step {
-        Step::Copied { fs, made } => made.iter().try_for_each(|path| match fs.id() == "local" {
-            true => trash::delete(path).map_err(io::Error::other),
-            false => vfs::remove_all(&*fs, path),
-        }),
+        Step::Copied { fs, made } => {
+            let undone = made.iter().try_for_each(|path| match fs.id() == "local" {
+                true => trash::delete(path).map_err(io::Error::other),
+                false => vfs::remove_all(&*fs, path),
+            });
+            crate::activity::note(title, &undone);
+            undone
+        }
         Step::Moved { from, to, moves } => {
             for (was, now) in moves {
                 // The same name goes into its folder; a renamed one gets its name back.
@@ -63,7 +68,12 @@ pub fn run(undo: Undo, queue: &Queue) -> io::Result<()> {
             }
             Ok(())
         }
-        Step::Trashed { paths, at } => restore(&paths, at),
+        // The queue notes its moves back.
+        Step::Trashed { paths, at } => {
+            let undone = restore(&paths, at);
+            crate::activity::note(title, &undone);
+            undone
+        }
     }
 }
 

@@ -1,4 +1,5 @@
 pub mod about;
+pub mod activity;
 pub mod addons;
 pub mod archive;
 pub mod associations;
@@ -1032,7 +1033,9 @@ impl Panel {
         }
         if self.archive.is_some() {
             let (archive, dir) = self.archive_place()?;
-            archive::new_folder(&archive, &dir, name)?;
+            let made = archive::new_folder(&archive, &dir, name);
+            activity::note(format!("New folder \"{name}\" in {}", archive.display()), &made);
+            made?;
             return self.reload_at(name);
         }
         self.on_disk()?;
@@ -1042,7 +1045,9 @@ impl Panel {
             let err = format!("{name} exists already");
             return Err(io::Error::new(io::ErrorKind::AlreadyExists, err));
         }
-        vfs::create_all(&*fs, &target)?;
+        let made = vfs::create_all(&*fs, &target);
+        activity::note(format!("New folder {}", target.display()), &made);
+        made?;
         let first = Path::new(name)
             .components()
             .next()
@@ -1080,7 +1085,9 @@ impl Panel {
         }
         if self.archive.is_some() {
             let (archive, dir) = self.archive_place()?;
-            archive::rename(&archive, &dir.join(name), &dir.join(to))?;
+            let renamed = archive::rename(&archive, &dir.join(name), &dir.join(to));
+            activity::note(format!("Rename \"{}\" to \"{to}\" in {}", Path::new(name).display(), archive.display()), &renamed);
+            renamed?;
             return self.reload_at(to);
         }
         self.on_disk()?;
@@ -1092,7 +1099,9 @@ impl Panel {
         if !itself && fs.metadata(&target).is_ok() {
             return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{to} exists already")));
         }
-        fs.rename(&from, &target)?;
+        let renamed = fs.rename(&from, &target);
+        activity::note(format!("Rename {} to \"{to}\"", from.display()), &renamed);
+        renamed?;
         let title = format!("Rename \"{}\" to \"{to}\"", from.file_name().unwrap_or_default().to_string_lossy());
         undo::remember(title, undo::Step::Moved { from: fs.clone(), to: fs.clone(), moves: vec![(from.clone(), target.clone())] });
         let shown = Path::new(name).with_file_name(to).into_os_string();
@@ -1113,7 +1122,9 @@ impl Panel {
         if self.archive.is_some() {
             let (archive, dir) = self.archive_place()?;
             let paths: Vec<PathBuf> = self.chosen().iter().map(|e| dir.join(&e.name)).collect();
-            archive::delete(&archive, &paths)?;
+            let deleted = archive::delete(&archive, &paths);
+            activity::note(format!("Delete {} item(s) from {}", paths.len(), archive.display()), &deleted);
+            deleted?;
             let cursor = self.cursor;
             self.reload()?;
             self.set_cursor(cursor);
@@ -1142,6 +1153,13 @@ impl Panel {
                 fs::remove_file(path)
             }
         });
+        let what = match (paths.as_slice(), self.remote.is_some() || !to_trash) {
+            ([one], true) => format!("Delete {}", one.display()),
+            ([one], false) => format!("Move {} to the trash", one.display()),
+            (many, true) => format!("Delete {} items in {}", many.len(), self.path.display()),
+            (many, false) => format!("Move {} items in {} to the trash", many.len(), self.path.display()),
+        };
+        activity::note(what, &deleted);
         if !trashed.is_empty() {
             let title = match trashed.as_slice() {
                 [one] => format!("Move \"{}\" to the trash", one.file_name().unwrap_or_default().to_string_lossy()),

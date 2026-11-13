@@ -8,6 +8,7 @@ mod associations_dialog;
 mod attributes_dialog;
 mod compare_view;
 mod about;
+mod activity_dialog;
 mod connections_dialog;
 mod context_menu;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -1012,13 +1013,18 @@ impl Commander {
         let text = format!("{what}: permission denied. As administrator, the system asks for the password; what is deleted so is gone for good.");
         // After the dialog that asked for this closes: closing takes the topmost.
         cx.defer_in(window, move |_, window, cx| window.open_alert_dialog(cx, move |alert, _, _| {
-            let (action, commander) = (action.clone(), commander.clone());
+            let (action, commander, what) = (action.clone(), commander.clone(), what.clone());
             alert.title("Permission denied").description(text.clone()).ok_text("As administrator").show_cancel(true).on_ok(move |_, window, cx| {
                 let Some(action) = action.lock().unwrap().take() else {
                     return true;
                 };
+                let what = what.clone();
                 let _ = commander.update(cx, |_, cx| {
-                    let done = cx.background_executor().spawn(async move { pc_core::elevate::run(&action) });
+                    let done = cx.background_executor().spawn(async move {
+                        let done = pc_core::elevate::run(&action);
+                        pc_core::activity::note(format!("{what}, as administrator"), &done);
+                        done
+                    });
                     cx.spawn_in(window, async move |this, cx| {
                         let done = done.await;
                         let _ = this.update_in(cx, |this, window, cx| {
@@ -2265,6 +2271,7 @@ impl Render for Commander {
                     Command::CustomFilter => this.custom_filter(window, cx),
                     Command::QuickFilter => this.quick_filter(cx),
                     Command::Undo => this.undo(window, cx),
+                    Command::ActivityLog => activity_dialog::open(window, cx),
                     // Walked in the background: a big tree takes a while.
                     Command::BranchView | Command::BranchViewSelected => {
                         let selected = *command == Command::BranchViewSelected;

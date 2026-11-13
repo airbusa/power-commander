@@ -421,6 +421,13 @@ impl Queue {
                 }
                 Work::Task(task) => self.run_task(id, task, cancel),
             };
+            let title = self.lock().jobs.iter().find(|job| job.view.id == id).map(|job| job.view.title.clone()).unwrap_or_default();
+            let outcome = match status {
+                Status::Failed => crate::activity::Outcome::Failed,
+                Status::Cancelled => crate::activity::Outcome::Cancelled,
+                _ => crate::activity::Outcome::Done,
+            };
+            crate::activity::record(title, outcome, note.clone());
             self.update(id, |job| (job.view.status, job.view.note) = (status, note));
         }
     }
