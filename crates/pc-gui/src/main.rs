@@ -882,11 +882,6 @@ impl Commander {
 
     fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let side = self.active;
-        if self.panels[side].tabs.current().in_archive() {
-            let text = "New folders cannot be made inside archives yet.";
-            window.push_notification(Notification::warning(text), cx);
-            return;
-        }
         let commander = cx.entity().downgrade();
         let label = "New folder (directory):";
         name_dialog::open(
@@ -901,7 +896,8 @@ impl Commander {
                 }
                 let _ = commander.update(cx, |this, cx| {
                     let panel = this.panels[side].tabs.current_mut();
-                    if panel.remote().is_some() {
+                    // A server's, and 7-Zip rewriting an archive, in the background.
+                    if panel.remote().is_some() || panel.in_archive() {
                         let made = move |panel: &mut Panel| panel.new_folder(&name);
                         return this.navigate_on(side, true, made, window, cx);
                     }
@@ -930,11 +926,14 @@ impl Commander {
         if chosen.is_empty() {
             return;
         }
-        if panel.in_archive() {
-            let text = "Deleting inside archives is not possible yet.";
-            window.push_notification(Notification::warning(text), cx);
-            return;
-        }
+        // Before asking: an archive 7-Zip cannot change says so.
+        let archive = match panel.in_archive() {
+            true => match panel.archive_place() {
+                Ok((archive, _)) => Some(archive.file_name().unwrap_or_default().to_string_lossy().into_owned()),
+                Err(err) => return window.push_notification(Notification::warning(err.to_string()), cx),
+            },
+            false => None,
+        };
         let what = match chosen.as_slice() {
             [one] if one.is_dir => format!("the folder \"{}\"", one.display_name()),
             [one] => format!("the file \"{}\"", one.display_name()),
@@ -942,6 +941,8 @@ impl Commander {
         };
         let server = panel.remote().map(|remote| remote.url());
         let (title, text) = match to_trash {
+            // An archive has no trash.
+            _ if let Some(archive) = &archive => ("Delete", format!("Delete {what} from {archive}? This cannot be undone.")),
             // A server has no trash.
             _ if server.is_some() => (
                 "Delete",
@@ -975,7 +976,7 @@ impl Commander {
 
     fn delete(&mut self, side: usize, to_trash: bool, window: &mut Window, cx: &mut Context<Self>) {
         let panel = self.panels[side].tabs.current_mut();
-        if panel.remote().is_some() {
+        if panel.remote().is_some() || panel.in_archive() {
             return self.navigate_on(side, true, move |panel| panel.delete(false), window, cx);
         }
         let folder = panel.folder().to_owned();

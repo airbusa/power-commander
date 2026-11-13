@@ -181,7 +181,7 @@ impl Commander {
         }
         let (side, name) = (renaming.side, renaming.name);
         let panel = self.panels[side].tabs.current_mut();
-        if panel.remote().is_some() {
+        if panel.remote().is_some() || panel.in_archive() {
             let renamed = move |panel: &mut Panel| panel.rename_entry(&name, &to);
             return self.navigate_on(side, true, renamed, window, cx);
         }

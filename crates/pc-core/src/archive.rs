@@ -68,8 +68,7 @@ impl Member {
 
     /// Whether 7-Zip can write the archive back.
     pub fn updatable(&self) -> bool {
-        let name = self.archive.file_name().unwrap_or_default();
-        extension(name).is_some_and(|ext| UPDATABLE.contains(&ext.as_str()))
+        updatable(&self.archive)
     }
 
     /// Puts the file back from `dir`, where `extract_with_folders` took it.
@@ -101,6 +100,87 @@ impl Member {
 
 /// What 7-Zip can update in place; compressed tars it cannot.
 const UPDATABLE: &[&str] = &["7z", "zip", "tar", "jar"];
+
+/// Whether 7-Zip can change the archive in place.
+pub(crate) fn updatable(archive: &Path) -> bool {
+    extension(archive.file_name().unwrap_or_default()).is_some_and(|ext| UPDATABLE.contains(&ext.as_str()))
+}
+
+/// Runs 7-Zip's `args` on `archive` in `dir`, then `names`, which are no wildcards.
+fn change(args: &[&str], archive: &Path, dir: Option<&Path>, names: &[&OsStr]) -> io::Result<()> {
+    let mut command = seven_zip(&[args, &["-y", "-spd", "-bso0", "-bsp0"]].concat(), Some(archive));
+    command.args(names);
+    if let Some(dir) = dir {
+        command.current_dir(dir);
+    }
+    let done = command.output().map_err(missing)?;
+    match done.status.success() {
+        true => Ok(()),
+        false => {
+            let name = archive.file_name().unwrap_or_default().to_string_lossy();
+            Err(io::Error::other(format!("{name}: {}", failure(done.status, &done.stderr))))
+        }
+    }
+}
+
+/// `sources`, this computer's, into `archive`'s folder `dir` (empty: its top),
+/// replacing what has their names there. 7-Zip names them by where they
+/// are, so they are linked (Windows: copied) into that folder's path first.
+pub fn add(archive: &Path, sources: &[PathBuf], dir: &Path) -> io::Result<()> {
+    if dir.as_os_str().is_empty() {
+        let names: Vec<&OsStr> = sources.iter().map(|source| source.as_os_str()).collect();
+        return change(&["a"], archive, None, &names);
+    }
+    let stage = fresh_scratch()?;
+    let inside = stage.join(dir);
+    fs::create_dir_all(&inside)?;
+    let staged = sources.iter().try_for_each(|source| stage_one(source, &inside.join(source.file_name().unwrap_or_default())));
+    let top = dir.components().next().map(|top| top.as_os_str().to_owned()).unwrap_or_default();
+    let added = staged.and_then(|()| change(&["a"], &archive.canonicalize()?, Some(&stage), &[&top]));
+    // Links go, never what they point to.
+    let _ = fs::remove_dir_all(&stage);
+    added
+}
+
+#[cfg(unix)]
+fn stage_one(source: &Path, at: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(source.canonicalize()?, at)
+}
+
+/// Windows lets only some make links: copied.
+#[cfg(not(unix))]
+fn stage_one(source: &Path, at: &Path) -> io::Result<()> {
+    if !fs::metadata(source)?.is_dir() {
+        return fs::copy(source, at).map(drop);
+    }
+    fs::create_dir_all(at)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        stage_one(&entry.path(), &at.join(entry.file_name()))?;
+    }
+    Ok(())
+}
+
+/// The items at `paths` inside `archive` out of it, folders with all in them.
+pub fn delete(archive: &Path, paths: &[PathBuf]) -> io::Result<()> {
+    let names: Vec<&OsStr> = paths.iter().map(|path| path.as_os_str()).collect();
+    change(&["d"], archive, None, &names)
+}
+
+/// The item at `from` inside `archive` (a folder with all in it) at `to`.
+pub(crate) fn rename(archive: &Path, from: &Path, to: &Path) -> io::Result<()> {
+    change(&["rn"], archive, None, &[from.as_os_str(), to.as_os_str()])
+}
+
+/// An empty folder `dir`/`name` inside `archive`.
+pub(crate) fn new_folder(archive: &Path, dir: &Path, name: &str) -> io::Result<()> {
+    let stage = fresh_scratch()?;
+    fs::create_dir_all(stage.join(dir).join(name))?;
+    let top = dir.join(name).components().next().map(|top| top.as_os_str().to_owned()).unwrap_or_default();
+    let made = change(&["a"], &archive.canonicalize()?, Some(&stage), &[&top]);
+    let _ = fs::remove_dir_all(&stage);
+    made
+}
 
 /// Where files taken out of archives go while the app runs.
 pub fn scratch() -> PathBuf {
@@ -577,6 +657,58 @@ pub(crate) mod tests {
         assert_eq!(names(&guide), ["..", "a.txt"]);
         assert_eq!(guide[1].size, 12);
         assert!(guide[1].modified.is_some());
+    }
+
+    /// Into a folder inside a zip: files and folders added, a folder made,
+    /// one renamed, two deleted; a compressed tar says it cannot be changed.
+    #[test]
+    fn edits_archives() {
+        if !executable().exists() {
+            return eprintln!("no 7-Zip here: vendor/7zip/fetch.sh");
+        }
+        let root = std::env::temp_dir().join(format!("pc-archive-edit-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src/sub")).unwrap();
+        fs::create_dir_all(root.join("newdir")).unwrap();
+        for (file, text) in [("src/a.txt", "a"), ("src/sub/b.txt", "b"), ("new.txt", "new"), ("newdir/inner.txt", "inner")] {
+            fs::write(root.join(file), text).unwrap();
+        }
+        let packed = seven_zip(&["a", "-bso0", "-tzip"], Some(&root.join("t.zip"))).arg("src").current_dir(&root).status().unwrap();
+        assert!(packed.success());
+        for (kind, archive, what) in [("-ttar", "t.tar", "new.txt"), ("-tgzip", "t.tar.gz", "t.tar")] {
+            let packed = seven_zip(&["a", "-bso0", kind], Some(&root.join(archive))).arg(what).current_dir(&root).status().unwrap();
+            assert!(packed.success());
+        }
+        let mut panel = Panel::new(&root, crate::Filter::default()).unwrap();
+        let open = |panel: &mut Panel, name: &str| {
+            let at = panel.entries().iter().position(|e| e.display_name() == name).unwrap();
+            panel.set_cursor(at);
+            panel.open().unwrap();
+        };
+        open(&mut panel, "t.zip");
+        open(&mut panel, "src");
+        let (archive, dir) = panel.archive_place().unwrap();
+        assert_eq!(dir, Path::new("src"));
+        add(&archive, &[root.join("new.txt"), root.join("newdir")], &dir).unwrap();
+        panel.reload().unwrap();
+        assert_eq!(names(panel.entries()), ["..", "newdir", "sub", "a.txt", "new.txt"]);
+        assert!(root.join("newdir/inner.txt").exists(), "the sources stay");
+        panel.new_folder("made").unwrap();
+        panel.rename_entry(OsStr::new("a.txt"), "renamed.txt").unwrap();
+        assert_eq!(names(panel.entries()), ["..", "made", "newdir", "sub", "new.txt", "renamed.txt"]);
+        for name in ["newdir", "new.txt"] {
+            let at = panel.entries().iter().position(|e| e.display_name() == name).unwrap();
+            panel.set_cursor(at);
+            panel.toggle_mark();
+        }
+        panel.delete(false).unwrap();
+        assert_eq!(names(panel.entries()), ["..", "made", "sub", "renamed.txt"]);
+        open(&mut panel, "sub");
+        assert_eq!(names(panel.entries()), ["..", "b.txt"], "a folder's own items stay");
+        let mut panel = Panel::new(&root, crate::Filter::default()).unwrap();
+        open(&mut panel, "t.tar.gz");
+        assert_eq!(panel.archive_place().unwrap_err().kind(), io::ErrorKind::Unsupported);
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

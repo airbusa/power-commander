@@ -18,7 +18,7 @@ use gpui_kit::component::{ActiveTheme, IconName, Sizable, WindowExt, h_flex, v_f
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::Panel;
-use pc_core::ops::{Answer, JobView, Kind, Operation, Overwrite, Question, Queue, Status, Target};
+use pc_core::ops::{Answer, JobView, Kind, Operation, Overwrite, Question, Queue, Status, Target, Task as Job};
 use pc_core::vfs::{Fs, Local, Meta};
 
 use crate::Commander;
@@ -51,6 +51,8 @@ pub(crate) struct Place {
     /// A server's address, for the dialog.
     pub server: Option<String>,
     pub in_archive: bool,
+    /// Inside an archive: it and its folder, or why 7-Zip cannot change it.
+    pub archive: Option<Result<(PathBuf, PathBuf), String>>,
 }
 
 impl Place {
@@ -60,6 +62,7 @@ impl Place {
             folder: panel.folder().to_owned(),
             server: panel.remote().map(|remote| remote.url()),
             in_archive: panel.in_archive(),
+            archive: panel.in_archive().then(|| panel.archive_place().map_err(|err| err.to_string())),
         }
     }
 }
@@ -147,10 +150,16 @@ impl Commander {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if to.in_archive || batch.archived.is_some() && kind == Kind::Move {
-            let text =
-                "Copying into archives and moving out of them are not possible yet; F5 copies out.";
-            return window.push_notification(Notification::warning(text), cx);
+        match &to.archive {
+            Some(Ok((archive, dir))) => return self.pack_into(kind, batch, archive.clone(), dir.clone(), window, cx),
+            Some(Err(why)) => return window.push_notification(Notification::warning(why.clone()), cx),
+            None => {}
+        }
+        // Moved out: 7-Zip must take them out of the archive after.
+        if let (Some((panel, _)), Kind::Move) = (&batch.archived, kind)
+            && let Err(err) = panel.archive_place()
+        {
+            return window.push_notification(Notification::warning(err.to_string()), cx);
         }
         let (what, target) = match &batch.one {
             Some((name, shown, false)) => (
@@ -193,6 +202,67 @@ impl Commander {
         );
     }
 
+    /// F5 or F6 into an archive: asked, then 7-Zip packs them into its
+    /// folder `dir` as a queued task; another archive's are taken out first.
+    fn pack_into(&mut self, kind: Kind, batch: Batch, archive: PathBuf, dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if batch.from.id() != "local" {
+            let text = "Only this computer's files go into an archive: copy them here first.";
+            return window.push_notification(Notification::warning(text), cx);
+        }
+        let what = match &batch.one {
+            Some((_, shown, _)) => format!("\"{shown}\""),
+            None => format!("{} items", batch.sources.len()),
+        };
+        let verb = if kind == Kind::Move { "Move" } else { "Copy" };
+        let name = archive.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let into = match dir.as_os_str().is_empty() {
+            true => name.clone(),
+            false => format!("{name}{MAIN_SEPARATOR}{}", dir.display()),
+        };
+        let (title, text) = (format!("{verb} {what} into {name}"), format!("{verb} {what} into {into}? What has their names there is replaced."));
+        let commander = cx.entity().downgrade();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let (commander, batch, archive, dir, title) = (commander.clone(), batch.clone(), archive.clone(), dir.clone(), title.clone());
+            alert.title(verb).description(text.clone()).ok_text(verb).show_cancel(true).on_ok(move |_, window, cx| {
+                let (batch, archive, dir, title) = (batch.clone(), archive.clone(), dir.clone(), title.clone());
+                let _ = commander.update(cx, |this, cx| {
+                    let queue = this.transfers.queue.clone();
+                    let pack = move |sources: Vec<PathBuf>| {
+                        queue.push_task(Job {
+                            title,
+                            run: Box::new(move |_| {
+                                pc_core::archive::add(&archive, &sources, &dir)?;
+                                if kind == Kind::Move {
+                                    sources.iter().try_for_each(|source| pc_core::vfs::remove_all(&Local, source))?;
+                                }
+                                Ok(String::new())
+                            }),
+                        });
+                    };
+                    match batch.archived {
+                        None => pack(batch.sources),
+                        Some((panel, names)) => {
+                            let taken = cx.background_executor().spawn(async move { panel.extract(&names) });
+                            cx.spawn_in(window, async move |_, cx| match taken.await {
+                                Ok(sources) => pack(sources),
+                                Err(err) => {
+                                    let note = Notification::error(format!("Could not take them out: {err}")).autohide(false);
+                                    let _ = cx.update(|window, cx| window.push_notification(note, cx));
+                                }
+                            })
+                            .detach();
+                        }
+                    }
+                    if let Some(side) = batch.unmark {
+                        this.panels[side].tabs.current_mut().mark_all(false);
+                    }
+                    cx.notify();
+                });
+                true
+            })
+        });
+    }
+
     /// Into the queue; an archive's are taken out first.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn enqueue(
@@ -207,6 +277,33 @@ impl Commander {
     ) {
         let queue = self.transfers.queue.clone();
         let from = batch.from.clone();
+        // Moved out of an archive: once copied, what arrived goes from it, by 7-Zip.
+        let leave = match (&batch.archived, kind) {
+            (Some((panel, names)), Kind::Move) => panel.archive_place().ok().map(|(archive, dir)| {
+                let arrived: Vec<(PathBuf, PathBuf)> = names
+                    .iter()
+                    .map(|name| match &target {
+                        Target::Into(folder) => (dir.join(name), folder.join(name)),
+                        Target::As(path) => (dir.join(name), path.clone()),
+                    })
+                    .collect();
+                let name = archive.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                let (to, queue) = (to.clone(), queue.clone());
+                move || {
+                    queue.push_task(Job {
+                        title: format!("Remove the moved from {name}"),
+                        run: Box::new(move |_| {
+                            let gone: Vec<PathBuf> = arrived.into_iter().filter(|(_, at)| to.metadata(at).is_ok()).map(|(inside, _)| inside).collect();
+                            if !gone.is_empty() {
+                                pc_core::archive::delete(&archive, &gone)?;
+                            }
+                            Ok(String::new())
+                        }),
+                    });
+                }
+            }),
+            _ => None,
+        };
         let push = move |sources| {
             queue.push(Operation {
                 kind,
@@ -215,7 +312,10 @@ impl Commander {
                 to,
                 target,
                 overwrite,
-            })
+            });
+            if let Some(leave) = leave {
+                leave();
+            }
         };
         match batch.archived {
             None => drop(push(batch.sources)),

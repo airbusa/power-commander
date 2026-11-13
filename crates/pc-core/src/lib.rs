@@ -1020,11 +1020,16 @@ impl Panel {
 
     /// `name` may be a path; the cursor goes to its first folder here.
     pub fn new_folder(&mut self, name: &str) -> io::Result<()> {
-        self.on_disk()?;
         let name = name.trim();
         if name.is_empty() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "no name given"));
         }
+        if self.archive.is_some() {
+            let (archive, dir) = self.archive_place()?;
+            archive::new_folder(&archive, &dir, name)?;
+            return self.reload_at(name);
+        }
+        self.on_disk()?;
         let target = self.path.join(name);
         let fs = self.fs();
         if fs.metadata(&target).is_ok() {
@@ -1063,11 +1068,16 @@ impl Panel {
     /// Renames an entry here or on a server (`name` may be a path, as in
     /// search results); the cursor on it then.
     pub fn rename_entry(&mut self, name: &OsStr, to: &str) -> io::Result<()> {
-        self.on_disk()?;
         let to = to.trim();
         if to.is_empty() || to.contains(['/', std::path::MAIN_SEPARATOR]) || to == "." || to == PARENT {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{to}: not a name")));
         }
+        if self.archive.is_some() {
+            let (archive, dir) = self.archive_place()?;
+            archive::rename(&archive, &dir.join(name), &dir.join(to))?;
+            return self.reload_at(to);
+        }
+        self.on_disk()?;
         let from = self.path.join(name);
         let target = from.with_file_name(to);
         let fs = self.fs();
@@ -1093,6 +1103,16 @@ impl Panel {
 
     /// The chosen entries, to the trash or for good; stops at the first error.
     pub fn delete(&mut self, to_trash: bool) -> io::Result<()> {
+        // Inside an archive, 7-Zip's: no trash there.
+        if self.archive.is_some() {
+            let (archive, dir) = self.archive_place()?;
+            let paths: Vec<PathBuf> = self.chosen().iter().map(|e| dir.join(&e.name)).collect();
+            archive::delete(&archive, &paths)?;
+            let cursor = self.cursor;
+            self.reload()?;
+            self.set_cursor(cursor);
+            return Ok(());
+        }
         self.on_disk()?;
         let paths: Vec<PathBuf> = self
             .chosen()
@@ -1129,7 +1149,32 @@ impl Panel {
         deleted
     }
 
-    // shortcut: files change only on disk; add archive updates (7-Zip `a`, `d`) when needed.
+    /// The archive shown and its folder inside, where 7-Zip can change it:
+    /// this computer's 7z, zip and tar archives.
+    pub fn archive_place(&self) -> io::Result<(PathBuf, PathBuf)> {
+        let Some(archive) = &self.archive else {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "not inside an archive"));
+        };
+        let name = self.path.file_name().unwrap_or_default().to_string_lossy();
+        if archive.origin.is_some() {
+            return Err(io::Error::new(io::ErrorKind::Unsupported, format!("{name}: archives on servers cannot be changed yet")));
+        }
+        if !archive::updatable(&self.path) {
+            let text = format!("{name}: 7-Zip changes 7z, zip and tar archives in place, not this one");
+            return Err(io::Error::new(io::ErrorKind::Unsupported, text));
+        }
+        Ok((self.path.clone(), archive.dir.clone()))
+    }
+
+    /// Lists the archive again, the cursor on `name`.
+    fn reload_at(&mut self, name: &str) -> io::Result<()> {
+        self.reload()?;
+        if let Some(at) = self.entries.iter().position(|e| e.name == name) {
+            self.set_cursor(at);
+        }
+        Ok(())
+    }
+
     fn on_disk(&self) -> io::Result<()> {
         match self.archive {
             Some(_) => Err(io::Error::new(
