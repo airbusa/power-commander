@@ -35,6 +35,7 @@ pub mod pdf;
 pub mod properties;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub mod toolkit_style;
+pub mod undo;
 pub mod remote;
 pub mod rename;
 pub mod resume;
@@ -1076,6 +1077,8 @@ impl Panel {
             return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{to} exists already")));
         }
         fs.rename(&from, &target)?;
+        let title = format!("Rename \"{}\" to \"{to}\"", from.file_name().unwrap_or_default().to_string_lossy());
+        undo::remember(title, undo::Step::Moved { from: fs.clone(), to: fs.clone(), moves: vec![(from.clone(), target.clone())] });
         let shown = Path::new(name).with_file_name(to).into_os_string();
         match &mut self.found {
             Some(found) => {
@@ -1096,12 +1099,16 @@ impl Panel {
             .iter()
             .map(|e| self.path.join(&e.name))
             .collect();
+        let at = std::time::SystemTime::now();
+        let mut trashed = Vec::new();
         let deleted = paths.iter().try_for_each(|path| {
             if let Some(remote) = &self.remote {
                 // A server has no trash.
                 vfs::remove_all(&**remote, path)
             } else if to_trash {
-                trash::delete(path).map_err(io::Error::other)
+                trash::delete(path).map_err(io::Error::other)?;
+                trashed.push(path.clone());
+                Ok(())
             } else if fs::symlink_metadata(path)?.is_dir() {
                 fs::remove_dir_all(path)
             } else {
@@ -1109,6 +1116,13 @@ impl Panel {
                 fs::remove_file(path)
             }
         });
+        if !trashed.is_empty() {
+            let title = match trashed.as_slice() {
+                [one] => format!("Move \"{}\" to the trash", one.file_name().unwrap_or_default().to_string_lossy()),
+                many => format!("Move {} items to the trash", many.len()),
+            };
+            undo::remember(title, undo::Step::Trashed { paths: trashed, at });
+        }
         let cursor = self.cursor;
         self.go_to(self.path.clone(), None)?;
         self.set_cursor(cursor);

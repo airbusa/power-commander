@@ -71,6 +71,7 @@ const fn windows(key: &'static str) -> &'static str {
 }
 
 const POWER_COMMANDER: Table = &[
+    (Undo, "secondary-z", ""),
     (View, "f3", ""),
     (Edit, "f4", ""),
     (Copy, "f5", ""),
@@ -149,6 +150,7 @@ const POWER_COMMANDER: Table = &[
 ];
 
 const TOTAL_COMMANDER: Table = &[
+    (Undo, "ctrl-z", ""),
     (View, "f3", ""),
     (Edit, "f4", ""),
     (Copy, "f5", ""),
@@ -223,6 +225,7 @@ const TOTAL_COMMANDER: Table = &[
 /// Krusader's own defaults (its kractions, listpanelactions, viewactions
 /// and tabactions) and KDE's standard keys.
 const KRUSADER: Table = &[
+    (Undo, "ctrl-z", ""),
     (View, "f3", ""),
     (Edit, "f4", ""),
     (Copy, "f5", ""),
@@ -305,6 +308,7 @@ const MIDNIGHT_COMMANDER: Table = &[
 
 /// ForkLift 4's menus and macOS's own keys.
 const FORKLIFT: Table = &[
+    (Undo, "secondary-z", ""),
     (View, "f3", "space"),
     (Edit, "f4", ""),
     (Copy, "f5", ""),

@@ -986,6 +986,31 @@ impl Commander {
     }
 
     /// Every tab on `folder`, on both sides, reads it again.
+    /// Ctrl+Z: the newest copy, move, rename or move to the trash undone; a
+    /// move goes back through the queue, the rest in the background.
+    fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(undo) = pc_core::undo::take() else {
+            return window.push_notification(Notification::info("Nothing to undo."), cx);
+        };
+        let (title, queue) = (undo.title.clone(), self.transfers.queue.clone());
+        let undone = cx.background_executor().spawn(async move { pc_core::undo::run(undo, &queue) });
+        cx.spawn_in(window, async move |this, cx| {
+            let undone = undone.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let note = match undone {
+                    Ok(()) => Notification::info(format!("Undone: {title}")),
+                    Err(err) => Notification::error(format!("Could not undo \"{title}\": {err}")),
+                };
+                window.push_notification(note, cx);
+                for ix in 0..2 {
+                    let remote = this.panels[ix].tabs.current().remote().is_some();
+                    this.navigate_on(ix, remote, Panel::reload, window, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     fn refresh_folder(&mut self, folder: &Path, cx: &mut Context<Self>) {
         for side in &mut self.panels {
             side.tabs.reload_folder(folder);
@@ -2148,6 +2173,7 @@ impl Render for Commander {
                     }
                     Command::CustomFilter => this.custom_filter(window, cx),
                     Command::QuickFilter => this.quick_filter(cx),
+                    Command::Undo => this.undo(window, cx),
                     // Walked in the background: a big tree takes a while.
                     Command::BranchView | Command::BranchViewSelected => {
                         let selected = *command == Command::BranchViewSelected;

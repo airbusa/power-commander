@@ -159,7 +159,8 @@ pub struct Task {
 pub type TaskFn = Box<dyn FnOnce(&mut Report) -> io::Result<String> + Send>;
 
 enum Work {
-    Copy(Operation),
+    /// Remembered for Undo, unless it is one's reversal.
+    Copy(Operation, bool),
     Task(Task),
 }
 
@@ -215,7 +216,12 @@ pub struct Queue(Arc<(Mutex<State>, Condvar)>);
 
 impl Queue {
     pub fn push(&self, operation: Operation) -> u64 {
-        self.add(operation.title(), Work::Copy(operation))
+        self.add(operation.title(), Work::Copy(operation, true))
+    }
+
+    /// Undo's move back, which Undo does not remember in its turn.
+    pub fn push_reversal(&self, operation: Operation) -> u64 {
+        self.add(format!("Undo: {}", operation.title()), Work::Copy(operation, false))
     }
 
     pub fn push_task(&self, task: Task) -> u64 {
@@ -379,7 +385,7 @@ impl Queue {
                 found
             };
             let (status, note) = match work {
-                Work::Copy(operation) => {
+                Work::Copy(operation, remembered) => {
                     let mut run = Run {
                         queue: &self,
                         id,
@@ -388,11 +394,21 @@ impl Queue {
                         skip_errors: false,
                         progress: Progress::default(),
                         op: &operation,
+                        done: Vec::new(),
                     };
-                    match run.all() {
+                    let ran = match run.all() {
                         Ok(()) => (Status::Done, None),
                         Err(Cancelled) => (Status::Cancelled, None),
+                    };
+                    // What it did, also before a cancel, for Undo.
+                    if remembered && !run.done.is_empty() {
+                        let step = match operation.kind {
+                            Kind::Copy => crate::undo::Step::Copied { fs: operation.to.clone(), made: run.done.into_iter().map(|(_, made)| made).collect() },
+                            Kind::Move => crate::undo::Step::Moved { from: operation.from.clone(), to: operation.to.clone(), moves: run.done },
+                        };
+                        crate::undo::remember(operation.title(), step);
                     }
+                    ran
                 }
                 Work::Task(task) => self.run_task(id, task, cancel),
             };
@@ -455,6 +471,8 @@ struct Run<'a> {
     overwrite: Overwrite,
     skip_errors: bool,
     progress: Progress,
+    /// The sources done, and where each went, where nothing was before.
+    done: Vec<(PathBuf, PathBuf)>,
 }
 
 impl Run<'_> {
@@ -475,17 +493,20 @@ impl Run<'_> {
                 Target::Into(dir) => dir.join(source.file_name().unwrap_or_default()),
                 Target::As(path) => path.clone(),
             };
+            let new = op.to.metadata(&target).is_err();
             // Within one file system a move is a rename, if nothing is in the way.
-            let renamed = op.kind == Kind::Move
-                && op.same_fs()
-                && op.to.metadata(&target).is_err()
-                && op.from.rename(source, &target).is_ok();
+            let renamed = op.kind == Kind::Move && op.same_fs() && new && op.from.rename(source, &target).is_ok();
             if renamed {
                 self.progress.files += files;
                 self.progress.bytes += bytes;
                 self.report();
             } else {
                 self.item(source, &target)?;
+            }
+            // Gone from there, where a move goes; there now.
+            let went = op.kind == Kind::Copy || op.from.metadata(source).is_err();
+            if new && went && op.to.metadata(&target).is_ok() {
+                self.done.push((source.clone(), target));
             }
         }
         Ok(())

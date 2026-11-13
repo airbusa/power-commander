@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Command {
     // Files
+    /// The newest copy, move, rename or move to the trash undone (`undo`).
+    Undo,
     ChangeAttributes,
     Pack,
     UnpackSpecificFiles,
@@ -176,6 +178,8 @@ pub const MENUS: &[Menu] = &[
     Menu {
         label: "Files",
         items: &[
+            cmd("Undo", Undo),
+            SEP,
             cmd("View", View),
             cmd("Edit", Edit),
             cmd("Edit With External Editor", EditExternally),
