@@ -1056,11 +1056,19 @@ impl Commander {
         }
         if !line.trim().is_empty() {
             let folder = self.panels[self.active].tabs.current().folder().to_owned();
-            match command::run(&line, &folder) {
+            let (sent, failed) = futures::channel::oneshot::channel();
+            match command::run(&line, &folder, move |why| drop(sent.send(why))) {
                 Ok(Outcome::ChangeDir(path)) => {
                     self.navigate(move |panel| panel.go_to_folder(path), window, cx)
                 }
-                Ok(Outcome::Started) => {}
+                // Said when the shell gives up; nothing while it runs.
+                Ok(Outcome::Started) => cx
+                    .spawn_in(window, async move |_, cx| {
+                        if let Ok(why) = failed.await {
+                            let _ = cx.update(|window, cx| window.push_notification(Notification::error(why), cx));
+                        }
+                    })
+                    .detach(),
                 Err(err) => {
                     window.push_notification(Notification::error(format!("{line}: {err}")), cx)
                 }
@@ -1983,7 +1991,8 @@ impl Render for Commander {
                     Command::PathToCommandLine => this.to_command_line(true, false, window, cx),
                     Command::NameToCommandLine => this.to_command_line(false, true, window, cx),
                     Command::PathAndNameToCommandLine => this.to_command_line(true, true, window, cx),
-                    Command::RenameInPlace => this.rename_in_place(window, cx),
+                    // After a menu gives the panel its focus back, which would end the edit.
+                    Command::RenameInPlace => cx.defer_in(window, |this, window, cx| this.rename_in_place(window, cx)),
                     Command::NewTextFile => this.new_text_file(window, cx),
                     Command::AllFiles => this.show_files(pc_core::FileFilter::All, window, cx),
                     Command::Programs => this.show_files(pc_core::FileFilter::Programs, window, cx),

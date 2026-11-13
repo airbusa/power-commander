@@ -137,10 +137,14 @@ impl Commander {
     pub(crate) fn rename_in_place(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let side = self.active;
         let panel = self.panels[side].tabs.current();
+        // On "..", as Total Commander: the path bar is edited.
+        if panel.current_entry().is_some_and(|entry| entry.is_parent()) {
+            return self.edit_path(side, window, cx);
+        }
         if panel.view() != View::Full {
             return self.rename_file(window, cx);
         }
-        let Some(entry) = panel.current_entry().filter(|entry| !entry.is_parent()) else {
+        let Some(entry) = panel.current_entry() else {
             return;
         };
         let name = entry.name.clone();
@@ -209,11 +213,13 @@ impl Commander {
                 div()
                     .flex_1()
                     .min_w_0()
+                    // The name stays where it was: the field's frame and padding go left of it.
+                    .ml(px(-4.))
                     .key_context("RenameInPlace")
                     .on_action(cx.listener(|this, _: &CancelRename, window, cx| this.finish_rename(false, window, cx)))
                     // Not the row's: a click here neither moves the cursor nor ends the edit.
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(Input::new(&renaming.input).xsmall()),
+                    .child(Input::new(&renaming.input).xsmall().text_sm()),
             )
             .child(
                 Button::new("rename-ok")

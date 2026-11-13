@@ -9,8 +9,9 @@ pub enum Outcome {
     Started,
 }
 
-/// Runs a command line typed in `dir`, on its own.
-pub fn run(line: &str, dir: &Path) -> io::Result<Outcome> {
+/// Runs a command line typed in `dir`, on its own; `failed` gets why when
+/// the shell found no such program, or could not run it.
+pub fn run(line: &str, dir: &Path, failed: impl FnOnce(String) + Send + 'static) -> io::Result<Outcome> {
     if let Some(target) = change_dir(line, dir) {
         return Ok(Outcome::ChangeDir(target));
     }
@@ -20,9 +21,26 @@ pub fn run(line: &str, dir: &Path) -> io::Result<Outcome> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
+    let program = line.split_whitespace().next().unwrap_or_default().to_owned();
     // Reaps it once it ends.
-    std::thread::spawn(move || child.wait());
+    std::thread::spawn(move || {
+        if let Ok(status) = child.wait()
+            && let Some(why) = not_run(&program, status.code())
+        {
+            failed(why);
+        }
+    });
     Ok(Outcome::Started)
+}
+
+/// The shell's exit code for a program it could not find or run.
+fn not_run(program: &str, code: Option<i32>) -> Option<String> {
+    match code? {
+        127 if cfg!(unix) => Some(format!("{program}: command not found")),
+        126 if cfg!(unix) => Some(format!("{program}: cannot be run")),
+        9009 if cfg!(windows) => Some(format!("{program}: command not found")),
+        _ => None,
+    }
 }
 
 /// Where a `cd` line goes; none for other lines.
@@ -77,7 +95,7 @@ mod tests {
     use super::*;
 
     fn cd(line: &str) -> PathBuf {
-        match run(line, Path::new("/a/b")).unwrap() {
+        match run(line, Path::new("/a/b"), |_| {}).unwrap() {
             Outcome::ChangeDir(path) => path,
             Outcome::Started => panic!("{line} ran"),
         }
@@ -97,7 +115,7 @@ mod tests {
     fn runs_in_the_shell() {
         let dir = std::env::temp_dir().join(format!("pc-command-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        assert!(matches!(run("touch made", &dir).unwrap(), Outcome::Started));
+        assert!(matches!(run("touch made", &dir, |_| {}).unwrap(), Outcome::Started));
         for _ in 0..50 {
             if dir.join("made").exists() {
                 break;
@@ -105,10 +123,16 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(dir.join("made").exists(), "ran in the panel's folder");
+        let (sent, failed) = std::sync::mpsc::channel();
         assert!(
-            matches!(run("cdrom-tool", &dir), Ok(Outcome::Started)),
+            matches!(run("cdrom-tool-pc-test", &dir, move |why| sent.send(why).unwrap()), Ok(Outcome::Started)),
             "not cd"
         );
+        let why = failed.recv_timeout(std::time::Duration::from_secs(5));
+        assert_eq!(why.as_deref(), Ok("cdrom-tool-pc-test: command not found"));
+        let (sent, failed) = std::sync::mpsc::channel();
+        run("exit 3", &dir, move |why| sent.send(why).unwrap()).unwrap();
+        assert!(failed.recv_timeout(std::time::Duration::from_secs(5)).is_err(), "a program's own failure is its own");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
