@@ -1760,19 +1760,37 @@ impl Commander {
                     .text_color(theme.muted_foreground)
                     .truncate()
                     .child(match self.typed(ix) {
-                        // Quick search, or the quick filter: what is typed, where the status was.
-                        Some(typed) => h_flex()
-                            .gap_1p5()
-                            .text_color(theme.foreground)
-                            .child(match self.filtering(ix) {
-                                true => Icon::new(gpui_kit::assets::IconName::Funnel),
-                                false => Icon::new(IconName::Search),
-                            }.small().text_color(theme.muted_foreground))
-                            .child(typed.to_owned())
-                            .when(self.filtering(ix) && typed.is_empty(), |el| {
-                                el.child(div().text_color(theme.muted_foreground).child("Type to filter; Escape shows all"))
-                            })
-                            .into_any_element(),
+                        // Quick search, or the quick filter: a field where the status was, as
+                        // Total Commander's "Search:", in the accent's colour to be seen.
+                        Some(typed) => {
+                            let filter = self.filtering(ix);
+                            let (icon, label) = match filter {
+                                true => (Icon::new(gpui_kit::assets::IconName::Funnel), "Filter:"),
+                                false => (Icon::new(IconName::Search), "Search:"),
+                            };
+                            let field = h_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .h(px(18.))
+                                .px_1p5()
+                                .rounded(theme.radius)
+                                .border_1()
+                                .border_color(theme.primary)
+                                .bg(theme.background)
+                                .text_color(theme.foreground)
+                                .child(typed.to_owned())
+                                // The caret.
+                                .child(div().flex_none().w(px(1.5)).h(px(13.)).bg(theme.primary))
+                                .when(filter && typed.is_empty(), |el| {
+                                    el.child(div().pl_1p5().truncate().text_color(theme.muted_foreground).child("hides what does not match; Escape shows all"))
+                                });
+                            h_flex()
+                                .gap_1p5()
+                                .child(icon.small().text_color(theme.primary))
+                                .child(div().flex_none().font_weight(FontWeight::MEDIUM).text_color(theme.foreground).child(label))
+                                .child(field)
+                                .into_any_element()
+                        }
                         None => div().truncate().child(match panel.view() {
                         // Names only: the line tells the rest, as Total Commander's.
                         View::Brief => panel.current_entry().map_or_else(String::new, |entry| {

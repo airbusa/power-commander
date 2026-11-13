@@ -11,7 +11,10 @@ use pc_core::about;
 use pc_core::addons::{Addon, Builtin};
 
 pub fn open(window: &mut Window, cx: &mut App) {
-    window.open_dialog(cx, |dialog, _, cx| dialog.title("About Power Commander").width(px(600.)).child(content(cx)));
+    // Closed by its ×, as Settings: not by a click beside it.
+    window.open_dialog(cx, |dialog, _, cx| {
+        dialog.title("About Power Commander").width(px(600.)).overlay_closable(false).child(content(cx))
+    });
 }
 
 /// The window's icon, as GPUI draws pictures (BGRA); made once.
@@ -66,7 +69,7 @@ fn content(cx: &App) -> impl IntoElement + use<> {
         .chain(about::SHIPPED.iter().map(|p| (p.name, p.what, p.licence, p.website)));
     let addons = Addon::ALL.iter().map(|a| (a.name(), a.purpose(), a.licence(), a.website().1));
     let libraries = about::LIBRARIES.iter().map(|p| (p.name, p.what, p.licence, p.website));
-    let mut parts = v_flex().id("about-parts").max_h(px(300.)).overflow_y_scrollbar().pr_3();
+    let mut parts = v_flex().pr_3();
     for (group, title, list) in [
         ("shipped", "Comes with it", shipped.collect::<Vec<_>>()),
         ("addons", "Add-ons, downloaded when you choose", addons.collect()),
@@ -83,5 +86,6 @@ fn content(cx: &App) -> impl IntoElement + use<> {
         .child(header)
         .child(div().border_t_1().border_color(cx.theme().border))
         .child(div().font_semibold().child("Made with the work of these projects"))
-        .child(parts)
+        // A box of its own height, the list scrolling in it.
+        .child(v_flex().h(px(340.)).child(div().id("about-parts").flex_1().min_h_0().overflow_y_scrollbar().child(parts)))
 }
