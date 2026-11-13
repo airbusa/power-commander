@@ -51,7 +51,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -126,6 +126,9 @@ impl AssetSource for AppAssets {
 
 const CONTEXT: &str = "Commander";
 const ROW: Pixels = px(22.);
+/// Longer than a key's repeat delay (X's 660 ms, KDE's 600 by default, a second at most).
+const REPEAT: Duration = Duration::from_millis(1200);
+
 /// The path title's height, typing a path or not.
 const PATH_HEIGHT: Pixels = px(30.);
 /// Name, Ext, Size, Date and Attr; Name 0 takes the rest, until resized.
@@ -402,6 +405,8 @@ struct Commander {
     active: usize,
     focus: FocusHandle,
     typing: Option<Typing>,
+    /// The last file F3 or F4 opened, how and when: a held key's repeats open no more.
+    last_open: Option<(Instant, remote::Open, String)>,
     menu_bar: Entity<AppMenuBar>,
     settings: Settings,
     colors: PanelColors,
@@ -548,6 +553,7 @@ impl Commander {
             },
             focus,
             typing: None,
+            last_open: None,
             menu_bar: AppMenuBar::new(cx),
             settings,
             colors,
@@ -779,6 +785,12 @@ impl Commander {
         };
         let around = (how == remote::Open::View && origin.is_local()).then(|| panel.files_around());
         let (settings, bounds, name) = (self.settings.clone(), Over::window(window, cx), origin.name());
+        // F3 held down repeats: the same file, the same way, this soon after is the same ask.
+        let again = self.last_open.as_ref().is_some_and(|(at, was, file)| *was == how && *file == name && at.elapsed() < REPEAT);
+        self.last_open = Some((Instant::now(), how, name.clone()));
+        if again {
+            return;
+        }
         let commander = cx.entity().downgrade();
         // The file's own viewer or editor, by its association.
         let entry = panel
