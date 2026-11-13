@@ -28,6 +28,10 @@ const START_FONTS: [StartFont; 4] = [
     StartFont::Auto,
 ];
 
+fn fluent() -> bool {
+    pc_core::theme::control_style() == Some(pc_core::theme::ControlStyle::Fluent)
+}
+
 /// Opens on `PAGES[page]`.
 pub fn open(
     commander: WeakEntity<Commander>,
@@ -170,6 +174,10 @@ impl SettingsDialog {
         let theme = cx.theme();
         // macOS: a sidebar, its selection a rounded row of the accent.
         let mac = cx.try_global::<MacControls>().copied();
+        // Windows 11: a navigation pane, unframed; the selection a faint row with the accent's pill.
+        let fluent = fluent();
+        let subtle = if theme.mode.is_dark() { hsla(0., 0., 1., 0.06) } else { hsla(0., 0., 0., 0.04) };
+        let pill = theme.primary;
         v_flex()
             .id("settings-pages")
             .w(px(190.))
@@ -177,16 +185,31 @@ impl SettingsDialog {
             .p_1()
             .map(|el| match mac {
                 Some(mac) => el.p(px(6.)).bg(mac.group).rounded(px(10.)),
+                None if fluent => el.p_0().gap(px(2.)),
                 None => el.border_1().border_color(theme.border),
             })
             .overflow_y_scroll()
             .children(PAGES.iter().enumerate().map(|(ix, &(depth, label))| {
+                let selected = ix == self.page;
                 div()
                     .id(("settings-page", ix))
                     .pl(px(6. + 14. * depth as f32))
                     .pr_2()
                     .when(mac.is_some(), |el| el.flex_none().h(px(22.)).flex().items_center().rounded(px(5.)))
-                    .when(ix == self.page, |el| match mac {
+                    .when(fluent, |el| {
+                        el.relative()
+                            .flex_none()
+                            .h(px(32.))
+                            .pl(px(14. + 16. * depth as f32))
+                            .flex()
+                            .items_center()
+                            .rounded(px(4.))
+                            .hover(|el| el.bg(subtle))
+                            .when(selected, |el| {
+                                el.bg(subtle).child(div().absolute().left_0().top(px(8.)).w(px(3.)).h(px(16.)).rounded(px(2.)).bg(pill))
+                            })
+                    })
+                    .when(selected && !fluent, |el| match mac {
                         Some(mac) => el.bg(mac.accent).text_color(mac.on_accent),
                         None => el.bg(theme.accent).text_color(theme.accent_foreground),
                     })
@@ -582,8 +605,9 @@ impl SettingsDialog {
             _ => Vec::new(),
         };
         let theme = cx.theme();
-        // macOS: the page's name as a pane's title, bold, unboxed.
+        // macOS and Windows 11: the page's name as a pane's title, bold, unboxed.
         let mac = cx.has_global::<MacControls>();
+        let fluent = fluent();
         v_flex()
             .flex_1()
             .min_w_0()
@@ -592,9 +616,10 @@ impl SettingsDialog {
             .child(
                 div()
                     .py_1()
-                    .map(|el| match mac {
-                        true => el.text_base().font_semibold(),
-                        false => el.text_center().bg(theme.muted).border_1().border_color(theme.border),
+                    .map(|el| match () {
+                        _ if mac => el.text_base().font_semibold(),
+                        _ if fluent => el.text_xl().font_semibold(),
+                        _ => el.text_center().bg(theme.muted).border_1().border_color(theme.border),
                     })
                     .child(title),
             )
