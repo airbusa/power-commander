@@ -387,9 +387,14 @@ impl History {
 
     /// Back (-1) or Forward (1): the place there, now the one it is at.
     pub fn step(&mut self, by: isize) -> Option<String> {
-        let to = self.at.checked_add_signed(by).filter(|&to| to < self.places.len())?;
+        self.jump(self.at.checked_add_signed(by)?)
+    }
+
+    /// Alt+Down's pick: the place at `to`, now the one it is at.
+    pub fn jump(&mut self, to: usize) -> Option<String> {
+        let place = self.places.get(to)?.clone();
         self.at = to;
-        Some(self.places[to].clone())
+        Some(place)
     }
 }
 

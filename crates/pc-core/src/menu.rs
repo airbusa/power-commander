@@ -54,6 +54,8 @@ pub enum Command {
     Bookmarks,
     GoBack,
     GoForward,
+    /// Alt+Down: the tab's last places, to pick one.
+    FolderHistory,
     /// This computer's home folder; the server's on a server.
     GoHome,
     OpenTerminal,
@@ -275,6 +277,7 @@ pub const MENUS: &[Menu] = &[
         items: &[
             cmd("Back", GoBack),
             cmd("Forward", GoForward),
+            cmd("Folder History...", FolderHistory),
             cmd("Home", GoHome),
             cmd("Root Folder", GoToRoot),
             cmd("Desktop Folder", OpenDesktopFolder),

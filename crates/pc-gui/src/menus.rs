@@ -26,6 +26,11 @@ pub struct SetAppearance(pub Appearance);
 #[action(namespace = pc, no_json)]
 pub struct SelectTab(pub usize);
 
+/// A place of the active tab's history, by its index there.
+#[derive(Action, Clone, PartialEq)]
+#[action(namespace = pc, no_json)]
+pub struct GoToHistory(pub usize);
+
 /// One of the active side's recently closed tabs.
 #[derive(Action, Clone, PartialEq)]
 #[action(namespace = pc, no_json)]

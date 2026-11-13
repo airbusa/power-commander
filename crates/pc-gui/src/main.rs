@@ -73,7 +73,7 @@ use pc_core::{FileFilter, Panel, Sort, SortKey, Tabs, Typed, View, archive, edit
 
 use crate::appearance::PanelColors;
 use crate::drag_drop::{DragLabel, Dragged};
-use crate::menus::{ReopenTab, Run, SelectTab, SetAppearance};
+use crate::menus::{GoToHistory, ReopenTab, Run, SelectTab, SetAppearance};
 
 actions!(
     pc,
@@ -417,7 +417,7 @@ struct Commander {
     settings: Settings,
     colors: PanelColors,
     /// Show list of all tabs: the side and its popup.
-    tab_list: Option<(usize, Entity<PopupMenu>, Subscription)>,
+    panel_list: Option<(usize, Entity<PopupMenu>, Subscription)>,
     /// A side whose path is being typed.
     path_edit: Option<(usize, Entity<InputState>, Subscription)>,
     renaming: Option<panel_keys::Renaming>,
@@ -563,7 +563,7 @@ impl Commander {
             menu_bar: AppMenuBar::new(cx),
             settings,
             colors,
-            tab_list: None,
+            panel_list: None,
             path_edit: None,
             renaming: None,
             _appearance: appearance,
@@ -1373,6 +1373,33 @@ impl Commander {
         cx.notify();
     }
 
+    /// Alt+Down: the tab's last places, newest first, the one it is at checked.
+    fn show_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let history = &self.panels[self.active].tabs.current().history;
+        // Its name first: long paths are cut off at the end, where they differ.
+        let home = std::env::home_dir().map(|home| home.display().to_string());
+        let shown = |place: &String| {
+            let name = Path::new(place).file_name().map_or_else(|| place.clone(), |name| name.to_string_lossy().into_owned());
+            let path = match home.as_deref().and_then(|home| place.strip_prefix(home)) {
+                Some(rest) => format!("~{rest}"),
+                None => place.clone(),
+            };
+            format!("{name}   {path}")
+        };
+        let places: Vec<(usize, String, bool)> = history.places.iter().enumerate().rev().map(|(ix, place)| (ix, shown(place), ix == history.at)).collect();
+        if places.is_empty() {
+            return window.push_notification(Notification::info("No folders in this tab's history yet."), cx);
+        }
+        let focus = self.focus.clone();
+        let list = PopupMenu::build(window, cx, move |mut menu, _, _| {
+            for (ix, place, current) in places {
+                menu = menu.menu_with_check(place, current, Box::new(GoToHistory(ix)));
+            }
+            menu.action_context(focus)
+        });
+        self.show_panel_list(list, window, cx);
+    }
+
     fn show_tab_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tabs = &self.panels[self.active].tabs;
         let titles: Vec<(String, bool)> = tabs
@@ -1393,13 +1420,18 @@ impl Commander {
             }
             menu.action_context(focus)
         });
+        self.show_panel_list(list, window, cx);
+    }
+
+    /// A list over the active panel: its tabs, its history.
+    fn show_panel_list(&mut self, list: Entity<PopupMenu>, window: &mut Window, cx: &mut Context<Self>) {
         let dismissed = cx.subscribe_in(&list, window, |this, _, _: &DismissEvent, window, cx| {
-            this.tab_list = None;
+            this.panel_list = None;
             window.focus(&this.focus, cx);
             cx.notify();
         });
         list.read(cx).focus_handle(cx).focus(window, cx);
-        self.tab_list = Some((self.active, list, dismissed));
+        self.panel_list = Some((self.active, list, dismissed));
         cx.notify();
     }
 
@@ -1770,7 +1802,7 @@ impl Commander {
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         let rows = self.with_desktop_menu(ix, rows, cx);
         let theme = cx.theme();
-        let tab_list = self.tab_list.as_ref().filter(|(side, ..)| *side == ix);
+        let panel_list = self.panel_list.as_ref().filter(|(side, ..)| *side == ix);
         let ring = theme.ring;
         v_flex()
             .size_full()
@@ -1794,7 +1826,7 @@ impl Commander {
             .on_drop(cx.listener(move |this, paths: &ExternalPaths, window, cx| {
                 this.drop_paths(paths, ix, None, window, cx)
             }))
-            .when_some(tab_list, |el, (_, list, _)| {
+            .when_some(panel_list, |el, (_, list, _)| {
                 el.child(deferred(
                     anchored()
                         .snap_to_window_with_margin(px(8.))
@@ -2126,6 +2158,7 @@ impl Render for Commander {
                     Command::RenameTab => this.rename_tab(window, cx),
                     Command::CopyTabToOtherPanel => this.copy_tab_to_other_panel(cx),
                     Command::ListTabs => this.show_tab_list(window, cx),
+                    Command::FolderHistory => this.show_history(window, cx),
                     Command::NewFolder => this.new_folder(window, cx),
                     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                     Command::OpenTerminal => this.open_terminal(window, cx),
@@ -2262,6 +2295,12 @@ impl Render for Commander {
             )
             .on_action(cx.listener(|this, SelectTab(tab): &SelectTab, _, cx| {
                 this.select_tab(this.active, *tab, cx)
+            }))
+            .on_action(cx.listener(|this, GoToHistory(at): &GoToHistory, window, cx| {
+                let ix = this.active;
+                if let Some(place) = this.panels[ix].tabs.current_mut().history.jump(*at) {
+                    this.open_location(ix, &place, window, cx);
+                }
             }))
             .on_action(cx.listener(|this, ReopenTab(ix): &ReopenTab, window, cx| {
                 this.reopen_tab(*ix, window, cx)
