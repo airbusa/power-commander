@@ -12,6 +12,9 @@ path = "src/main.rs"
 [dependencies]
 # Colours for the editor: every language GPUI Kit highlights.
 gpui-kit = { version = "0.7.3", features = ["tree-sitter-languages"] }
+# And XML's, which GPUI Kit lacks: its grammar, for GPUI Kit's tree-sitter.
+tree-sitter = "0.26"
+tree-sitter-xml = "0.7"
 # Rendered PDF pages become GPUI images; GPUI builds it already.
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Server prompts reach the window by a channel; GPUI builds it already.

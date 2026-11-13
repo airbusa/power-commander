@@ -24,6 +24,22 @@ pub const HEX_ROW: usize = 16;
 pub const COPY_LIMIT: u64 = 64 << 20;
 /// Find reads this much past each chunk, for matches across its end.
 const OVERLAP: usize = 4 << 10;
+/// Larger files show without their language's colours: the highlighter
+/// parses all of a file, the viewer reads only what it shows.
+pub const SYNTAX_LIMIT: u64 = 4 << 20;
+
+/// A file to show in its language's colours: in the Text or UTF-8 mode,
+/// UTF-8 (so its bytes are the highlighter's), up to `SYNTAX_LIMIT`, in a
+/// language the editor knows; its language and text.
+pub fn source(path: &Path, mode: Mode) -> Option<(&'static str, String)> {
+    let language = crate::text_edit::language_of(path);
+    let fits = std::fs::metadata(path).ok()?.len() <= SYNTAX_LIMIT;
+    if !matches!(mode, Mode::Text | Mode::Utf8) || language == "text" || !fits {
+        return None;
+    }
+    let text = String::from_utf8(std::fs::read(path).ok()?).ok()?;
+    Some((language, text))
+}
 
 /// What Lister's Find dialog asks.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -219,6 +235,23 @@ impl Row {
         let first = (0..column).rev().take_while(word).last().unwrap_or(column);
         let last = (column..chars.len()).take_while(word).last()?;
         Some(self.cells[first].start..self.cells[last].end)
+    }
+
+    /// The row's text in runs, each character styled by `style_of` its
+    /// bytes in the file; equal styles run on, characters without one are left out.
+    pub fn runs<S: PartialEq>(&self, mut style_of: impl FnMut(&Range<u64>) -> Option<S>) -> Vec<(Range<usize>, S)> {
+        let mut runs: Vec<(Range<usize>, S)> = Vec::new();
+        for ((at, c), cell) in self.text.char_indices().zip(&self.cells) {
+            let Some(style) = style_of(cell) else {
+                continue;
+            };
+            let end = at + c.len_utf8();
+            match runs.last_mut() {
+                Some((run, last)) if run.end == at && *last == style => run.end = end,
+                _ => runs.push((at..end, style)),
+            }
+        }
+        runs
     }
 
     /// Byte ranges of `text` whose characters are in `selection`.
@@ -1073,6 +1106,35 @@ mod tests {
     use super::*;
 
     const AUTO: Decoding = Decoding::Auto(1252);
+
+    #[test]
+    fn code_to_colour() {
+        let dir = std::env::temp_dir().join(format!("pc-syntax-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let code = dir.join("a.rs");
+        std::fs::write(&code, "fn main() {}\n").unwrap();
+        assert_eq!(source(&code, Mode::Text).map(|(language, _)| language), Some("rust"));
+        assert!(source(&code, Mode::Hex).is_none());
+        let latin = dir.join("b.rs");
+        std::fs::write(&latin, b"// caf\xe9").unwrap();
+        assert!(source(&latin, Mode::Text).is_none(), "not UTF-8");
+        let notes = dir.join("c.txt");
+        std::fs::write(&notes, "plain").unwrap();
+        assert!(source(&notes, Mode::Text).is_none(), "no language");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn runs_styled_by_the_file_bytes() {
+        // "aé b": é is two bytes in the file.
+        let row = Row { text: "aé b".into(), cells: vec![0..1, 1..3, 3..4, 4..5], end: 5 };
+        let style = |cell: &Range<u64>| match cell.start {
+            0..3 => Some('x'),
+            4 => Some('y'),
+            _ => None,
+        };
+        assert_eq!(row.runs(style), [(0..3, 'x'), (4..5, 'y')]);
+    }
 
     fn temp(name: &str, bytes: &[u8]) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!("pc-{name}-{}", std::process::id()));

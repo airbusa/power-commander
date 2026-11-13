@@ -4,7 +4,8 @@
 use std::ops::Range;
 use std::path::Path;
 
-/// The Language menu: GPUI Kit's highlighters, by their names.
+/// The Language menu: GPUI Kit's highlighters, by their names, and XML's,
+/// which the app adds.
 pub const LANGUAGES: &[(&str, &str)] = &[
     ("Plain Text", "text"),
     ("Astro", "astro"),
@@ -40,6 +41,7 @@ pub const LANGUAGES: &[(&str, &str)] = &[
     ("TOML", "toml"),
     ("TSX", "tsx"),
     ("TypeScript", "typescript"),
+    ("XML", "xml"),
     ("YAML", "yaml"),
     ("Zig", "zig"),
 ];
@@ -87,6 +89,8 @@ pub fn language_of(path: &Path) -> &'static str {
         "toml" => "toml",
         "tsx" => "tsx",
         "ts" | "mts" | "cts" => "typescript",
+        "xml" | "xsd" | "xsl" | "xslt" | "svg" | "plist" | "rss" | "atom" | "wsdl" | "kml" | "gpx" | "xaml" | "resx"
+        | "csproj" | "vbproj" | "fsproj" | "vcxproj" | "props" | "targets" | "nuspec" | "xlf" => "xml",
         "yaml" | "yml" => "yaml",
         "zig" => "zig",
         _ => "text",
@@ -380,6 +384,7 @@ mod tests {
         assert_eq!(language_of(Path::new("CMakeLists.txt")), "cmake");
         assert_eq!(language_of(Path::new("notes.txt")), "text");
         assert_eq!(language_of(Path::new("README")), "text");
+        assert_eq!(language_of(Path::new("pom.xml")), "xml");
         assert_eq!(line_comment("rust"), Some("//"));
         assert_eq!(line_comment("markdown"), None);
         assert!(LANGUAGES.iter().any(|(_, name)| *name == language_of(Path::new("a.yml"))));

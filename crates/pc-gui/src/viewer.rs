@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use gpui_kit::component::menu::{AppMenuBar, ContextMenuExt, MenuBuilder};
+use gpui_kit::component::highlighter::SyntaxHighlighter;
+use gpui_kit::component::input::Rope;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarHandle};
 use gpui_kit::component::text::TextView;
@@ -62,6 +64,7 @@ actions!(
         SaveAs,
         Configure,
         ToggleMinimap,
+        ToggleSyntax,
         PlayPause,
         ToggleFullScreen,
         CopyText,
@@ -136,6 +139,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("f", FitImage, keys),
         KeyBinding::new("l", FitLarger, keys),
         KeyBinding::new("m", ToggleMinimap, keys),
+        KeyBinding::new("c", ToggleSyntax, keys),
         KeyBinding::new("space", PlayPause, keys),
         KeyBinding::new("f11", ToggleFullScreen, keys),
         KeyBinding::new("n", NextFile, keys),
@@ -321,6 +325,10 @@ struct Viewer {
     /// A running Find; setting it stops the search.
     finding: Option<Arc<AtomicBool>>,
     minimap: Entity<Minimap>,
+    /// Code in its language's colours, as the settings say; the file parsed.
+    colours: bool,
+    syntax: Option<Arc<SyntaxHighlighter>>,
+    _syntax: Option<Task<()>>,
     /// The Markdown mode's: its source beside the rendered page.
     markdown_minimap: Entity<Minimap>,
     markdown_scroll: ScrollHandle,
@@ -602,10 +610,47 @@ impl Viewer {
             view: ViewHandle::default(),
             focus,
             _poll: Self::poll(cx),
+            colours: false,
+            syntax: None,
+            _syntax: None,
         };
+        viewer.colours = viewer.shown.settings.syntax;
         viewer.convert(cx);
         viewer.open_book();
+        viewer.parse(cx);
         viewer
+    }
+
+    /// The file parsed in the background for its colours, where it has a
+    /// language and `pc_core::viewer::source` takes it.
+    fn parse(&mut self, cx: &mut Context<Self>) {
+        (self.syntax, self._syntax) = (None, None);
+        if !self.colours {
+            return;
+        }
+        let (path, mode) = (self.shown.path().to_owned(), self.shown.mode);
+        let parsed = cx.background_executor().spawn(async move {
+            let (language, text) = pc_core::viewer::source(&path, mode)?;
+            let mut highlighter = SyntaxHighlighter::new(language);
+            highlighter.update(None, &Rope::from(text.as_str()), None);
+            Some(highlighter)
+        });
+        self._syntax = Some(cx.spawn(async move |this, cx| {
+            if let Some(highlighter) = parsed.await {
+                let _ = this.update(cx, |this, cx| {
+                    this.syntax = Some(Arc::new(highlighter));
+                    cx.notify();
+                });
+            }
+        }));
+    }
+
+    fn toggle_syntax(&mut self, cx: &mut Context<Self>) {
+        self.colours = !self.colours;
+        self.parse(cx);
+        let colours = self.colours;
+        crate::change_settings(cx, move |settings| settings.viewer.syntax = colours);
+        cx.notify();
     }
 
     /// Shows the rows as the background index finds them.
@@ -650,6 +695,7 @@ impl Viewer {
         self.convert(cx);
         self.media = media_view(&self.shown, self.media.take(), self.quick, cx);
         self.text = Arc::new(text);
+        self.parse(cx);
         self.problem = None;
         self.selection = (0, 0);
         self.stop_finding();
@@ -1190,6 +1236,7 @@ impl Viewer {
                 .entry(larger, only_larger, Box::new(FitLarger), !image)
                 .separator()
                 .entry("Minimap", minimap, Box::new(ToggleMinimap), false)
+                .entry("Syntax colors", self.colours, Box::new(ToggleSyntax), !matches!(mode, Mode::Text | Mode::Utf8))
                 .separator()
                 .entry("Configure...", false, Box::new(Configure), false)
         };
@@ -1296,12 +1343,33 @@ impl Viewer {
             background_color: Some(theme.selection),
             ..Default::default()
         };
+        // The language's colours for the rows drawn, by the bytes in the file.
+        let styles = match (&self.syntax, lines.first(), lines.last()) {
+            (Some(syntax), Some(first), Some(last)) => {
+                let start = first.cells.first().map_or(first.end, |cell| cell.start) as usize;
+                syntax.styles(&(start..last.end as usize), &*theme.highlight_theme)
+            }
+            _ => Vec::new(),
+        };
+        let style_at = |at: u64| {
+            let ix = styles.partition_point(|(range, _)| range.end as u64 <= at);
+            styles.get(ix).filter(|(range, _)| range.start as u64 <= at).map(|(_, style)| *style)
+        };
         let texts: Vec<_> = lines
             .iter()
             .map(|row| {
-                let runs = row.highlights(&selection).into_iter();
                 let text = StyledText::new(row.text.clone());
-                text.with_highlights(runs.map(|run| (run, highlight)))
+                match styles.is_empty() {
+                    true => text.with_highlights(row.highlights(&selection).into_iter().map(|run| (run, highlight))),
+                    false => text.with_highlights(row.runs(|cell| {
+                        let selected = cell.start < selection.end && selection.start < cell.end;
+                        match (style_at(cell.start), selected) {
+                            (Some(style), true) => Some(style.highlight(highlight)),
+                            (None, true) => Some(highlight),
+                            (style, false) => style,
+                        }
+                    })),
+                }
             })
             .collect();
         {
@@ -1695,6 +1763,7 @@ impl Render for Viewer {
             }))
             .on_action(cx.listener(|_, _: &Configure, _, cx| crate::configure_viewer(cx)))
             .on_action(cx.listener(|_, _: &ToggleMinimap, _, cx| crate::toggle_minimap(cx)))
+            .on_action(cx.listener(|this, _: &ToggleSyntax, _, cx| this.toggle_syntax(cx)))
             .on_action(cx.listener(|this, _: &PlayPause, _, cx| {
                 this.player(cx).inspect(|player| player.toggle_pause());
             }))

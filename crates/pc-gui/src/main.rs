@@ -200,6 +200,7 @@ fn main() {
         viewer::bind_keys(cx);
         search_window::bind_keys(cx);
         editor::bind_keys(cx);
+        register_xml();
         header::round_corners(cx);
         #[cfg(debug_assertions)]
         if std::env::var_os("PC_STYLE_PREVIEW").is_some() {
@@ -328,6 +329,14 @@ impl Global for ShowMinimap {}
 /// Whether the Viewer and the Editor show their minimap.
 fn minimap_shown(cx: &App) -> bool {
     cx.try_global::<ShowMinimap>().is_none_or(|shown| shown.0)
+}
+
+/// XML's colours, which GPUI Kit's own languages lack: its tree-sitter grammar.
+fn register_xml() {
+    use gpui_kit::component::highlighter::{GrammarConfig, LanguageRegistry};
+    let language = tree_sitter::Language::new(tree_sitter_xml::LANGUAGE_XML);
+    let config = GrammarConfig::new("xml", language, Vec::new(), tree_sitter_xml::XML_HIGHLIGHT_QUERY, "", "");
+    LanguageRegistry::singleton().register("xml", &config);
 }
 
 /// Shows or hides the minimap, and saves the setting.

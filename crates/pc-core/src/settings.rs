@@ -139,6 +139,8 @@ pub struct ViewerSettings {
     pub binary_width: usize,
     /// Beside the Viewer and the Editor.
     pub minimap: bool,
+    /// Code in its language's colours (`viewer::source`).
+    pub syntax: bool,
 }
 
 /// Lister's defaults.
@@ -151,6 +153,7 @@ impl Default for ViewerSettings {
             text_width: 81,
             binary_width: 75,
             minimap: true,
+            syntax: true,
         }
     }
 }
