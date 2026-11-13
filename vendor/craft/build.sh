@@ -4,16 +4,23 @@
 # vendor/craft/<os>-<arch> for this machine: each at the tag below, checked by
 # its commit. Without the craft-fonts pack (the system's fonts instead), one
 # processor, fully optimised and stripped: a fraction of the released CLIs.
-# Needs git and Rust. `./build.sh gridcraft` builds one.
+# Needs git and Rust. `./build.sh gridcraft` builds one. Windows: in Git Bash;
+# PLATFORM=windows-aarch64 cross-builds ARM64's (in its developer prompt).
 set -eu
 cd "$(dirname "$0")"
 HERE=$(pwd)
-case "$(uname -s)-$(uname -m)" in
+[ -n "${PLATFORM:-}" ] || case "$(uname -s)-$(uname -m)" in
     Darwin-arm64) PLATFORM=macos-aarch64 ;;
     Darwin-x86_64) PLATFORM=macos-x86_64 ;;
     Linux-x86_64) PLATFORM=linux-x86_64 ;;
     Linux-aarch64) PLATFORM=linux-aarch64 ;;
+    MINGW*-x86_64 | MSYS*-x86_64) PLATFORM=windows-x86_64 ;;
     *) echo "No Craft tools build for $(uname -s) $(uname -m)." >&2; exit 1 ;;
+esac
+EXE="" TARGET="" OUTDIR=release
+case $PLATFORM in
+    windows-x86_64) EXE=.exe ;;
+    windows-aarch64) EXE=.exe TARGET=aarch64-pc-windows-msvc OUTDIR=$TARGET/release ;;
 esac
 TOOLS="wordcraft:v0.18.1:079f478bd85df7bcc567e3bafa7d7219096f9c3c
 gridcraft:v0.19.1:476448d7d9f3a5f8e93fcf7d98b47fd52293fe7f
@@ -35,8 +42,8 @@ for tool in $TOOLS; do
         CARGO_PROFILE_RELEASE_LTO=fat \
         CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
         CARGO_PROFILE_RELEASE_STRIP=symbols \
-        cargo build --release --locked -p "$name-cli")
-    cp "$HERE/.build/target/release/$name-cli" "$HERE/$PLATFORM/"
+        cargo build --release --locked ${TARGET:+--target "$TARGET"} -p "$name-cli")
+    cp "$HERE/.build/target/$OUTDIR/$name-cli$EXE" "$HERE/$PLATFORM/"
     cat "$src/LICENSE-MIT" "$src/NOTICE" > "$HERE/$PLATFORM/$name.txt"
-    ls -l "$HERE/$PLATFORM/$name-cli"
+    ls -l "$HERE/$PLATFORM/$name-cli$EXE"
 done

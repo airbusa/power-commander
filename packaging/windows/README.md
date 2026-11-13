@@ -5,7 +5,7 @@
 ARM64 build tools and clang):
 
 ```bat
-vendor\7zip\fetch.bat && vendor\pdfium\fetch.bat && vendor\mpv\fetch.bat
+vendor\7zip\fetch.bat && vendor\pdfium\fetch.bat
 powershell -ExecutionPolicy Bypass -File packaging\windows\package.ps1
 ```
 
@@ -24,8 +24,10 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\package.ps1 -Arch aar
 | `powercommander.exe`, `pc-tui.exe` | `cargo build --release`; the C runtime is linked in |
 | `7zip\` | `vendor/7zip`, with its license |
 | `pdfium\` | `vendor/pdfium`, with its licenses |
-| `mpv\` | `vendor/mpv`, with its README as notice |
-| `rclone\` | `vendor/rclone` (`build.sh`, needs Go), with its license; without it, online storage needs an `rclone` on `PATH` |
+
+libmpv (video and sound), rclone (online storage) and the Craft tools (office
+documents) are add-ons: the app works without them, and Settings > Add-ons
+downloads them (`packaging/addons.sh`, in Git Bash, makes them).
 
 ## Installing
 

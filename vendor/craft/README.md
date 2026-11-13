@@ -9,7 +9,8 @@ system's fonts), fully optimised and stripped.
 
 It is not in git: `vendor/craft/build.sh` builds them from their source
 (MIT or Apache-2.0; `<name>.txt` beside each build holds the MIT licence and
-NOTICE) into `<os>-<arch>/`, for the machine it runs on. The app uses a tool
+NOTICE) into `<os>-<arch>/`, for the machine it runs on (Windows: in Git
+Bash, `PLATFORM=windows-aarch64` in ARM64's developer prompt for ARM64). The app uses a tool
 installed on the system first (`PATH`, on macOS also Homebrew's and the user's
 bin folders and inside the app), then this one.
 

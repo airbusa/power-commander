@@ -3,16 +3,23 @@
 # skipped): a zip each in target/addons, signed on macOS as the app is
 # (SIGN_IDENTITY, else ad hoc), and target/addons/addons.json, the release's
 # list with these in it (other platforms' entries kept). `--upload` puts them
-# on the GitHub release `addons`, which Settings > Add-ons reads.
+# on the GitHub release `addons`, which Settings > Add-ons reads. Windows: in
+# Git Bash; PLATFORM=windows-aarch64 for ARM64's.
 set -eu
 cd "$(dirname "$0")/.."
-case "$(uname -s)-$(uname -m)" in
+[ -n "${PLATFORM:-}" ] || case "$(uname -s)-$(uname -m)" in
     Darwin-arm64) PLATFORM=macos-aarch64 ;;
     Darwin-x86_64) PLATFORM=macos-x86_64 ;;
     Linux-x86_64) PLATFORM=linux-x86_64 ;;
     Linux-aarch64) PLATFORM=linux-aarch64 ;;
+    MINGW*-x86_64 | MSYS*-x86_64) PLATFORM=windows-x86_64 ;;
     *) echo "No add-ons for $(uname -s) $(uname -m)." >&2; exit 1 ;;
 esac
+EXE=""
+PY=python3
+case $PLATFORM in windows-*) EXE=.exe PY=python ;; esac
+# The bundled 7-Zip zips where zip is missing (Git Bash).
+SEVENZIP=$(pwd)/vendor/7zip/windows-x86_64/7z.exe
 REPO=airbusa/powercommander
 TAG=addons
 URL=https://github.com/$REPO/releases/download/$TAG
@@ -50,9 +57,13 @@ make() {
     slug=$(echo "$version" | tr -cs '0-9.' '-' | sed 's/^-//; s/-$//')
     zip=$id-$slug-$PLATFORM.zip
     rm -f "$OUT/$zip"
-    (cd "$stage" && zip -q -X -r "../$zip" .)
+    if command -v zip >/dev/null; then
+        (cd "$stage" && zip -q -X -r "../$zip" .)
+    else
+        (cd "$stage" && "$SEVENZIP" a -tzip -bso0 -bsp0 "../$zip" .)
+    fi
     rm -rf "$stage"
-    python3 -I - "$MANIFEST" "$id" "$version" "$PLATFORM" "$OUT/$zip" "$URL/$zip" <<'PY'
+    "$PY" -I - "$MANIFEST" "$id" "$version" "$PLATFORM" "$OUT/$zip" "$URL/$zip" <<'PY'
 import hashlib, json, os, sys
 manifest, id, version, platform, path, url = sys.argv[1:]
 data = json.load(open(manifest))
@@ -81,9 +92,13 @@ case $PLATFORM in
         [ -n "$libs" ] && cp vendor/mpv/README.md "vendor/mpv/$PLATFORM/libmpv.md"
         # shellcheck disable=SC2086
         make mpv "$MPV" "vendor/mpv/$PLATFORM" libmpv.so.2 $libs libmpv.md ;;
+    windows-*)
+        # shortcut: shinchiro's build is 0.42.0 and 38 commits, listed as 0.42.0 so the other platforms' stay.
+        [ -e "vendor/mpv/$PLATFORM/libmpv-2.dll" ] && cp vendor/mpv/README.md "vendor/mpv/$PLATFORM/libmpv.md"
+        make mpv "$MPV" "vendor/mpv/$PLATFORM" libmpv-2.dll libmpv.md ;;
 esac
-make rclone "$RCLONE" "vendor/rclone/$PLATFORM" rclone COPYING
-make craft "$CRAFT" "vendor/craft/$PLATFORM" wordcraft-cli gridcraft-cli deckcraft-cli wordcraft.txt gridcraft.txt deckcraft.txt
+make rclone "$RCLONE" "vendor/rclone/$PLATFORM" rclone$EXE COPYING
+make craft "$CRAFT" "vendor/craft/$PLATFORM" wordcraft-cli$EXE gridcraft-cli$EXE deckcraft-cli$EXE wordcraft.txt gridcraft.txt deckcraft.txt
 
 if [ "${1:-}" = --upload ] && [ -n "$MADE" ]; then
     gh release view "$TAG" -R "$REPO" >/dev/null 2>&1 ||

@@ -23,7 +23,7 @@ checks them against `SHA256SUMS` (GitHub's digests) and puts
 with FFmpeg and the rest in it, 120 MB. It is a GPL build, as the app is
 GPL; the build scripts and the sources' versions are in that repository.
 It unpacks them with 7-Zip's `7zr.exe`, downloaded beside them.
-Releases have it in `mpv/` beside the executable.
+It is an add-on, as on the other systems (below).
 
 mpv draws with OpenGL (WGL); where it is too old for mpv, as Windows' own
 1.1 in Remote Desktop, on the CPU (mpv's software renderer), slower.
@@ -51,7 +51,7 @@ What is built:
 - Everything else with all optional features off, but FreeType in HarfBuzz,
   Core Text in libass and OpenGL in libplacebo.
 
-It is an add-on, apart from the app, on macOS and Linux: `packaging/addons.sh`
+It is an add-on, apart from the app, on every system: `packaging/addons.sh`
 zips the libraries (on macOS signed as the app is) with this file as their
 notice, and Settings > Add-ons downloads them into the user's data folder.
 

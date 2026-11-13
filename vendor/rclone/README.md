@@ -10,7 +10,5 @@ It is not in git: `vendor/rclone/build.sh` builds it from rclone's source
 (MIT, `COPYING` beside each build) into `<os>-<arch>/`. Without it the app
 uses an `rclone` on `PATH`.
 
-Releases copy the platform's folder to `rclone/` beside the executable
-(`packaging/linux/package.sh`);
-on macOS it is an add-on, apart from the app: `packaging/addons.sh` zips it
-with its license, signed as the app is, and Settings > Add-ons downloads it.
+It is an add-on, apart from the app: `packaging/addons.sh` zips it with its
+license, signed as the app is on macOS, and Settings > Add-ons downloads it.
