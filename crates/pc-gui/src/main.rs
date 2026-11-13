@@ -1278,7 +1278,18 @@ impl Commander {
             }
             let view = view.clone();
             self.sync_terminal(cx);
-            view.update(cx, |view, _| view.send(&format!("\x15{line}\r")));
+            // PowerShell's prompt cannot be told apart from a program: the folder goes with the command.
+            #[cfg(windows)]
+            let line = match self.terminal_dir.as_ref() == Some(&folder) {
+                true => line,
+                false => {
+                    self.terminal_dir = Some(folder.clone());
+                    format!("Set-Location -LiteralPath '{}'; {line}", folder.display().to_string().replace('\'', "''"))
+                }
+            };
+            // Ctrl+U clears what was typed at the prompt.
+            let clear = if cfg!(windows) { "" } else { "\x15" };
+            view.update(cx, |view, _| view.send(&format!("{clear}{line}\r")));
             return self.focus_panels(window, cx);
         }
         if !line.trim().is_empty() {
