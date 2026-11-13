@@ -28,6 +28,7 @@ mod name_dialog;
 mod occupied;
 mod opening;
 mod pack_dialog;
+mod panel_keys;
 mod pdf_view;
 mod properties_dialog;
 mod quick_view;
@@ -1943,6 +1944,20 @@ impl Render for Commander {
                         let commander = cx.entity().downgrade();
                         settings_dialog::open(commander, this.settings.clone(), 0, window, cx)
                     }
+                    Command::RereadSource => this.reread_source(window, cx),
+                    Command::SwapPanels => this.swap_panels(false, cx),
+                    Command::SwapPanelsAndTabs => this.swap_panels(true, cx),
+                    Command::TargetEqualsSource => this.target_equals_source(cx),
+                    Command::OpenInLeftPanel => this.show_in(0, window, cx),
+                    Command::OpenInRightPanel => this.show_in(1, window, cx),
+                    Command::GoToRoot => this.go_to_root(window, cx),
+                    Command::OpenInNewTab => this.open_in_new_tab(false, window, cx),
+                    Command::OpenInOtherNewTab => this.open_in_new_tab(true, window, cx),
+                    Command::PathToCommandLine => this.to_command_line(true, false, window, cx),
+                    Command::NameToCommandLine => this.to_command_line(false, true, window, cx),
+                    Command::PathAndNameToCommandLine => this.to_command_line(true, true, window, cx),
+                    Command::RenameInPlace => this.rename_file(window, cx),
+                    Command::NewTextFile => this.new_text_file(window, cx),
                     Command::Shortcuts => {
                         let commander = cx.entity().downgrade();
                         keys_dialog::open(commander, this.settings.keys.clone(), window, cx)

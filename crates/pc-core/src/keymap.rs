@@ -55,6 +55,16 @@ impl Preset {
 /// A command's shortcut and alternate; "" for none.
 type Table = &'static [(Command, &'static str, &'static str)];
 
+/// Total Commander's key where macOS leaves it to programs (Ctrl+arrows, Ctrl+F-keys are its).
+const fn not_mac(key: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") { "" } else { key }
+}
+
+/// Total Commander's key on Windows only: KDE, GNOME and macOS take it.
+const fn windows(key: &'static str) -> &'static str {
+    if cfg!(windows) { key } else { "" }
+}
+
 const POWER_COMMANDER: Table = &[
     (View, "f3", ""),
     (Edit, "f4", ""),
@@ -63,28 +73,28 @@ const POWER_COMMANDER: Table = &[
     (NewFolder, "f7", ""),
     (Delete, "f8", "delete"),
     (DeletePermanently, "shift-f8", "shift-delete"),
-    (ToggleMark, "space", ""),
+    (ToggleMark, "space", not_mac("insert")),
     (Quit, "secondary-q", "alt-f4"),
-    (Pack, "alt-shift-p", ""),
+    (Pack, "alt-shift-p", windows("alt-f5")),
     (UnpackSpecificFiles, "alt-f9", "alt-shift-u"),
     (TestArchives, "alt-shift-f9", "alt-shift-e"),
     (Properties, "alt-enter", "secondary-i"),
     (EditExternally, "ctrl-shift-f4", ""),
     (CalculateOccupiedSpace, "ctrl-l", ""),
     (MultiRenameTool, "ctrl-m", ""),
-    (SelectGroup, "alt-shift-s", ""),
-    (UnselectGroup, "alt-shift-r", ""),
+    (SelectGroup, "alt-shift-s", "add"),
+    (UnselectGroup, "alt-shift-r", "subtract"),
     (SelectAll, "secondary-a", ""),
     (UnselectAll, "secondary-shift-a", ""),
-    (InvertSelection, "alt-shift-i", ""),
+    (InvertSelection, "alt-shift-i", "multiply"),
     (SelectAllWithSameExtension, "alt-shift-x", ""),
-    (RestoreSelection, "alt-shift-z", ""),
+    (RestoreSelection, "alt-shift-z", "divide"),
     (CompareDirectories, "shift-f2", ""),
     (CopyToClipboard, "secondary-c", ""),
     (CutToClipboard, "secondary-x", ""),
     (PasteFromClipboard, "secondary-v", ""),
     (CdTree, "alt-shift-f10", ""),
-    (Search, "secondary-f", ""),
+    (Search, "secondary-f", windows("alt-f7")),
     (SearchInSeparateProcess, "secondary-shift-f", ""),
     (DirectoryHotlist, "secondary-d", ""),
     (GoBack, "alt-left", ""),
@@ -95,26 +105,37 @@ const POWER_COMMANDER: Table = &[
     (SidebarTree, "ctrl-shift-f8", ""),
     (SidebarFavourites, "ctrl-shift-f9", ""),
     (ToggleSidebar, "secondary-alt-s", ""),
-    (Brief, "alt-shift-b", ""),
-    (Full, "alt-shift-d", ""),
+    (Brief, "alt-shift-b", windows("ctrl-f1")),
+    (Full, "alt-shift-d", windows("ctrl-f2")),
     (ThumbnailView, "ctrl-shift-f1", ""),
     (QuickViewPanel, "alt-shift-q", ""),
     (DuplicateTab, "secondary-t", ""),
     (AllFiles, "ctrl-shift-f10", ""),
     (Programs, "ctrl-shift-f11", ""),
     (CustomFilter, "ctrl-shift-f12", ""),
-    (SortByName, "secondary-1", ""),
-    (SortByExtension, "secondary-2", ""),
-    (SortByTime, "secondary-3", ""),
-    (SortBySize, "secondary-4", ""),
-    (Unsorted, "secondary-5", ""),
-    (RereadSource, "secondary-r", ""),
+    (SortByName, "secondary-1", windows("ctrl-f3")),
+    (SortByExtension, "secondary-2", windows("ctrl-f4")),
+    (SortByTime, "secondary-3", not_mac("ctrl-f5")),
+    (SortBySize, "secondary-4", not_mac("ctrl-f6")),
+    (Unsorted, "secondary-5", windows("ctrl-f7")),
+    (RereadSource, "secondary-r", "f2"),
     (Settings, "secondary-,", ""),
     (CloseTab, "secondary-w", ""),
     (CloseAllTabs, "secondary-shift-w", ""),
     (ListTabs, "secondary-shift-l", ""),
     (NextTab, "ctrl-tab", "alt-shift-right"),
     (PreviousTab, "ctrl-shift-tab", "alt-shift-left"),
+    (SwapPanelsAndTabs, "ctrl-shift-u", ""),
+    (OpenInLeftPanel, not_mac("ctrl-left"), ""),
+    (OpenInRightPanel, not_mac("ctrl-right"), ""),
+    (GoToRoot, "ctrl-\\", "ctrl-backspace"),
+    (OpenInNewTab, not_mac("ctrl-up"), ""),
+    (OpenInOtherNewTab, not_mac("ctrl-shift-up"), ""),
+    (PathToCommandLine, "ctrl-p", ""),
+    (NameToCommandLine, "ctrl-enter", ""),
+    (PathAndNameToCommandLine, "ctrl-shift-enter", ""),
+    (RenameInPlace, "shift-f6", ""),
+    (NewTextFile, "shift-f4", ""),
 ];
 
 const TOTAL_COMMANDER: Table = &[
@@ -174,6 +195,17 @@ const TOTAL_COMMANDER: Table = &[
     (ListTabs, "ctrl-shift-a", ""),
     (NextTab, "ctrl-tab", "alt-shift-right"),
     (PreviousTab, "ctrl-shift-tab", "alt-shift-left"),
+    (SwapPanelsAndTabs, "ctrl-shift-u", ""),
+    (OpenInLeftPanel, "ctrl-left", ""),
+    (OpenInRightPanel, "ctrl-right", ""),
+    (GoToRoot, "ctrl-\\", "ctrl-backspace"),
+    (OpenInNewTab, "ctrl-up", ""),
+    (OpenInOtherNewTab, "ctrl-shift-up", ""),
+    (PathToCommandLine, "ctrl-p", ""),
+    (NameToCommandLine, "ctrl-enter", ""),
+    (PathAndNameToCommandLine, "ctrl-shift-enter", ""),
+    (RenameInPlace, "shift-f6", ""),
+    (NewTextFile, "shift-f4", ""),
 ];
 
 /// Krusader's own defaults (its kractions, listpanelactions, viewactions
@@ -306,6 +338,28 @@ pub struct KeySettings {
     pub preset: Preset,
     #[serde(deserialize_with = "known_commands")]
     pub changed: BTreeMap<Command, [String; 2]>,
+    /// The user's own sets, saved under a name.
+    pub saved: BTreeMap<String, KeySet>,
+    /// The saved set chosen last; the keys are it while unchanged since.
+    pub set: Option<String>,
+}
+
+/// A saved set of keys: a preset and the keys changed from it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeySet {
+    pub preset: Preset,
+    #[serde(deserialize_with = "known_commands")]
+    pub changed: BTreeMap<Command, [String; 2]>,
+}
+
+/// What the keys are, for the Shortcuts dialog's choice.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Choice {
+    Preset(Preset),
+    Saved(String),
+    /// One key or more changed from the preset or set chosen.
+    Custom,
 }
 
 /// Keys of commands since removed are left out, rather than the settings.
@@ -319,6 +373,42 @@ fn known_commands<'de, D: serde::Deserializer<'de>>(keys: D) -> Result<BTreeMap<
 }
 
 impl KeySettings {
+    pub fn choice(&self) -> Choice {
+        let chosen = self.set.as_ref().filter(|name| {
+            self.saved.get(*name).is_some_and(|set| set.preset == self.preset && set.changed == self.changed)
+        });
+        match chosen {
+            Some(name) => Choice::Saved(name.clone()),
+            None if self.changed.is_empty() => Choice::Preset(self.preset),
+            None => Choice::Custom,
+        }
+    }
+
+    /// A preset's keys, the user's sets kept.
+    pub fn use_preset(&mut self, preset: Preset) {
+        (self.preset, self.changed, self.set) = (preset, BTreeMap::new(), None);
+    }
+
+    pub fn use_saved(&mut self, name: &str) {
+        if let Some(set) = self.saved.get(name) {
+            (self.preset, self.changed, self.set) = (set.preset, set.changed.clone(), Some(name.to_owned()));
+        }
+    }
+
+    /// The keys as they are now, under `name`, over a set of that name.
+    pub fn save_as(&mut self, name: &str) {
+        let set = KeySet { preset: self.preset, changed: self.changed.clone() };
+        self.saved.insert(name.to_owned(), set);
+        self.set = Some(name.to_owned());
+    }
+
+    pub fn delete_saved(&mut self, name: &str) {
+        self.saved.remove(name);
+        if self.set.as_deref() == Some(name) {
+            self.set = None;
+        }
+    }
+
     /// The preset's keys of a command.
     fn preset_keys(&self, command: Command) -> [String; 2] {
         let row = self.preset.table().iter().find(|(c, ..)| *c == command);
@@ -585,21 +675,54 @@ mod tests {
         }
     }
 
-    /// Its keys reach the program on every system, and every keyboard has them.
+    /// Its keys reach the program on this system's desktops (the table is
+    /// this system's), and every keyboard has the main ones.
     #[test]
     fn power_commander_keys_work_everywhere() {
-        let desktops = [Desktop::Windows, Desktop::Mac, Desktop::Kde, Desktop::Gnome];
+        let desktops: &[Desktop] = match () {
+            _ if cfg!(windows) => &[Desktop::Windows],
+            _ if cfg!(target_os = "macos") => &[Desktop::Mac],
+            _ => &[Desktop::Kde, Desktop::Gnome],
+        };
         let numpad = ["add", "subtract", "multiply", "divide", "insert"];
         for (command, main, alternate) in POWER_COMMANDER {
             for key in [main, alternate].into_iter().filter(|k| !k.is_empty()) {
                 for desktop in desktops {
-                    let taken = taken_on(key, *command, desktop);
+                    let taken = taken_on(key, *command, *desktop);
                     assert_eq!(taken, None, "{key} of {command:?} on {desktop:?}");
                 }
-                let last = key.rsplit('-').next().unwrap_or(key);
-                assert!(!numpad.contains(&last), "{key}: not on every keyboard");
             }
+            let last = main.rsplit('-').next().unwrap_or(main);
+            assert!(!numpad.contains(&last), "{main}: not on every keyboard");
         }
+    }
+
+    #[test]
+    fn saves_sets_and_turns_custom() {
+        let mut keys = KeySettings::default();
+        assert_eq!(keys.choice(), Choice::Preset(Preset::PowerCommander));
+        if !cfg!(target_os = "macos") {
+            assert_eq!(keys.command_of("ctrl-f6"), Some(SortBySize), "Total Commander's, as an alternate");
+            assert_eq!(keys.command_of("ctrl-right"), Some(OpenInRightPanel));
+        }
+        keys.set(View, 1, "ctrl-shift-v".into());
+        assert_eq!(keys.choice(), Choice::Custom, "one key changed");
+        keys.save_as("Mine");
+        assert_eq!(keys.choice(), Choice::Saved("Mine".into()));
+        keys.use_preset(Preset::TotalCommander);
+        assert_eq!(keys.choice(), Choice::Preset(Preset::TotalCommander));
+        assert_eq!(keys.command_of("ctrl-shift-v"), None);
+        keys.use_saved("Mine");
+        assert_eq!(keys.command_of("ctrl-shift-v"), Some(View));
+        keys.set(Edit, 1, "ctrl-shift-e".into());
+        assert_eq!(keys.choice(), Choice::Custom, "the set changed since");
+        keys.set(Edit, 1, String::new());
+        keys.set(View, 1, String::new());
+        assert_eq!(keys.choice(), Choice::Preset(Preset::PowerCommander), "the preset's keys again");
+        keys.delete_saved("Mine");
+        assert!(keys.saved.is_empty() && keys.set.is_none());
+        let text = serde_json::to_string(&keys).unwrap();
+        assert_eq!(serde_json::from_str::<KeySettings>(&text).unwrap(), keys);
     }
 
     #[test]

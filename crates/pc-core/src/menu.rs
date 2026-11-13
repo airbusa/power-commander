@@ -105,6 +105,19 @@ pub enum Command {
     ListTabs,
     NextTab,
     PreviousTab,
+    // Keys only, as Total Commander's
+    SwapPanelsAndTabs,
+    /// Ctrl+Left and Ctrl+Right: the other panel's folder, or the one at its cursor, in that panel.
+    OpenInLeftPanel,
+    OpenInRightPanel,
+    GoToRoot,
+    OpenInNewTab,
+    OpenInOtherNewTab,
+    PathToCommandLine,
+    NameToCommandLine,
+    PathAndNameToCommandLine,
+    RenameInPlace,
+    NewTextFile,
 }
 
 pub enum Item {
@@ -295,6 +308,17 @@ pub const OTHER: &[Item] = &[
     cmd("Paste from clipboard", PasteFromClipboard),
     cmd("Connect to server", ConnectToServer),
     cmd("Disconnect", Disconnect),
+    cmd("Swap panels with their tabs", SwapPanelsAndTabs),
+    cmd("Show in the left panel", OpenInLeftPanel),
+    cmd("Show in the right panel", OpenInRightPanel),
+    cmd("Go to the root folder", GoToRoot),
+    cmd("Open the folder in a new tab", OpenInNewTab),
+    cmd("Open the folder in a new tab of the other panel", OpenInOtherNewTab),
+    cmd("Path to the command line", PathToCommandLine),
+    cmd("Name to the command line", NameToCommandLine),
+    cmd("Path and name to the command line", PathAndNameToCommandLine),
+    cmd("Rename in place", RenameInPlace),
+    cmd("New text file", NewTextFile),
 ];
 
 /// Names for where the menu gives no context.

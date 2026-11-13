@@ -1000,6 +1000,16 @@ impl Panel {
         self.go_to(path, None)
     }
 
+    /// The top of what it shows: the archive's, the server's, the drive's or `/`.
+    pub fn go_to_root(&mut self) -> io::Result<()> {
+        if self.archive.is_some() {
+            self.show_archive_dir(PathBuf::new(), None);
+            return Ok(());
+        }
+        let root = self.folder().ancestors().last().unwrap_or(Path::new("/")).to_owned();
+        self.go_to(root, None)
+    }
+
     /// Its folder, the cursor on it; a file inside an archive, the archive's folder.
     pub fn go_to_file(&mut self, path: &Path, member: Option<&Path>) -> io::Result<()> {
         let parent = path.parent().unwrap_or(path).to_owned();
@@ -1135,6 +1145,13 @@ impl Panel {
     }
 
     /// Neither locked nor named.
+    /// To show elsewhere, another tab or the other panel: unlocked, unnamed, nothing marked.
+    pub fn copy_elsewhere(&self) -> Self {
+        let mut copy = self.plain_copy();
+        copy.marked.clear();
+        copy
+    }
+
     fn plain_copy(&self) -> Self {
         Self {
             locked: false,

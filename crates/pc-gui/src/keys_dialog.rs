@@ -3,15 +3,21 @@
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::kbd::Kbd;
-use gpui_kit::component::radio::RadioGroup;
+use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme, Disableable, Icon, IconName, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use pc_core::keymap::{self, KeySettings, Preset};
+use pc_core::keymap::{self, Choice, KeySettings, Preset};
 use pc_core::menu::{self, Command};
 
-use crate::Commander;
+use crate::{Commander, name_dialog};
+
+type Choices = SelectState<Vec<SharedString>>;
+
+/// The presets offered; Midnight Commander's waits for its keys to be right.
+const PRESETS: [Preset; 4] = [Preset::PowerCommander, Preset::TotalCommander, Preset::Krusader, Preset::ForkLift];
+const CUSTOM: &str = "Custom";
 
 const WIDTH: f32 = 780.;
 const BODY_HEIGHT: f32 = 560.;
@@ -36,6 +42,9 @@ pub fn open(
     cx: &mut App,
 ) {
     let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search for a command or a key"));
+    let (items, label) = choices(&keys);
+    let at = items.iter().position(|item| *item == label);
+    let choices = cx.new(|cx| SelectState::new(items.clone(), at.map(IndexPath::new), window, cx));
     let view = cx.new(|cx| {
         let this = cx.entity().downgrade();
         // Before the key bindings, so a captured key runs nothing.
@@ -47,10 +56,17 @@ pub fn open(
                 let _ = this.update(cx, |this, cx| this.captured(key, cx));
             }
         });
+        let chosen = cx.subscribe(&choices, |this: &mut KeysDialog, _, event: &SelectEvent<Vec<SharedString>>, cx| {
+            let SelectEvent::Confirm(Some(label)) = event else { return };
+            this.choose(label, cx);
+        });
         KeysDialog {
             commander,
             saved: keys.clone(),
             draft: keys,
+            choices,
+            _chosen: chosen,
+            synced: (items, label),
             _search: cx.subscribe(&search, |_, _, event: &InputEvent, cx| {
                 if let InputEvent::Change = event {
                     cx.notify()
@@ -72,11 +88,37 @@ pub fn open(
     });
 }
 
+/// The dropdown's items (the presets, the user's sets, Custom while the
+/// keys are neither) and the one the keys are.
+fn choices(keys: &KeySettings) -> (Vec<SharedString>, SharedString) {
+    let choice = keys.choice();
+    let mut items: Vec<SharedString> = PRESETS.iter().map(|preset| preset.name().into()).collect();
+    if let Choice::Preset(preset) = &choice
+        && !PRESETS.contains(preset)
+    {
+        items.push(preset.name().into());
+    }
+    items.extend(keys.saved.keys().map(|name| SharedString::from(name.clone())));
+    if choice == Choice::Custom {
+        items.push(CUSTOM.into());
+    }
+    let label = match choice {
+        Choice::Preset(preset) => preset.name().into(),
+        Choice::Saved(name) => name.into(),
+        Choice::Custom => CUSTOM.into(),
+    };
+    (items, label)
+}
+
 struct KeysDialog {
     commander: WeakEntity<Commander>,
     /// As last applied.
     saved: KeySettings,
     draft: KeySettings,
+    choices: Entity<Choices>,
+    _chosen: Subscription,
+    /// What the dropdown shows, put right as the keys change.
+    synced: (Vec<SharedString>, SharedString),
     search: Entity<InputState>,
     _search: Subscription,
     /// The slot waiting for a key: a command's shortcut (0) or alternate (1).
@@ -129,25 +171,70 @@ impl KeysDialog {
         cx.notify();
     }
 
-    fn render_presets(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let chosen = Preset::ALL.iter().position(|&p| p == self.draft.preset);
-        h_flex().gap_3().child("Preset:").child(
-            RadioGroup::horizontal("keys-preset")
-                .children(Preset::ALL.map(Preset::name))
-                .selected_index(chosen)
-                .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                    let preset = Preset::ALL[*ix];
-                    if preset != this.draft.preset {
-                        let dropped = !this.draft.changed.is_empty();
-                        this.draft = KeySettings { preset, ..Default::default() };
-                        this.note = dropped.then(|| {
-                            let text = format!("Your own keys gave way to {}'s.", preset.name());
-                            (text.into(), false)
-                        });
-                        cx.notify();
+    /// A preset or a saved set from the dropdown; Custom is the keys as they are.
+    fn choose(&mut self, label: &str, cx: &mut Context<Self>) {
+        let dropped = self.draft.choice() == Choice::Custom;
+        let preset = Preset::ALL.into_iter().find(|preset| preset.name() == label);
+        match preset {
+            Some(preset) => self.draft.use_preset(preset),
+            None if self.draft.saved.contains_key(label) => self.draft.use_saved(label),
+            None => return,
+        }
+        self.note = dropped.then(|| (format!("Your own keys gave way to {label}'s; Save as keeps them.").into(), false));
+        cx.notify();
+    }
+
+    /// The keys as they are, under a name of the user's.
+    fn save_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name = match self.draft.choice() {
+            Choice::Saved(name) => name,
+            _ => "My keys".to_owned(),
+        };
+        let this = cx.entity().downgrade();
+        name_dialog::open("Save shortcuts", "Name:", name, window, cx, move |name, _, cx| {
+            let name = name.trim().to_owned();
+            let _ = this.update(cx, |this, cx| {
+                let reserved = name.is_empty() || name == CUSTOM || Preset::ALL.iter().any(|preset| preset.name() == name);
+                this.note = Some(match reserved {
+                    true => (format!("\"{name}\" is a preset's name; choose another.").into(), true),
+                    false => {
+                        this.draft.save_as(&name);
+                        (format!("Saved as {name}; OK or Apply keeps it.").into(), false)
                     }
-                })),
-        )
+                });
+                cx.notify();
+            });
+        });
+    }
+
+    fn render_presets(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let saved = match self.draft.choice() {
+            Choice::Saved(name) => Some(name),
+            _ => None,
+        };
+        h_flex()
+            .gap_2()
+            .child("Keys:")
+            .child(div().w(px(240.)).child(Select::new(&self.choices)))
+            .child(
+                Button::new("keys-save-as")
+                    .outline()
+                    .label("Save as…")
+                    .on_click(cx.listener(|this, _, window, cx| this.save_as(window, cx))),
+            )
+            .child(
+                Button::new("keys-delete-set")
+                    .outline()
+                    .label("Delete")
+                    .disabled(saved.is_none())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(name) = &saved {
+                            this.draft.delete_saved(name);
+                            this.note = Some((format!("{name} is deleted; OK or Apply makes it so.").into(), false));
+                            cx.notify();
+                        }
+                    })),
+            )
     }
 
     fn render_key(&self, command: Command, slot: usize, cx: &mut Context<Self>) -> impl IntoElement {
@@ -278,7 +365,17 @@ impl KeysDialog {
 }
 
 impl Render for KeysDialog {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The dropdown follows the keys: Custom once one changes.
+        let wanted = choices(&self.draft);
+        if wanted != self.synced {
+            let (items, label) = wanted.clone();
+            self.choices.update(cx, |select, cx| {
+                select.set_items(items, window, cx);
+                select.set_selected_value(&label, window, cx);
+            });
+            self.synced = wanted;
+        }
         let changed = self.draft != self.saved;
         let note = self.note.clone().map(|(text, warn)| {
             let theme = cx.theme();
@@ -304,9 +401,13 @@ impl Render for KeysDialog {
                         Button::new("keys-reset-all")
                             .outline()
                             .label("Reset All")
-                            .disabled(self.draft.changed.is_empty())
+                            .disabled(self.draft.choice() != Choice::Custom)
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.draft.changed.clear();
+                                // Back to the set chosen, else the preset.
+                                match this.draft.set.clone().filter(|name| this.draft.saved.contains_key(name)) {
+                                    Some(name) => this.draft.use_saved(&name),
+                                    None => this.draft.changed.clear(),
+                                }
                                 this.note = None;
                                 cx.notify();
                             })),
