@@ -33,20 +33,30 @@ impl Addon {
         }
     }
 
-    pub fn title(self) -> &'static str {
+    /// The project's own name: other people's software, not ours.
+    pub fn name(self) -> &'static str {
         match self {
-            Addon::Office => "Office documents",
-            Addon::Media => "Video and sound",
-            Addon::Cloud => "Online storage",
+            Addon::Office => "WordCraft, GridCraft, DeckCraft",
+            Addon::Media => "mpv (libmpv)",
+            Addon::Cloud => "rclone",
         }
     }
 
-    /// What it gives, and by what.
+    /// What Power Commander uses it for.
     pub fn purpose(self) -> &'static str {
         match self {
-            Addon::Office => "Shows Word, Excel and PowerPoint files in the viewer as PDF (WordCraft, GridCraft, DeckCraft).",
-            Addon::Media => "Plays video and sound in the viewer and Quick View (libmpv).",
-            Addon::Cloud => "Connects to S3, Google Drive, OneDrive, Dropbox and other services (rclone).",
+            Addon::Office => "Office documents: the viewer shows Word, Excel and PowerPoint files as PDF.",
+            Addon::Media => "Video and sound: the viewer and Quick View play them.",
+            Addon::Cloud => "Online storage: S3, Google Drive, OneDrive, Dropbox and other services.",
+        }
+    }
+
+    /// The project's site: its name, and its address.
+    pub fn website(self) -> (&'static str, &'static str) {
+        match self {
+            Addon::Office => ("getartcraft.com", "https://getartcraft.com/apps"),
+            Addon::Media => ("mpv.io", "https://mpv.io"),
+            Addon::Cloud => ("rclone.org", "https://rclone.org"),
         }
     }
 
@@ -77,6 +87,57 @@ impl Addon {
                 .or_else(|| crate::convert::on_path(self.files()[0])),
         };
         elsewhere.map_or(Presence::Missing, Presence::Elsewhere)
+    }
+}
+
+/// What comes with the app, shown beside the add-ons: the same facts, no download.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Builtin {
+    SevenZip,
+    Pdfium,
+}
+
+impl Builtin {
+    pub const ALL: [Builtin; 2] = [Builtin::SevenZip, Builtin::Pdfium];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Builtin::SevenZip => "7-Zip",
+            Builtin::Pdfium => "PDFium",
+        }
+    }
+
+    pub fn purpose(self) -> &'static str {
+        match self {
+            Builtin::SevenZip => "Archives: packs and unpacks 7z, zip, rar, tar and others.",
+            Builtin::Pdfium => "PDF: the viewer shows PDF files, and office documents once converted.",
+        }
+    }
+
+    pub fn website(self) -> (&'static str, &'static str) {
+        match self {
+            Builtin::SevenZip => ("7-zip.org", "https://www.7-zip.org"),
+            Builtin::Pdfium => ("pdfium.googlesource.com", "https://pdfium.googlesource.com/pdfium/"),
+        }
+    }
+
+    pub fn file(self) -> &'static str {
+        match self {
+            Builtin::SevenZip if cfg!(windows) => "7z.exe",
+            Builtin::SevenZip => "7zz",
+            Builtin::Pdfium if cfg!(windows) => "pdfium.dll",
+            Builtin::Pdfium if cfg!(target_os = "macos") => "libpdfium.dylib",
+            Builtin::Pdfium => "libpdfium.so",
+        }
+    }
+
+    /// The version vendor/ fetches, which releases ship.
+    pub fn version(self) -> &'static str {
+        let script = match self {
+            Builtin::SevenZip => include_str!("../../../vendor/7zip/fetch.sh"),
+            Builtin::Pdfium => include_str!("../../../vendor/pdfium/fetch.sh"),
+        };
+        script.lines().find_map(|line| line.strip_prefix("VERSION=")).unwrap_or("?")
     }
 }
 
@@ -280,6 +341,9 @@ mod tests {
     fn reads_the_manifest() {
         let text = r#"{"addons": [{"id": "rclone", "version": "1.75.2", "downloads": {"macos-aarch64": {"url": "https://example.com/rclone.zip", "sha256": "ab", "size": 9}}}]}"#;
         let manifest: Manifest = serde_json::from_str(text).unwrap();
+        for builtin in Builtin::ALL {
+            assert!(builtin.version().chars().all(|c| c.is_ascii_digit() || c == '.'), "{}: {}", builtin.name(), builtin.version());
+        }
         let offer = manifest.offer(Addon::Cloud).map(|(release, download)| (release.version.as_str(), download.size));
         assert_eq!(offer, (platform() == "macos-aarch64").then_some(("1.75.2", 9)));
         assert!(manifest.offer(Addon::Media).is_none());

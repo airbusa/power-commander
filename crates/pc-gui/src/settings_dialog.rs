@@ -7,7 +7,7 @@ use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::{ActiveTheme, Disableable, MacControls, StyledExt, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use pc_core::addons::{Addon, Presence};
+use pc_core::addons::{Addon, Builtin, Presence};
 use pc_core::settings::{AddonUpdates, MenuStyle, PAGES, Settings, SidebarBlur, SidebarOpacity, StartFont, StartMode};
 
 use crate::Commander;
@@ -382,89 +382,113 @@ impl SettingsDialog {
         )
     }
 
-    /// Each add-on with what it gives, whether it is there, and its download;
-    /// then the look-ups for updates.
+    /// Other projects' programs the app uses: the add-ons, each with its
+    /// files, versions and download; then those that come with it; then the
+    /// look-ups for updates.
     fn render_addons(&self, cx: &mut Context<Self>) -> Vec<GroupBox> {
         let state = crate::addons::entity(cx).read(cx);
         let dim = cx.theme().muted_foreground;
-        let mut groups: Vec<GroupBox> = Addon::ALL
-            .into_iter()
-            .map(|addon| {
-                let offer = state.manifest.as_ref().and_then(|manifest| manifest.offer(addon));
-                let offered = offer.map(|(release, download)| (release.version.clone(), download.size));
-                let presence = state.presence.get(&addon).cloned().unwrap_or(Presence::Missing);
-                let installed = match &presence {
-                    Presence::Ours(version) => version.clone(),
-                    Presence::Elsewhere(_) => "the system's".to_owned(),
-                    Presence::Missing => "none".to_owned(),
-                };
-                let online = match &offered {
-                    Some((version, size)) => format!("{version} ({})", crate::addons::megabytes(*size)),
-                    None if state.checking => "looking...".to_owned(),
-                    None if state.check_error.is_some() => "unknown".to_owned(),
-                    None if state.manifest.is_some() => "none for this system".to_owned(),
-                    None => "not looked up yet".to_owned(),
-                };
-                let progress = state.progress.get(&addon).copied();
-                // Something to get: none here, or another version online.
-                let newer = offered.as_ref().is_some_and(|(version, _)| match &presence {
-                    Presence::Ours(installed) => installed != version,
-                    _ => true,
-                });
-                let row = |label: &'static str, value: String| {
-                    h_flex().gap_2().child(div().w(px(80.)).flex_none().text_color(dim).child(label)).child(
-                        div().flex_1().min_w_0().truncate().child(value),
-                    )
-                };
-                let buttons = h_flex()
-                    .flex_none()
-                    .gap_2()
-                    .child(
-                        Button::new(("addon-get", addon as usize))
-                            .label("Download")
-                            .disabled(!newer || progress.is_some())
-                            .on_click(move |_, _, cx| crate::addons::install(addon, cx)),
-                    )
-                    .when(matches!(presence, Presence::Ours(_)), |el| {
-                        el.child(
-                            Button::new(("addon-remove", addon as usize))
-                                .label("Remove")
-                                .disabled(progress.is_some())
-                                .on_click(move |_, _, cx| crate::addons::remove(addon, cx)),
-                        )
-                    });
-                GroupBox::new().outline().title(addon.title()).child(
-                    v_flex()
-                        .gap_2()
-                        .child(div().text_color(dim).child(addon.purpose()))
-                        .child(
-                            h_flex()
-                                .gap_4()
-                                .items_end()
-                                .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .gap_1()
-                                        .child(row("File", addon.files().join(", ")))
-                                        .child(row("Installed", installed))
-                                        .child(row("Online", online)),
-                                )
-                                .child(buttons),
-                        )
-                        .when_some(progress, |el, (done, of)| {
-                            el.child(format!(
-                                "Downloading: {} of {}",
-                                crate::addons::megabytes(done),
-                                crate::addons::megabytes(of)
-                            ))
-                        })
-                        .when_some(state.failed.get(&addon), |el, why| {
-                            el.child(div().text_color(cx.theme().danger).child(why.clone()))
-                        }),
+        let row = |label: &'static str, value: AnyElement| {
+            h_flex()
+                .gap_2()
+                .child(div().w(px(80.)).flex_none().text_color(dim).child(label))
+                .child(div().flex_1().min_w_0().truncate().child(value))
+        };
+        let website = |id: &'static str, (shown, url): (&'static str, &'static str)| {
+            let link = Button::new(id).link().label(shown).on_click(move |_, _, cx| cx.open_url(url));
+            h_flex().child(link).into_any_element()
+        };
+        let mut groups = vec![GroupBox::new().child(div().text_color(dim).child(
+            "Power Commander uses these programs of other projects for some of what it does. The add-ons \
+             are downloaded apart from it, when you choose; 7-Zip and PDFium come with it.",
+        ))];
+        groups.extend(Addon::ALL.into_iter().map(|addon| {
+            let offer = state.manifest.as_ref().and_then(|manifest| manifest.offer(addon));
+            let offered = offer.map(|(release, download)| (release.version.clone(), download.size));
+            let presence = state.presence.get(&addon).cloned().unwrap_or(Presence::Missing);
+            let installed = match &presence {
+                Presence::Ours(version) => version.clone(),
+                Presence::Elsewhere(_) => "the system's".to_owned(),
+                Presence::Missing => "none".to_owned(),
+            };
+            let online = match &offered {
+                Some((version, size)) => format!("{version} ({})", crate::addons::megabytes(*size)),
+                None if state.checking => "looking...".to_owned(),
+                None if state.check_error.is_some() => "unknown".to_owned(),
+                None if state.manifest.is_some() => "none for this system".to_owned(),
+                None => "not looked up yet".to_owned(),
+            };
+            let progress = state.progress.get(&addon).copied();
+            // Something to get: none here, or another version online.
+            let newer = offered.as_ref().is_some_and(|(version, _)| match &presence {
+                Presence::Ours(installed) => installed != version,
+                _ => true,
+            });
+            let buttons = h_flex()
+                .flex_none()
+                .gap_2()
+                .child(
+                    Button::new(("addon-get", addon as usize))
+                        .label("Download")
+                        .disabled(!newer || progress.is_some())
+                        .on_click(move |_, _, cx| crate::addons::install(addon, cx)),
                 )
-            })
-            .collect();
+                .when(matches!(presence, Presence::Ours(_)), |el| {
+                    el.child(
+                        Button::new(("addon-remove", addon as usize))
+                            .label("Remove")
+                            .disabled(progress.is_some())
+                            .on_click(move |_, _, cx| crate::addons::remove(addon, cx)),
+                    )
+                });
+            let site = ["addon-site-0", "addon-site-1", "addon-site-2"][addon as usize];
+            GroupBox::new().outline().title(addon.name()).child(
+                v_flex()
+                    .gap_2()
+                    .child(div().text_color(dim).child(addon.purpose()))
+                    .child(
+                        h_flex()
+                            .gap_4()
+                            .items_end()
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_1()
+                                    .child(row("Website", website(site, addon.website())))
+                                    .child(row("File", addon.files().join(", ").into_any_element()))
+                                    .child(row("Installed", installed.into_any_element()))
+                                    .child(row("Online", online.into_any_element())),
+                            )
+                            .child(buttons),
+                    )
+                    .when_some(progress, |el, (done, of)| {
+                        el.child(format!(
+                            "Downloading: {} of {}",
+                            crate::addons::megabytes(done),
+                            crate::addons::megabytes(of)
+                        ))
+                    })
+                    .when_some(state.failed.get(&addon), |el, why| {
+                        el.child(div().text_color(cx.theme().danger).child(why.clone()))
+                    }),
+            )
+        }));
+        groups.extend(Builtin::ALL.into_iter().map(|builtin| {
+            let site = ["builtin-site-0", "builtin-site-1"][builtin as usize];
+            GroupBox::new().outline().title(builtin.name()).child(
+                v_flex()
+                    .gap_2()
+                    .child(div().text_color(dim).child(builtin.purpose()))
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(row("Website", website(site, builtin.website())))
+                            .child(row("File", builtin.file().into_any_element()))
+                            .child(row("Version", format!("{}, comes with Power Commander", builtin.version()).into_any_element())),
+                    ),
+            )
+        }));
         let looked_up = match (state.checking, &state.check_error, &state.manifest) {
             (true, _, _) => "Looking for updates...".to_owned(),
             (false, Some(err), _) => format!("Could not look for updates: {err}"),

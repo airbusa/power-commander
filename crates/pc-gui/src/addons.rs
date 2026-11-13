@@ -121,7 +121,7 @@ pub fn check(offer: bool, cx: &mut App) {
 }
 
 fn offer_updates(updates: Vec<(Addon, String)>, cx: &mut App) {
-    let names: Vec<String> = updates.iter().map(|(addon, version)| format!("{} {version}", addon.title())).collect();
+    let names: Vec<String> = updates.iter().map(|(addon, version)| format!("{} {version}", addon.name())).collect();
     let text = format!("Add-on updates: {}", names.join(", "));
     let addons: Vec<Addon> = updates.into_iter().map(|(addon, _)| addon).collect();
     crate::notify_main(
@@ -192,8 +192,8 @@ pub fn install(addon: Addon, cx: &mut App) {
                 cx.notify();
             });
             let notification = match installed {
-                Ok(()) => Notification::success(format!("{} {version} is installed.", addon.title())),
-                Err(err) => Notification::error(format!("{}: {err}", addon.title())),
+                Ok(()) => Notification::success(format!("{} {version} is installed.", addon.name())),
+                Err(err) => Notification::error(format!("{}: {err}", addon.name())),
             };
             crate::notify_main(notification, cx);
         });
