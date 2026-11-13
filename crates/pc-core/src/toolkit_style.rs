@@ -60,11 +60,15 @@ pub fn gtk_colors() -> Option<&'static Drawn> {
 fn run(args: &[&str]) -> io::Result<Drawn> {
     let name = helper().ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "no toolkit to draw the controls"))?;
     let helper = std::env::current_exe()?.with_file_name(name);
-    let output = Command::new(helper)
-        .args(args)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()?;
+    let output = Command::new(&helper).args(args).stdin(Stdio::null()).stderr(Stdio::null()).output();
+    // Cargo does not build it: a source build's own command does.
+    let output = output.map_err(|err| match err.kind() {
+        io::ErrorKind::NotFound => io::Error::new(
+            err.kind(),
+            format!("{} is missing, so the controls are the app's own: crates/{name}/build.sh makes it", helper.display()),
+        ),
+        _ => io::Error::new(err.kind(), format!("{name}: {err}")),
+    })?;
     if !output.status.success() {
         return Err(io::Error::other(format!("{name}: {}", output.status)));
     }
