@@ -35,6 +35,13 @@ impl Commander {
         cx.defer_in(window, move |_, window, cx| window.focus(&handle, cx));
     }
 
+    /// Shown or hidden: the backdrop, and the menus' check on Show > Terminal.
+    fn terminal_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_backdrop(window, cx);
+        self.reload_menus(cx);
+        cx.notify();
+    }
+
     /// Shows the terminal, a shell started if none runs; shown and in use, hides it, the shells kept.
     pub(crate) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let using = self.terminal_tab().map(|tab| tab.view.read(cx).focus.clone());
@@ -49,8 +56,7 @@ impl Commander {
             }
             None => return self.new_terminal_tab(window, cx),
         }
-        self.set_backdrop(window, cx);
-        cx.notify();
+        self.terminal_changed(window, cx);
     }
 
     /// Another shell, in the active panel's folder, or by ssh in an SFTP panel's.
@@ -74,8 +80,7 @@ impl Commander {
             }
             Err(err) => window.push_notification(Notification::error(format!("Could not start the shell: {err}")), cx),
         }
-        self.set_backdrop(window, cx);
-        cx.notify();
+        self.terminal_changed(window, cx);
     }
 
     /// Its shell hung up; the last one gone, the terminal hides.
@@ -94,8 +99,7 @@ impl Commander {
                 self.focus_later(self.focus.clone(), window, cx);
             }
         }
-        self.set_backdrop(window, cx);
-        cx.notify();
+        self.terminal_changed(window, cx);
     }
 
     fn select_terminal_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
