@@ -212,8 +212,18 @@ impl Settings {
         crate::set_folders_like_files(self.folders_like_files);
     }
 
+    /// On the first start, Desktop and Downloads are bookmarked.
     pub fn load() -> io::Result<Self> {
-        read_json("settings.json")
+        let first = config_dir().is_none_or(|dir| !dir.join("settings.json").exists());
+        let mut settings: Self = read_json("settings.json")?;
+        if first {
+            let home = std::env::home_dir().unwrap_or_default();
+            // Without the desktop's user-dirs file, the English names.
+            let desktop = dirs::desktop_dir().unwrap_or_else(|| home.join("Desktop"));
+            let downloads = dirs::download_dir().unwrap_or_else(|| home.join("Downloads"));
+            settings.bookmarks = [desktop, downloads].into_iter().filter(|dir| dir.is_dir() && *dir != home).collect();
+        }
+        Ok(settings)
     }
 
     pub fn save(&self) -> io::Result<()> {

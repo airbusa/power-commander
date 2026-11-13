@@ -47,6 +47,7 @@ pub enum Command {
     CompareDirectories,
     MarkNewerHideSame,
     // Commands
+    /// Gone (Places' bookmarks and the Folders tree do it); kept so old settings files load.
     CdTree,
     Search,
     SearchInSeparateProcess,
@@ -68,6 +69,7 @@ pub enum Command {
     BranchView,
     /// Branch View of the marked folders only.
     BranchViewSelected,
+    /// Gone (Desktop is a first bookmark); kept so old settings files load.
     OpenDesktopFolder,
     BackgroundTransferManager,
     /// What was done to files, and how each ended (`activity`).
@@ -290,11 +292,9 @@ pub const MENUS: &[Menu] = &[
             cmd("Folder History...", FolderHistory),
             cmd("Home", GoHome),
             cmd("Root Folder", GoToRoot),
-            cmd("Desktop Folder", OpenDesktopFolder),
             SEP,
             cmd("Bookmarks", Bookmarks),
             cmd("Bookmark This Folder", BookmarkFolder),
-            cmd("CD Tree...", CdTree),
         ],
     },
     Menu {
