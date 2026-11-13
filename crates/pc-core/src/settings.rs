@@ -212,16 +212,34 @@ impl Settings {
         crate::set_folders_like_files(self.folders_like_files);
     }
 
-    /// On the first start, Desktop and Downloads are bookmarked.
+    /// On the first start, Home, Desktop, Documents and Downloads are
+    /// bookmarked, and Applications on macOS.
     pub fn load() -> io::Result<Self> {
         let first = config_dir().is_none_or(|dir| !dir.join("settings.json").exists());
         let mut settings: Self = read_json("settings.json")?;
         if first {
             let home = std::env::home_dir().unwrap_or_default();
             // Without the desktop's user-dirs file, the English names.
-            let desktop = dirs::desktop_dir().unwrap_or_else(|| home.join("Desktop"));
-            let downloads = dirs::download_dir().unwrap_or_else(|| home.join("Downloads"));
-            settings.bookmarks = [desktop, downloads].into_iter().filter(|dir| dir.is_dir() && *dir != home).collect();
+            let named = |dir: Option<PathBuf>, english| dir.unwrap_or_else(|| home.join(english));
+            let mut folders = vec![
+                home.clone(),
+                named(dirs::desktop_dir(), "Desktop"),
+                named(dirs::document_dir(), "Documents"),
+                named(dirs::download_dir(), "Downloads"),
+            ];
+            if cfg!(target_os = "macos") {
+                folders.push("/Applications".into());
+            }
+            for dir in folders {
+                // A desktop set to Home itself comes once.
+                if dir.is_dir() && !settings.bookmarks.contains(&dir) {
+                    settings.bookmarks.push(dir);
+                }
+            }
+            // Its folder's name is the user's.
+            if settings.bookmarks.contains(&home) {
+                settings.bookmark_names.insert(home, "Home".into());
+            }
         }
         Ok(settings)
     }

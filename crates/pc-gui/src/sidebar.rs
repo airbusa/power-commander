@@ -798,7 +798,8 @@ impl Commander {
             let theme = cx.theme();
             let folder = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
             let name = self.settings.bookmark_names.get(path).cloned().unwrap_or_else(|| folder.clone());
-            let parent = path.parent().map(|parent| match home.as_deref().and_then(|home| parent.strip_prefix(home).ok()) {
+            // Home's would be /home: nothing to tell.
+            let parent = path.parent().filter(|_| home.as_deref() != Some(path.as_path())).map(|parent| match home.as_deref().and_then(|home| parent.strip_prefix(home).ok()) {
                 Some(inside) if inside.as_os_str().is_empty() => "~".to_owned(),
                 Some(inside) => format!("~/{}", inside.display()),
                 None => parent.display().to_string(),
