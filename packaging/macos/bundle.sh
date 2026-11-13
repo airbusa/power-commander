@@ -1,31 +1,34 @@
 #!/bin/sh
-# Builds "Power Commander.app" for this Mac's processor, with 7-Zip and PDFium
-# from vendor/ (fetched first), and a zip of it for a release, both in
-# target/release. libmpv, rclone and the Craft tools are add-ons, apart from
-# the app (packaging/addons.sh).
+# Builds "Power Commander.app" for Apple silicon or Intel (`bundle.sh aarch64`
+# or `bundle.sh x86_64`; this Mac's by default), with 7-Zip and PDFium from
+# vendor/ (fetched first), and a zip of it for a release, both in
+# target/<arch>-apple-darwin/release. libmpv, rclone and the Craft tools are
+# add-ons, apart from the app (packaging/addons.sh).
 # SIGN_IDENTITY: a "Developer ID Application" certificate to sign with, for
 # notarizing; unset, the app is signed ad hoc.
 set -eu
 cd "$(dirname "$0")/../.."
-case "$(uname -m)" in
-    arm64) ARCH=aarch64 ;;
+case "${1:-$(uname -m)}" in
+    arm64 | aarch64) ARCH=aarch64 ;;
     x86_64) ARCH=x86_64 ;;
-    *) echo "No macOS build for $(uname -m)." >&2; exit 1 ;;
+    *) echo "No macOS build for ${1:-$(uname -m)}: aarch64 or x86_64." >&2; exit 1 ;;
 esac
 PLATFORM=macos-$ARCH
+TRIPLE=$ARCH-apple-darwin
+OUT=target/$TRIPLE/release
 for vendored in 7zip/$PLATFORM/7zz:fetch.sh pdfium/$PLATFORM/libpdfium.dylib:fetch.sh; do
     file=${vendored%:*}
     [ -e "vendor/$file" ] || { echo "vendor/$file is missing: run vendor/${file%%/*}/${vendored#*:}" >&2; exit 1; }
 done
 VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
 
-cargo build --release -p pc-gui
+cargo build --release -p pc-gui --target "$TRIPLE"
 
 # Programs in MacOS, libraries in Frameworks (pc-core's bundled.rs looks there), the rest in Resources.
-APP="target/release/Power Commander.app"
+APP="$OUT/Power Commander.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources/licenses/PDFium"
-cp target/release/powercommander "vendor/7zip/$PLATFORM/7zz" "$APP/Contents/MacOS/"
+cp "$OUT/powercommander" "vendor/7zip/$PLATFORM/7zz" "$APP/Contents/MacOS/"
 cp "vendor/pdfium/$PLATFORM/libpdfium.dylib" "$APP/Contents/Frameworks/"
 LICENSES="$APP/Contents/Resources/licenses"
 cp LICENSE "$LICENSES/Power Commander.txt"
@@ -92,7 +95,7 @@ codesign "$@" "$APP"/Contents/Frameworks/*.dylib "$APP/Contents/MacOS/7zz"
 codesign "$@" "$APP"
 codesign --verify --strict "$APP"
 
-ZIP="target/release/PowerCommander-$VERSION-macos-$ARCH.zip"
+ZIP="$OUT/PowerCommander-$VERSION-macos-$ARCH.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 echo "$APP"

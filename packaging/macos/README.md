@@ -1,17 +1,20 @@
 # The macOS app
 
-`bundle.sh` builds `Power Commander.app` for the Mac it runs on (Apple
-silicon or Intel) and a zip of it for a GitHub release, both in
-`target/release`:
+`bundle.sh` builds `Power Commander.app` for Apple silicon or Intel, and a
+zip of it for a GitHub release, both in `target/<arch>-apple-darwin/release`:
+two downloads, `PowerCommander-<version>-macos-aarch64.zip` and
+`…-macos-x86_64.zip`. An Apple silicon Mac builds both (Intel's needs
+`rustup target add x86_64-apple-darwin`):
 
 ```sh
 vendor/7zip/fetch.sh && vendor/pdfium/fetch.sh
-packaging/macos/bundle.sh
+packaging/macos/bundle.sh aarch64
+packaging/macos/bundle.sh x86_64
 ```
 
 | In the app | From |
 |---|---|
-| `Contents/MacOS/powercommander` | `cargo build --release -p pc-gui` |
+| `Contents/MacOS/powercommander` | `cargo build --release -p pc-gui --target <arch>-apple-darwin` |
 | `Contents/MacOS/7zz` | `vendor/7zip` |
 | `Contents/Frameworks/libpdfium.dylib` | `vendor/pdfium` |
 | `Contents/Resources/PowerCommander.icns` | the app's icon, beside this file |
@@ -21,7 +24,15 @@ It needs macOS 13 or later (PDFium's).
 
 libmpv (video and sound), rclone (online storage) and the Craft tools (office
 documents) are add-ons: the app works without them, and Settings > Add-ons
-downloads them (`packaging/addons.sh` makes them).
+downloads the ones for its processor. `packaging/addons.sh` makes them, one
+platform at a time; Intel's on Apple silicon:
+
+```sh
+vendor/rclone/build.sh macos-x86_64
+PLATFORM=macos-x86_64 vendor/craft/build.sh
+arch -x86_64 vendor/mpv/build.sh    # under Rosetta; needs brew install nasm
+PLATFORM=macos-x86_64 packaging/addons.sh --upload
+```
 
 ## Signing
 

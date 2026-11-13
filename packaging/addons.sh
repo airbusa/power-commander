@@ -26,8 +26,17 @@ URL=https://github.com/$REPO/releases/download/$TAG
 OUT=target/addons
 mkdir -p "$OUT"
 MANIFEST=$OUT/addons.json
-# The published list, to add to.
-[ -f "$MANIFEST" ] || curl -fsSL "$URL/addons.json" -o "$MANIFEST" 2>/dev/null || echo '{"addons": []}' > "$MANIFEST"
+# The published list as it is now, to add to: never an older copy, which
+# would drop what another machine added since. Empty only while there is none.
+rm -f "$MANIFEST"
+if ! gh release download "$TAG" -R "$REPO" -p addons.json -O "$MANIFEST" 2>/dev/null &&
+    ! curl -fsSL "$URL/addons.json" -o "$MANIFEST" 2>/dev/null; then
+    if curl -fsSI "https://github.com/$REPO/releases/tag/$TAG" >/dev/null 2>&1; then
+        echo "The release has an add-on list that could not be read: try again." >&2
+        exit 1
+    fi
+    echo '{"addons": []}' > "$MANIFEST"
+fi
 
 # The versions the build scripts pin.
 MPV=$(sed -n 's/.*mpv-\([0-9.]*\)\.tar\.gz.*/\1/p' vendor/mpv/build.sh | head -n 1)

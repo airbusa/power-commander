@@ -5,7 +5,9 @@
 # its commit. Without the craft-fonts pack (the system's fonts instead), one
 # processor, fully optimised and stripped: a fraction of the released CLIs.
 # Needs git and Rust. `./build.sh gridcraft` builds one. Windows: in Git Bash;
-# PLATFORM=windows-aarch64 cross-builds ARM64's (in its developer prompt).
+# PLATFORM=windows-aarch64 cross-builds ARM64's (in its developer prompt). A
+# Mac builds the other processor's too: PLATFORM=macos-x86_64 on Apple silicon
+# (rustup target add x86_64-apple-darwin).
 set -eu
 cd "$(dirname "$0")"
 HERE=$(pwd)
@@ -21,6 +23,8 @@ EXE="" TARGET="" OUTDIR=release
 case $PLATFORM in
     windows-x86_64) EXE=.exe ;;
     windows-aarch64) EXE=.exe TARGET=aarch64-pc-windows-msvc OUTDIR=$TARGET/release ;;
+    macos-x86_64) TARGET=x86_64-apple-darwin OUTDIR=$TARGET/release ;;
+    macos-aarch64) TARGET=aarch64-apple-darwin OUTDIR=$TARGET/release ;;
 esac
 TOOLS="wordcraft:v0.18.1:079f478bd85df7bcc567e3bafa7d7219096f9c3c
 gridcraft:v0.19.1:476448d7d9f3a5f8e93fcf7d98b47fd52293fe7f
