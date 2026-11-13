@@ -42,6 +42,7 @@ pub struct TabState {
     /// A server's tab: `path` is on it. Restored as a local tab, not reconnected.
     pub url: Option<String>,
     pub view: crate::View,
+    pub history: crate::History,
 }
 
 /// The window's tabs; the terminal's are its own.

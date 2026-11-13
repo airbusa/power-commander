@@ -51,6 +51,9 @@ pub enum Command {
     #[serde(alias = "DirectoryHotlist")]
     Bookmarks,
     GoBack,
+    GoForward,
+    /// This computer's home folder; the server's on a server.
+    GoHome,
     OpenTerminal,
     BranchView,
     OpenDesktopFolder,
@@ -258,6 +261,8 @@ pub const MENUS: &[Menu] = &[
         label: "Go",
         items: &[
             cmd("Back", GoBack),
+            cmd("Forward", GoForward),
+            cmd("Home", GoHome),
             cmd("Root Folder", GoToRoot),
             cmd("Desktop Folder", OpenDesktopFolder),
             SEP,
@@ -411,6 +416,8 @@ const FULL_NAMES: &[(Command, &str)] = &[
     (RenameInPlace, "Rename in place"),
     (CompareDirectories, "Compare Directories: Mark Newer"),
     (GoBack, "Go Back"),
+    (GoForward, "Go Forward"),
+    (GoHome, "Go Home"),
     (DuplicateTab, "New Tab (a copy of this one)"),
 ];
 

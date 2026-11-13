@@ -482,6 +482,17 @@ impl App {
                 };
                 self.say(text, false);
             }
+            // This computer's folders only: pc opens no servers.
+            Command::GoBack | Command::GoForward => {
+                let by = if command == Command::GoBack { -1 } else { 1 };
+                if let Some(place) = self.sides[side].tabs.current_mut().history.step(by) {
+                    self.navigate(move |panel| panel.go_to_folder(PathBuf::from(place)));
+                }
+            }
+            Command::GoHome => {
+                let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+                self.navigate(move |panel| panel.go_to_folder(home));
+            }
             Command::DuplicateTab => self.sides[side].tabs.duplicate(),
             Command::LockTab => self.sides[side].tabs.toggle_lock(),
             Command::CloseTab => self.sides[side].tabs.close(),

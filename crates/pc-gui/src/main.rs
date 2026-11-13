@@ -969,52 +969,84 @@ impl Commander {
             Some((ix, input, _)) => (*ix, input.read(cx).value().trim().to_owned()),
             None => return,
         };
-        if typed.is_empty() {
-            return self.cancel_path_edit(window, cx);
-        }
-        if let Some(address) = Address::parse(&typed) {
+        if typed.is_empty() || self.open_location(ix, &typed, window, cx) {
             self.cancel_path_edit(window, cx);
-            return self.connect(ix, address, window, cx);
         }
-        if mounts::is_url(&typed) {
-            self.cancel_path_edit(window, cx);
-            return self.mount_url(ix, typed, window, cx);
-        }
+        cx.notify();
+    }
+
+    /// Goes where `typed` says, as the path bar takes it: a server, a share,
+    /// a folder on this computer or on the panel's server. False, said why,
+    /// where it cannot.
+    fn open_location(&mut self, ix: usize, typed: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let panel = self.panels[ix].tabs.current();
-        let target = match panel.typed_location(&typed) {
+        // The panel's own server: no new connection.
+        if let Some(path) = panel.remote().and_then(|remote| typed.strip_prefix(&remote.url())).filter(|path| path.starts_with('/')) {
+            let target = PathBuf::from(path);
+            self.navigate_on(ix, true, move |panel: &mut Panel| panel.go_to_folder(target), window, cx);
+            return true;
+        }
+        if let Some(address) = Address::parse(typed) {
+            self.connect(ix, address, window, cx);
+            return true;
+        }
+        if mounts::is_url(typed) {
+            self.mount_url(ix, typed.to_owned(), window, cx);
+            return true;
+        }
+        let target = match panel.typed_location(typed) {
             // The server's, in the background.
             Typed::Here(target) if panel.remote().is_some() => {
-                self.cancel_path_edit(window, cx);
                 let go = move |panel: &mut Panel| panel.go_to_folder(target);
-                return self.navigate_on(ix, true, go, window, cx);
+                self.navigate_on(ix, true, go, window, cx);
+                return true;
             }
             Typed::Here(target) => target,
             // A server's path left without its address: this computer's.
             Typed::Local(target) if target.is_dir() => {
-                self.cancel_path_edit(window, cx);
                 let go = move |panel: &mut Panel| panel.disconnect(target);
-                return self.navigate_on(ix, false, go, window, cx);
+                self.navigate_on(ix, false, go, window, cx);
+                return true;
             }
             Typed::Local(target) => {
                 let text = format!("{}: no such folder on this computer", target.display());
-                return window.push_notification(Notification::error(text), cx);
+                window.push_notification(Notification::error(text), cx);
+                return false;
             }
         };
         let side = &mut self.panels[ix];
-        match side
-            .tabs
-            .navigate(|panel| panel.go_to_folder(target.clone()))
-        {
+        match side.tabs.navigate(|panel| panel.go_to_folder(target.clone())) {
             Ok(()) => {
                 side.scroll_to_cursor();
-                self.cancel_path_edit(window, cx);
+                true
             }
             Err(err) => {
                 let text = format!("{}: {err}", target.display());
                 window.push_notification(Notification::error(text), cx);
+                false
             }
         }
-        cx.notify();
+    }
+
+    /// Back (-1) or Forward (1) in the active tab's history.
+    fn go_history(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let ix = self.active;
+        if let Some(place) = self.panels[ix].tabs.current_mut().history.step(by) {
+            self.open_location(ix, &place, window, cx);
+            cx.notify();
+        }
+    }
+
+    /// This computer's home folder; on a server, the server's, as `cd ~`.
+    fn go_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ix = self.active;
+        match self.panels[ix].tabs.current().remote().map(|remote| remote.home()) {
+            Some(home) => self.navigate_on(ix, true, move |panel| panel.go_to_folder(home), window, cx),
+            None => {
+                let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+                self.navigate_on(ix, false, move |panel| panel.go_to_folder(home), window, cx)
+            }
+        }
     }
 
     fn cancel_path_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1943,6 +1975,9 @@ impl Render for Commander {
                     }
                     Command::SidebarTree => this.toggle_sidebar(SidebarTab::Tree, window, cx),
                     Command::SidebarPlaces => this.toggle_sidebar(SidebarTab::Places, window, cx),
+                    Command::GoBack => this.go_history(-1, window, cx),
+                    Command::GoForward => this.go_history(1, window, cx),
+                    Command::GoHome => this.go_home(window, cx),
                     Command::Bookmarks => this.show_bookmarks(window, cx),
                     Command::ToggleSidebar => {
                         let tab = this.sidebar.tab.unwrap_or(this.sidebar.last);

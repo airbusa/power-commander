@@ -334,6 +334,54 @@ pub struct Panel {
     view: View,
     /// Search results fed to the panel, listed by their path from `path`.
     found: Option<Vec<PathBuf>>,
+    /// Where the tab has been, for Back and Forward.
+    pub history: History,
+}
+
+/// How many places a tab's history keeps.
+const HISTORY: usize = 20;
+
+/// The places a tab has been, as the path bar says them, and the one it is
+/// at: Back and Forward go along them.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct History {
+    pub places: Vec<String>,
+    pub at: usize,
+}
+
+impl History {
+    /// A move from `before` to `after`; none for where there is no going
+    /// back to, as inside an archive. A new place drops those ahead.
+    pub fn moved(&mut self, before: Option<String>, after: Option<String>) {
+        if self.places.is_empty()
+            && let Some(before) = before
+        {
+            self.visit(before);
+        }
+        if let Some(after) = after {
+            self.visit(after);
+        }
+    }
+
+    fn visit(&mut self, place: String) {
+        if self.places.get(self.at) == Some(&place) {
+            return;
+        }
+        self.places.truncate(self.at + 1);
+        self.places.push(place);
+        if self.places.len() > HISTORY {
+            self.places.remove(0);
+        }
+        self.at = self.places.len() - 1;
+    }
+
+    /// Back (-1) or Forward (1): the place there, now the one it is at.
+    pub fn step(&mut self, by: isize) -> Option<String> {
+        let to = self.at.checked_add_signed(by).filter(|&to| to < self.places.len())?;
+        self.at = to;
+        Some(self.places[to].clone())
+    }
 }
 
 #[derive(Clone)]
@@ -361,6 +409,7 @@ impl Panel {
             sort: Sort::default(),
             view: View::Full,
             found: None,
+            history: History::default(),
         };
         panel.reload()?;
         Ok(panel)
@@ -407,6 +456,7 @@ impl Panel {
         panel.locked = state.locked;
         panel.name = state.name.clone();
         panel.view = state.view;
+        panel.history = state.history.clone();
         Ok(panel)
     }
 
@@ -418,7 +468,14 @@ impl Panel {
             name: self.name.clone(),
             url: self.remote.as_ref().map(|remote| remote.url()),
             view: self.view,
+            history: self.history.clone(),
         }
+    }
+
+    /// Where it is, for the history: as the path bar says it, which it takes
+    /// back; none inside an archive or for search results.
+    fn place(&self) -> Option<String> {
+        (self.archive.is_none() && self.found.is_none()).then(|| self.location())
     }
 
     /// The path as the title bar shows it: `sftp://user@host/dir` on a
@@ -1321,12 +1378,19 @@ impl Tabs {
 
     /// Moves in the current tab; from a locked tab the move opens a new tab.
     pub fn navigate(&mut self, go: impl FnOnce(&mut Panel) -> io::Result<()>) -> io::Result<()> {
+        let before = self.current().place();
         if !self.current().locked {
-            return go(self.current_mut());
+            go(self.current_mut())?;
+            let panel = self.current_mut();
+            let after = panel.place();
+            panel.history.moved(before, after);
+            return Ok(());
         }
         let mut moved = self.current().plain_copy();
         go(&mut moved)?;
         if moved.path() != self.current().path() {
+            let after = moved.place();
+            moved.history.moved(before, after);
             self.add(moved);
         }
         Ok(())
@@ -1334,10 +1398,14 @@ impl Tabs {
 
     /// A move made on a copy of tab `ix` elsewhere, as for a server: the
     /// tab takes it, or a locked one gets a new tab beside it.
-    pub fn navigated(&mut self, ix: usize, moved: Panel) {
+    pub fn navigated(&mut self, ix: usize, mut moved: Panel) {
         let Some(panel) = self.panels.get(ix) else {
             return;
         };
+        // The tab's history goes on, also where the other panel's folder came.
+        moved.history = panel.history.clone();
+        let (before, after) = (panel.place(), moved.place());
+        moved.history.moved(before, after);
         if !panel.locked {
             self.panels[ix] = moved;
         } else if moved.path() != panel.path() || moved.location() != panel.location() {
@@ -1959,6 +2027,48 @@ mod tests {
         panel.set_cursor(1);
         panel.open().unwrap();
         assert!(chosen(&panel).is_empty(), "a new folder, no marks");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Back and Forward as a browser's: a new place drops those ahead; 20 kept.
+    #[test]
+    fn keeps_where_tabs_have_been() {
+        let mut history = History::default();
+        let place = |n: usize| Some(format!("/{n}"));
+        history.moved(place(0), place(1));
+        history.moved(place(1), place(2));
+        assert_eq!(history.step(-1).as_deref(), Some("/1"));
+        assert_eq!(history.step(-1).as_deref(), Some("/0"));
+        assert_eq!(history.step(-1), None, "nothing before the first");
+        assert_eq!(history.step(1).as_deref(), Some("/1"));
+        // Arrived where Back went: nothing new.
+        history.moved(place(2), place(1));
+        assert_eq!(history.places.len(), 3);
+        history.moved(place(1), place(9));
+        assert_eq!(history.places, ["/0", "/1", "/9"], "the way ahead is dropped");
+        assert_eq!(history.step(1), None);
+        history.moved(None, None);
+        for n in 10..40 {
+            history.moved(place(n - 1), place(n));
+        }
+        assert_eq!(history.places.len(), HISTORY);
+        assert_eq!((history.places[0].as_str(), history.at), ("/20", HISTORY - 1));
+
+        let root = std::env::temp_dir().join(format!("pc-history-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("a/b")).unwrap();
+        let mut tabs = Tabs::new(Panel::new(&root, Filter::default()).unwrap());
+        tabs.navigate(|panel| panel.go_to_folder(root.join("a"))).unwrap();
+        tabs.navigate(|panel| panel.go_to_folder(root.join("a/b"))).unwrap();
+        let places = |tabs: &Tabs| tabs.current().history.places.clone();
+        let shown = |path: PathBuf| path.display().to_string();
+        assert_eq!(places(&tabs), [shown(root.clone()), shown(root.join("a")), shown(root.join("a/b"))]);
+        // A move made elsewhere, as for a server, keeps the tab's history.
+        let mut copy = tabs.current().clone();
+        copy.history = History::default();
+        copy.go_to_folder(root.clone()).unwrap();
+        tabs.navigated(tabs.active(), copy);
+        assert_eq!(places(&tabs).len(), 4);
         fs::remove_dir_all(&root).unwrap();
     }
 
