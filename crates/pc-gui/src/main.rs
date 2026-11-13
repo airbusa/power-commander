@@ -2159,7 +2159,6 @@ impl Commander {
 impl Render for Commander {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_quick_view(window, cx);
-        self.sync_terminal(cx);
         #[cfg(target_os = "macos")]
         menus::show(window, menus::main_menus(self.settings.appearance, &|command| self.checked(command)), cx);
         self.quick_keys = self.quick_focused(window, cx);

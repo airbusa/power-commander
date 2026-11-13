@@ -1,27 +1,25 @@
 //! The terminal under the panels: its tabs, each a shell; shown or hidden;
-//! and, as ticked on its tab strip, the shell following the active panel
-//! and the panel following the shell (MobaXterm's "Follow terminal folder").
+//! the command line's commands run there, in the active panel's folder.
 
 use std::path::{Path, PathBuf};
 
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, v_flex};
 use gpui_kit::*;
 use pc_core::menu::Command;
 
 use crate::Commander;
 use crate::menus::Run;
-use crate::terminal::{self, Exited, Moved, TerminalView};
+use crate::terminal::{self, Exited, TerminalView};
 
 /// One of the terminal's shells.
 pub(crate) struct TerminalTab {
     pub(crate) view: Entity<TerminalView>,
     /// The shell's folder, as sent to it or seen; none for an ssh session.
     pub(crate) dir: Option<PathBuf>,
-    _events: [Subscription; 2],
+    _ended: Subscription,
 }
 
 /// The terminal's top edge, dragged.
@@ -69,11 +67,8 @@ impl Commander {
                         this.close_terminal_tab(ix, window, cx);
                     }
                 });
-                let moved = cx.subscribe_in(&view, window, |this, view, Moved(folder): &Moved, window, cx| {
-                    this.terminal_moved(view, folder.clone(), window, cx);
-                });
                 self.focus_later(view.read(cx).focus.clone(), window, cx);
-                self.terminals.push(TerminalTab { view, dir, _events: [ended, moved] });
+                self.terminals.push(TerminalTab { view, dir, _ended: ended });
                 self.terminal_tab = self.terminals.len() - 1;
                 self.terminal_shown = true;
             }
@@ -108,33 +103,6 @@ impl Commander {
             self.terminal_tab = ix;
             self.focus_later(tab.view.read(cx).focus.clone(), window, cx);
             cx.notify();
-        }
-    }
-
-    /// The shell, at its prompt, went to `folder`: the active panel follows, if ticked.
-    fn terminal_moved(&mut self, view: &Entity<TerminalView>, folder: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(ix) = self.terminals.iter().position(|tab| &tab.view == view) else {
-            return;
-        };
-        // Known: following the panel sends it no `cd` there.
-        self.terminals[ix].dir = Some(folder.clone());
-        if !self.settings.panel_follows_terminal || ix != self.terminal_tab || !self.terminal_shown {
-            return;
-        }
-        let panel = self.panels[self.active].tabs.current();
-        let remote = panel.remote().is_some() || panel.in_archive();
-        if !remote && panel.folder() == folder {
-            return;
-        }
-        // A server's panel leaves it for this computer's folder.
-        self.navigate(move |panel| if remote { panel.disconnect(folder) } else { panel.go_to_folder(folder) }, window, cx);
-    }
-
-    /// The shell follows the active panel's folder, while it waits at its
-    /// prompt, if ticked; what was typed there goes.
-    pub(crate) fn sync_terminal(&mut self, cx: &mut Context<Self>) {
-        if self.settings.terminal_follows_panel && self.terminal_shown {
-            self.send_panel_folder(cx);
         }
     }
 
@@ -183,7 +151,7 @@ impl Commander {
         Some(true)
     }
 
-    /// The tabs, a new one's +, and the following ticks.
+    /// The tabs and a new one's +.
     fn render_terminal_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let tabs = self.terminals.iter().enumerate().map(|(ix, tab)| {
             let view = tab.view.read(cx);
@@ -200,29 +168,12 @@ impl Commander {
             Tab::new().label(name).suffix(close)
         });
         let tabs: Vec<Tab> = tabs.collect();
-        let tick = |id: &'static str, label: &'static str, on: bool, set: fn(&mut pc_core::settings::Settings, bool), cx: &mut Context<Self>| {
-            Checkbox::new(id).small().label(label).checked(on).on_click(cx.listener(move |this, on: &bool, window, cx| {
-                set(&mut this.settings, *on);
-                this.save_settings(window, cx);
-                this.sync_terminal(cx);
-                cx.notify();
-            }))
-        };
-        // Only where a shell at its prompt can be told apart from a program.
-        let ticks = cfg!(unix).then(|| {
-            h_flex()
-                .gap_3()
-                .px_2()
-                .text_xs()
-                .child(tick("terminal-follows", "Terminal follows panel", self.settings.terminal_follows_panel, |s, on| s.terminal_follows_panel = on, cx))
-                .child(tick("panel-follows", "Panel follows terminal", self.settings.panel_follows_terminal, |s, on| s.panel_follows_terminal = on, cx))
-        });
         let new = Button::new("terminal-new").ghost().xsmall().label("+").on_click(cx.listener(|this, _, window, cx| this.new_terminal_tab(window, cx)));
         TabBar::new("terminal-tabs")
             .small()
             .selected_index(self.terminal_tab)
             .children(tabs)
-            .suffix(h_flex().items_center().child(new).children(ticks))
+            .suffix(new)
             .on_click(cx.listener(|this, ix: &usize, window, cx| this.select_terminal_tab(*ix, window, cx)))
     }
 

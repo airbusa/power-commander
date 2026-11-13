@@ -65,10 +65,6 @@ pub struct Settings {
     pub sidebar_blur: Blur,
     pub terminal_opacity: TerminalOpacity,
     pub terminal_blur: Blur,
-    /// The terminal's shell `cd`s where the active panel goes (Krusader's), at its prompt.
-    pub terminal_follows_panel: bool,
-    /// The active panel goes where the terminal's shell `cd`s (MobaXterm's "Follow terminal folder").
-    pub panel_follows_terminal: bool,
     pub viewer: ViewerSettings,
     pub editor: EditorSettings,
     /// Files' own programs for Enter, F3 and F4.
