@@ -11,7 +11,7 @@ use std::sync::{Mutex, PoisonError, mpsc};
 use windows::Win32::Foundation::{E_INVALIDARG, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx};
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
@@ -56,12 +56,12 @@ const PACK: u32 = 0x7f02;
 /// Shows the menu at the pointer for `paths`, all in one folder; with
 /// `background` for the folder in `paths` itself, with Explorer's New
 /// submenu. `header` is the one entry's name and whether it is a folder.
-/// `owner` is the window's HWND. Blocks until the menu closes and the
+/// `owner` is the window's HWND; `dark` draws the menu dark. Blocks until the menu closes and the
 /// command ran: call it off the app's thread.
-pub fn show(owner: isize, paths: &[PathBuf], background: bool, header: Option<(&str, bool)>) -> io::Result<Option<Choice>> {
+pub fn show(owner: isize, paths: &[PathBuf], background: bool, header: Option<(&str, bool)>, dark: bool) -> io::Result<Option<Choice>> {
     let (reply, answer) = mpsc::channel();
     let header = header.map(|(name, is_dir)| (name.to_owned(), is_dir));
-    let request = Request { owner, paths: paths.to_vec(), background, header, reply };
+    let request = Request { owner, paths: paths.to_vec(), background, header, dark, reply };
     let mut thread = THREAD.lock().unwrap_or_else(PoisonError::into_inner);
     if thread.is_none() {
         *thread = Some(start()?);
@@ -78,6 +78,7 @@ struct Request {
     paths: Vec<PathBuf>,
     background: bool,
     header: Option<(String, bool)>,
+    dark: bool,
     reply: mpsc::Sender<io::Result<Option<Choice>>>,
 }
 
@@ -100,7 +101,7 @@ fn start() -> io::Result<(mpsc::Sender<Request>, u32)> {
                 for request in requests.try_iter() {
                     let header = request.header.as_ref().map(|(name, is_dir)| (name.as_str(), *is_dir));
                     let owner = HWND(request.owner as _);
-                    let chosen = unsafe { track(owner, &request.paths, request.background, header) };
+                    let chosen = unsafe { track(owner, &request.paths, request.background, header, request.dark) };
                     request.reply.send(chosen.map_err(io::Error::other)).ok();
                 }
                 continue;
@@ -135,7 +136,7 @@ fn wide(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain([0]).collect()
 }
 
-unsafe fn track(owner: HWND, paths: &[PathBuf], background: bool, header: Option<(&str, bool)>) -> Result<Option<Choice>> {
+unsafe fn track(owner: HWND, paths: &[PathBuf], background: bool, header: Option<(&str, bool)>, dark: bool) -> Result<Option<Choice>> {
     let pidls: Vec<Pidl> = paths
         .iter()
         .map(|path| match unsafe { ILCreateFromPathW(PCWSTR(wide(path).as_ptr())) } {
@@ -179,6 +180,7 @@ unsafe fn track(owner: HWND, paths: &[PathBuf], background: bool, header: Option
     let mut at = POINT::default();
     unsafe { GetCursorPos(&mut at)? };
     let helper = Helper::new(owner)?;
+    unsafe { theme(helper.0, dark) };
     let shown = Shown { items: items.clone(), new: new.clone() };
     SHOWN.with(|slot| *slot.borrow_mut() = Some(shown));
     // The menu takes the keys only from the foreground window; the app's window gets it back.
@@ -312,6 +314,26 @@ fn handler(message: u32, wparam: WPARAM, lparam: LPARAM) -> Option<IContextMenu>
         };
         Some(if new_ones { new.clone() } else { shown.items.clone() })
     })
+}
+
+/// Light or dark as the app, by uxtheme's unnamed exports: menus have no documented dark mode.
+unsafe fn theme(hwnd: HWND, dark: bool) {
+    let Ok(uxtheme) = (unsafe { LoadLibraryExW(w!("uxtheme.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) }) else {
+        return;
+    };
+    let export = |ordinal: usize| unsafe { GetProcAddress(uxtheme, PCSTR(ordinal as *const u8)) };
+    if let Some(allow_dark) = export(133) {
+        let allow_dark: unsafe extern "system" fn(HWND, i32) -> i32 = unsafe { std::mem::transmute(allow_dark) };
+        unsafe { allow_dark(hwnd, dark as i32) };
+    }
+    if let Some(set_mode) = export(135) {
+        let set_mode: unsafe extern "system" fn(i32) -> i32 = unsafe { std::mem::transmute(set_mode) };
+        unsafe { set_mode(if dark { 2 } else { 3 }) };
+    }
+    if let Some(flush) = export(136) {
+        let flush: unsafe extern "system" fn() = unsafe { std::mem::transmute(flush) };
+        unsafe { flush() };
+    }
 }
 
 /// A hidden window of this thread owning the menu, under the app's window:

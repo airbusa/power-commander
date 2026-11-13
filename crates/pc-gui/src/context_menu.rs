@@ -100,10 +100,11 @@ impl Commander {
                 (chosen.iter().map(|e| folder.join(&e.name)).collect(), header, false)
             }
         };
+        let dark = gpui_kit::component::ActiveTheme::theme(&**cx).mode.is_dark();
         let (sender, receiver) = futures::channel::oneshot::channel();
         std::thread::spawn(move || {
             let header = header.as_ref().map(|(name, is_dir)| (name.as_str(), *is_dir));
-            sender.send(shell_menu::show(owner, &paths, background, header)).ok();
+            sender.send(shell_menu::show(owner, &paths, background, header, dark)).ok();
         });
         cx.spawn_in(window, async move |this, cx| {
             let Ok(chosen) = receiver.await else {

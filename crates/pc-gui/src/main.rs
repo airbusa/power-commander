@@ -1619,6 +1619,8 @@ impl Commander {
                     MouseButton::Right,
                     cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
+                        // A press that closed an open menu never reached the row.
+                        this.right_click(ix, row, window, cx);
                         this.shell_menu(ix, Some(row), window, cx)
                     }),
                 );
