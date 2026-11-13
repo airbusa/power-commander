@@ -122,6 +122,13 @@ impl Commander {
     }
 
     /// Shows what the cursor is on, once it moved; opposite the active panel.
+    /// What Quick View shows, read again at the next frame.
+    pub(crate) fn reload_quick_view(&mut self) {
+        if let Some(quick) = &mut self.quick {
+            quick.shown = None;
+        }
+    }
+
     pub(crate) fn sync_quick_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let active = self.active;
         let Some(quick) = &mut self.quick else {

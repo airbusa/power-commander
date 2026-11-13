@@ -736,6 +736,9 @@ impl Viewer {
             true => {
                 self.media = None;
                 self.problem = Some(format!("Cannot show it: {err}").into());
+                if crate::sidebar::lost_device(&err) {
+                    crate::reconnect_devices(cx);
+                }
             }
             false => window.push_notification(Notification::error(text), cx),
         }

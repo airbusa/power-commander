@@ -61,6 +61,8 @@ pub(crate) struct Sidebar {
     volumes: Vec<Volume>,
     /// The folders of the devices mounted, by id.
     device_folders: HashMap<String, Vec<(PathBuf, String)>>,
+    /// When each phone was last connected again, its files having stopped answering.
+    reconnected: HashMap<String, std::time::Instant>,
 }
 
 /// Where a mounted device's files are: KDE Connect mounts it at
@@ -102,6 +104,7 @@ impl Sidebar {
             devices: Vec::new(),
             volumes: Vec::new(),
             device_folders: HashMap::new(),
+            reconnected: HashMap::new(),
         }
     }
 
@@ -629,6 +632,69 @@ impl Commander {
         .detach();
     }
 
+    /// Mounted phones whose files stopped answering, connected again (KDE
+    /// Connect's app stops serving them when the phone sleeps, the mount here
+    /// staying): what showed them reads them again. Once in 30 s each; a
+    /// phone that still does not answer is said to.
+    pub(crate) fn reconnect_devices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mounted: Vec<(Device, Vec<PathBuf>)> =
+            self.sidebar.devices.iter().map(|device| (device.clone(), device_roots(&self.sidebar, &device.id))).filter(|(_, roots)| !roots.is_empty()).collect();
+        // A dead mount may hang as well as fail: looked at in the background.
+        let dead = cx.background_executor().spawn(async move {
+            let lost = |root: &PathBuf| std::fs::metadata(root).err().is_some_and(|err| lost_device(&err));
+            mounted.into_iter().filter(|(_, roots)| roots.iter().any(lost)).map(|(device, _)| device).collect::<Vec<_>>()
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let dead = dead.await;
+            let _ = this.update_in(cx, |this, window, cx| dead.into_iter().for_each(|device| this.reconnect_device(device, window, cx)));
+        })
+        .detach();
+    }
+
+    fn reconnect_device(&mut self, device: Device, window: &mut Window, cx: &mut Context<Self>) {
+        let (id, name) = (device.id.clone(), device.name.clone());
+        if self.sidebar.reconnected.get(&id).is_some_and(|at| at.elapsed() < Duration::from_secs(30)) {
+            let text = format!("{name} does not answer: unlock it and open KDE Connect on it, then read the folder again (F2).");
+            return window.push_notification(Notification::error(text).id1::<Mounting>(id), cx);
+        }
+        self.sidebar.reconnected.insert(id.clone(), std::time::Instant::now());
+        let note = Notification::info(format!("{name} does not answer: connecting again...")).id1::<Mounting>(id.clone()).autohide(false);
+        window.push_notification(note, cx);
+        let mount = cx.background_executor().spawn({
+            let id = id.clone();
+            async move {
+                // Mounted, it would not mount again.
+                let _ = devices::unmount(&id);
+                devices::mount(&id)
+            }
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let mounted = mount.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                window.remove_notification1::<Mounting>(id.clone(), cx);
+                match mounted {
+                    Ok(folders) => {
+                        this.sidebar.device_folders.insert(id.clone(), folders);
+                        let roots = device_roots(&this.sidebar, &id);
+                        for ix in 0..2 {
+                            let panel = this.panels[ix].tabs.current();
+                            if panel.remote().is_none() && roots.iter().any(|root| panel.folder().starts_with(root)) {
+                                this.navigate_on(ix, false, pc_core::Panel::reload, window, cx);
+                            }
+                        }
+                        this.reload_quick_view();
+                        cx.notify();
+                    }
+                    Err(err) => {
+                        let text = format!("{name} does not answer ({err}): unlock it and open KDE Connect on it.");
+                        window.push_notification(Notification::error(text).autohide(false), cx);
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
     /// The mounted device whose files `path` is in.
     pub(crate) fn device_of(&self, path: &Path) -> Option<Device> {
         let holds = |device: &&Device| device_roots(&self.sidebar, &device.id).iter().any(|root| path.starts_with(root));
@@ -1072,4 +1138,15 @@ fn server_menu(
     menu.separator()
         .item(act("New connection...", |this, window, cx| this.edit_server(None, false, window, cx)))
         .item(act("Disconnect", |this, window, cx| this.disconnect(window, cx)))
+}
+
+/// An error of a mount whose connection is gone (sshfs's to a phone).
+pub(crate) fn lost_device(err: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    return matches!(err.raw_os_error(), Some(libc::EIO | libc::ENOTCONN));
+    #[cfg(not(unix))]
+    {
+        let _ = err;
+        false
+    }
 }

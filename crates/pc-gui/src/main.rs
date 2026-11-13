@@ -367,6 +367,17 @@ impl Global for Forwarding {}
 /// A command of the main window's, chosen in a window that works for it
 /// (menus::lend), to its panels, without leaving that window; false when the
 /// active window does not work for the main one.
+/// Phones whose files stopped answering, connected again, from a window
+/// that found out (Quick View's viewer).
+pub(crate) fn reconnect_devices(cx: &mut App) {
+    let Some(MainWindow(main, commander)) = cx.try_global::<MainWindow>().cloned() else {
+        return;
+    };
+    cx.defer(move |cx| {
+        let _ = main.update(cx, |_, window, cx| commander.update(cx, |this, cx| this.reconnect_devices(window, cx)));
+    });
+}
+
 fn to_main_window(action: Box<dyn Action>, cx: &mut App) -> bool {
     let Some(MainWindow(main, commander)) = cx.try_global::<MainWindow>().cloned() else {
         return false;
@@ -1634,8 +1645,11 @@ impl Commander {
             if let Err(err) = side.tabs.navigate(go) {
                 let text = format!("{}: {err}", side.tabs.current().location());
                 window.push_notification(Notification::error(text), cx);
+                if sidebar::lost_device(&err) {
+                    self.reconnect_devices(window, cx);
+                }
             }
-            side.scroll_to_cursor();
+            self.panels[ix].scroll_to_cursor();
             return cx.notify();
         }
         let tab = side.tabs.active();
@@ -1654,9 +1668,12 @@ impl Commander {
                     Err(err) => {
                         let text = format!("{}: {err}", side.tabs.current().location());
                         window.push_notification(Notification::error(text), cx);
+                        if sidebar::lost_device(&err) {
+                            this.reconnect_devices(window, cx);
+                        }
                     }
                 }
-                side.scroll_to_cursor();
+                this.panels[ix].scroll_to_cursor();
                 cx.notify();
             });
         })
