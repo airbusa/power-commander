@@ -561,10 +561,10 @@ impl Commander {
         let terminal = session.terminal;
         cx.defer_in(window, move |this, window, cx| {
             this.set_backdrop(window, cx);
-            // Open again, the panels keeping the keys.
+            // Open again, the panels keeping the keys: after the terminal takes them.
             if terminal {
                 this.toggle_terminal(window, cx);
-                window.focus(&this.focus, cx);
+                cx.defer_in(window, |this, window, cx| window.focus(&this.focus, cx));
             }
         });
         Self {
@@ -1389,14 +1389,18 @@ impl Commander {
     /// shown and in use, hides it, the shell kept.
     fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let using = |view: &Entity<terminal::TerminalView>, window: &Window, cx: &App| view.read(cx).focus.is_focused(window);
+        // After a menu that ran it has given the focus back to where it was.
+        let focus_later = |handle: FocusHandle, window: &mut Window, cx: &mut Context<Self>| {
+            cx.defer_in(window, move |_, window, cx| window.focus(&handle, cx));
+        };
         match &self.terminal {
             Some((view, _)) if self.terminal_shown && using(view, window, cx) => {
                 self.terminal_shown = false;
-                window.focus(&self.focus, cx);
+                focus_later(self.focus.clone(), window, cx);
             }
             Some((view, _)) => {
                 self.terminal_shown = true;
-                window.focus(&view.read(cx).focus.clone(), cx);
+                focus_later(view.read(cx).focus.clone(), window, cx);
             }
             None => {
                 let panel = self.panels[self.active].tabs.current();
@@ -1414,7 +1418,7 @@ impl Commander {
                             window.focus(&this.focus, cx);
                             cx.notify();
                         });
-                        window.focus(&view.read(cx).focus.clone(), cx);
+                        focus_later(view.read(cx).focus.clone(), window, cx);
                         self.terminal = Some((view, ended));
                         self.terminal_shown = true;
                     }
