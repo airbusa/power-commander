@@ -55,14 +55,14 @@ pub fn bind(keys: &KeySettings, before: Option<&KeySettings>, cx: &mut App) {
         let context = Some(Rc::new(KeyBindingContextPredicate::parse(context).unwrap()));
         KeyBinding::load(key, action, context, false, None, &DummyKeyboardMapper).ok()
     };
-    // The terminal takes every other key.
-    let contexts = |command: Command| match command {
-        Command::TerminalPanel => &[crate::CONTEXT, "Terminal"][..],
+    // The terminal takes every other key, and keeps its own (Ctrl+Shift+T opens a tab there).
+    let contexts = |command: Command, key: &str| match command {
+        Command::TerminalPanel if !crate::terminal::own_key(key) => &[crate::CONTEXT, "Terminal"][..],
         _ => &[crate::CONTEXT][..],
     };
     let mut unbind = Vec::new();
     for (key, command) in before.into_iter().flat_map(KeySettings::bindings) {
-        for context in contexts(command) {
+        for context in contexts(command, &key) {
             unbind.extend(binding(&key, Box::new(Unbind(Run::name_for_type().into())), context));
         }
     }
@@ -78,7 +78,7 @@ pub fn bind(keys: &KeySettings, before: Option<&KeySettings>, cx: &mut App) {
     }
     let mut bindings = Vec::new();
     for (key, command) in bound {
-        for context in contexts(command) {
+        for context in contexts(command, &key) {
             bindings.extend(binding(&key, Box::new(Run(command)), context));
         }
     }

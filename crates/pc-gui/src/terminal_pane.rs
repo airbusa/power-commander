@@ -1,0 +1,281 @@
+//! The terminal under the panels: its tabs, each a shell; shown or hidden;
+//! and, as ticked on its tab strip, the shell following the active panel
+//! and the panel following the shell (MobaXterm's "Follow terminal folder").
+
+use std::path::{Path, PathBuf};
+
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::*;
+use pc_core::menu::Command;
+
+use crate::Commander;
+use crate::menus::Run;
+use crate::terminal::{self, Exited, Moved, TerminalView};
+
+/// One of the terminal's shells.
+pub(crate) struct TerminalTab {
+    pub(crate) view: Entity<TerminalView>,
+    /// The shell's folder, as sent to it or seen; none for an ssh session.
+    pub(crate) dir: Option<PathBuf>,
+    _events: [Subscription; 2],
+}
+
+/// The terminal's top edge, dragged.
+pub(crate) struct TerminalDrag;
+
+impl Commander {
+    fn terminal_tab(&self) -> Option<&TerminalTab> {
+        self.terminals.get(self.terminal_tab)
+    }
+
+    /// After a menu that ran the command has given the focus back to where it was.
+    fn focus_later(&self, handle: FocusHandle, window: &mut Window, cx: &mut Context<Self>) {
+        cx.defer_in(window, move |_, window, cx| window.focus(&handle, cx));
+    }
+
+    /// Shows the terminal, a shell started if none runs; shown and in use, hides it, the shells kept.
+    pub(crate) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let using = self.terminal_tab().map(|tab| tab.view.read(cx).focus.clone());
+        match using {
+            Some(focus) if self.terminal_shown && focus.is_focused(window) => {
+                self.terminal_shown = false;
+                self.focus_later(self.focus.clone(), window, cx);
+            }
+            Some(focus) => {
+                self.terminal_shown = true;
+                self.focus_later(focus, window, cx);
+            }
+            None => return self.new_terminal_tab(window, cx),
+        }
+        self.set_backdrop(window, cx);
+        cx.notify();
+    }
+
+    /// Another shell, in the active panel's folder, or by ssh in an SFTP panel's.
+    pub(crate) fn new_terminal_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.panels[self.active].tabs.current();
+        let home = std::env::home_dir().unwrap_or_default();
+        let ssh = panel.remote().and_then(|remote| pc_core::remote::ssh_command(&remote.url(), panel.folder()));
+        // An archive's folder is not this computer's.
+        let dir = (panel.remote().is_none() && !panel.in_archive()).then(|| panel.folder().to_owned());
+        match TerminalView::open(dir.as_deref().unwrap_or(&home), ssh, window, cx) {
+            Ok(view) => {
+                let ended = cx.subscribe_in(&view, window, |this, view, _: &Exited, window, cx| {
+                    if let Some(ix) = this.terminals.iter().position(|tab| &tab.view == view) {
+                        this.close_terminal_tab(ix, window, cx);
+                    }
+                });
+                let moved = cx.subscribe_in(&view, window, |this, view, Moved(folder): &Moved, window, cx| {
+                    this.terminal_moved(view, folder.clone(), window, cx);
+                });
+                self.focus_later(view.read(cx).focus.clone(), window, cx);
+                self.terminals.push(TerminalTab { view, dir, _events: [ended, moved] });
+                self.terminal_tab = self.terminals.len() - 1;
+                self.terminal_shown = true;
+            }
+            Err(err) => window.push_notification(Notification::error(format!("Could not start the shell: {err}")), cx),
+        }
+        self.set_backdrop(window, cx);
+        cx.notify();
+    }
+
+    /// Its shell hung up; the last one gone, the terminal hides.
+    fn close_terminal_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if ix >= self.terminals.len() {
+            return;
+        }
+        self.terminals.remove(ix);
+        if self.terminal_tab > ix || self.terminal_tab == self.terminals.len() {
+            self.terminal_tab = self.terminal_tab.saturating_sub(1);
+        }
+        match self.terminal_tab() {
+            Some(tab) => self.focus_later(tab.view.read(cx).focus.clone(), window, cx),
+            None => {
+                self.terminal_shown = false;
+                self.focus_later(self.focus.clone(), window, cx);
+            }
+        }
+        self.set_backdrop(window, cx);
+        cx.notify();
+    }
+
+    fn select_terminal_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(tab) = self.terminals.get(ix) {
+            self.terminal_tab = ix;
+            self.focus_later(tab.view.read(cx).focus.clone(), window, cx);
+            cx.notify();
+        }
+    }
+
+    /// The shell, at its prompt, went to `folder`: the active panel follows, if ticked.
+    fn terminal_moved(&mut self, view: &Entity<TerminalView>, folder: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(ix) = self.terminals.iter().position(|tab| &tab.view == view) else {
+            return;
+        };
+        // Known: following the panel sends it no `cd` there.
+        self.terminals[ix].dir = Some(folder.clone());
+        if !self.settings.panel_follows_terminal || ix != self.terminal_tab || !self.terminal_shown {
+            return;
+        }
+        let panel = self.panels[self.active].tabs.current();
+        let remote = panel.remote().is_some() || panel.in_archive();
+        if !remote && panel.folder() == folder {
+            return;
+        }
+        // A server's panel leaves it for this computer's folder.
+        self.navigate(move |panel| if remote { panel.disconnect(folder) } else { panel.go_to_folder(folder) }, window, cx);
+    }
+
+    /// The shell follows the active panel's folder, while it waits at its
+    /// prompt, if ticked; what was typed there goes.
+    pub(crate) fn sync_terminal(&mut self, cx: &mut Context<Self>) {
+        if self.settings.terminal_follows_panel && self.terminal_shown {
+            self.send_panel_folder(cx);
+        }
+    }
+
+    /// `cd` to the active panel's folder, unless the shell is there, on a
+    /// server or busy. Linux and macOS: Windows' PowerShell cannot be told idle.
+    fn send_panel_folder(&mut self, cx: &mut Context<Self>) {
+        let panel = self.panels[self.active].tabs.current();
+        let folder = panel.folder().to_owned();
+        let local = panel.remote().is_none() && !panel.in_archive();
+        let Some(tab) = self.terminals.get_mut(self.terminal_tab) else {
+            return;
+        };
+        if !local || tab.dir.is_none() || tab.dir.as_ref() == Some(&folder) || tab.view.read(cx).idle() != Some(true) {
+            return;
+        }
+        // Ctrl+U clears the line; a leading space keeps it out of the history.
+        let line = format!("\x15 cd -- '{}'\r", folder.to_string_lossy().replace('\'', r"'\''"));
+        tab.view.update(cx, |view, _| view.send(&line));
+        tab.dir = Some(folder);
+    }
+
+    /// The command line's `line`, run by the shown terminal in the panel's
+    /// `folder`: none without one, false while a program runs there.
+    pub(crate) fn run_in_terminal(&mut self, line: &str, folder: &Path, window: &mut Window, cx: &mut Context<Self>) -> Option<bool> {
+        let tab = self.terminals.get(self.terminal_tab).filter(|tab| self.terminal_shown && tab.dir.is_some())?;
+        if tab.view.read(cx).idle() == Some(false) {
+            let text = "A program is running in the terminal: run the command once it ends.";
+            window.push_notification(Notification::warning(text), cx);
+            return Some(false);
+        }
+        let view = tab.view.clone();
+        self.send_panel_folder(cx);
+        // PowerShell's prompt cannot be told apart from a program: the folder goes with the command.
+        #[cfg(windows)]
+        let line = match self.terminals[self.terminal_tab].dir.as_deref() == Some(folder) {
+            true => line.to_owned(),
+            false => {
+                self.terminals[self.terminal_tab].dir = Some(folder.to_owned());
+                format!("Set-Location -LiteralPath '{}'; {line}", folder.display().to_string().replace('\'', "''"))
+            }
+        };
+        let _ = folder;
+        // Ctrl+U clears what was typed at the prompt.
+        let clear = if cfg!(windows) { "" } else { "\x15" };
+        view.update(cx, |view, _| view.send(&format!("{clear}{line}\r")));
+        Some(true)
+    }
+
+    /// The tabs, a new one's +, and the following ticks.
+    fn render_terminal_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let tabs = self.terminals.iter().enumerate().map(|(ix, tab)| {
+            let view = tab.view.read(cx);
+            let name = match (&view.title, &tab.dir) {
+                (Some(title), _) => title.clone(),
+                (None, Some(dir)) => dir.file_name().map_or_else(|| dir.display().to_string(), |name| name.to_string_lossy().into_owned()),
+                (None, None) => "ssh".to_owned(),
+            };
+            let close = Button::new(("terminal-close", ix))
+                .ghost()
+                .xsmall()
+                .label("×")
+                .on_click(cx.listener(move |this, _, window, cx| this.close_terminal_tab(ix, window, cx)));
+            Tab::new().label(name).suffix(close)
+        });
+        let tabs: Vec<Tab> = tabs.collect();
+        let tick = |id: &'static str, label: &'static str, on: bool, set: fn(&mut pc_core::settings::Settings, bool), cx: &mut Context<Self>| {
+            Checkbox::new(id).small().label(label).checked(on).on_click(cx.listener(move |this, on: &bool, window, cx| {
+                set(&mut this.settings, *on);
+                this.save_settings(window, cx);
+                this.sync_terminal(cx);
+                cx.notify();
+            }))
+        };
+        // Only where a shell at its prompt can be told apart from a program.
+        let ticks = cfg!(unix).then(|| {
+            h_flex()
+                .gap_3()
+                .px_2()
+                .text_xs()
+                .child(tick("terminal-follows", "Terminal follows panel", self.settings.terminal_follows_panel, |s, on| s.terminal_follows_panel = on, cx))
+                .child(tick("panel-follows", "Panel follows terminal", self.settings.panel_follows_terminal, |s, on| s.panel_follows_terminal = on, cx))
+        });
+        let new = Button::new("terminal-new").ghost().xsmall().label("+").on_click(cx.listener(|this, _, window, cx| this.new_terminal_tab(window, cx)));
+        TabBar::new("terminal-tabs")
+            .small()
+            .selected_index(self.terminal_tab)
+            .children(tabs)
+            .suffix(h_flex().items_center().child(new).children(ticks))
+            .on_click(cx.listener(|this, ix: &usize, window, cx| this.select_terminal_tab(*ix, window, cx)))
+    }
+
+    /// The terminal under the panels, its top edge dragged for its height.
+    pub(crate) fn render_terminal(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let tab = self.terminal_tab().filter(|_| self.terminal_shown)?;
+        let edge = div()
+            .id("terminal-edge")
+            .absolute()
+            .top(px(-3.))
+            .left_0()
+            .right_0()
+            .h(px(6.))
+            .occlude()
+            .cursor(CursorStyle::ResizeUpDown)
+            .on_drag(TerminalDrag, |_, _, _, cx| cx.new(|_| EmptyView));
+        let pane = v_flex()
+            .relative()
+            .flex_none()
+            .h(px(self.terminal_height))
+            .border_1()
+            .border_color(cx.theme().border)
+            .on_drag_move(cx.listener(|this, event: &DragMoveEvent<TerminalDrag>, window, cx| {
+                let most = f32::from(window.viewport_size().height) - 160.;
+                this.terminal_height = f32::from(event.bounds.bottom() - event.event.position.y).clamp(80., most.max(80.));
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &terminal::NewTerminalTab, window, cx| this.new_terminal_tab(window, cx)))
+            .on_action(cx.listener(|this, _: &terminal::CloseTerminalTab, window, cx| this.close_terminal_tab(this.terminal_tab, window, cx)))
+            .on_action(cx.listener(|this, _: &terminal::NextTerminalTab, window, cx| {
+                let next = (this.terminal_tab + 1) % this.terminals.len().max(1);
+                this.select_terminal_tab(next, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &terminal::PreviousTerminalTab, window, cx| {
+                let count = this.terminals.len().max(1);
+                this.select_terminal_tab((this.terminal_tab + count - 1) % count, window, cx);
+            }))
+            .on_action(cx.listener(|this, Run(command): &Run, window, cx| {
+                if *command == Command::TerminalPanel {
+                    return this.toggle_terminal(window, cx);
+                }
+                // A panels' command from the menus: the panels take the keys again.
+                let command = *command;
+                cx.defer_in(window, move |this, window, cx| {
+                    window.focus(&this.focus, cx);
+                    this.focus.clone().dispatch_action(&Run(command), window, cx);
+                });
+            }))
+            .child(self.render_terminal_tabs(cx))
+            .child(div().flex_1().min_h_0().child(tab.view.clone()))
+            .child(edge);
+        // Its own background: the desktop may show through it.
+        let tint = self.terminal_look.0.unwrap_or(1.);
+        Some(v_flex().flex_none().px_1().bg(cx.theme().background.opacity(tint)).child(pane))
+    }
+}

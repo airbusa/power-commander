@@ -6,7 +6,7 @@ mod mouse;
 
 use std::borrow::Cow;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use alacritty_terminal::event::{Event as TermEvent, EventListener, WindowSize};
@@ -27,11 +27,27 @@ use gpui_kit::*;
 /// The shell has ended.
 pub struct Exited;
 
-actions!(terminal, [SendTab, SendBackTab, Interrupt, CopySelection]);
+/// The shell, at its prompt, is in another folder.
+pub struct Moved(pub PathBuf);
+
+actions!(terminal, [SendTab, SendBackTab, Interrupt, CopySelection, NewTerminalTab, CloseTerminalTab, NextTerminalTab, PreviousTerminalTab]);
+
+/// The terminal's own tab keys, Konsole's and GNOME Terminal's (Terminal.app's on macOS).
+#[cfg(not(target_os = "macos"))]
+const TAB_KEYS: [&str; 4] = ["ctrl-shift-t", "ctrl-shift-w", "ctrl-pagedown", "ctrl-pageup"];
+#[cfg(target_os = "macos")]
+const TAB_KEYS: [&str; 4] = ["cmd-t", "cmd-w", "cmd-shift-]", "cmd-shift-["];
+
+/// Keys the terminal keeps, whatever the app's commands are bound to.
+pub fn own_key(key: &str) -> bool {
+    let key = key.replace("secondary-", if cfg!(target_os = "macos") { "cmd-" } else { "ctrl-" });
+    TAB_KEYS.contains(&key.as_str()) || ["tab", "shift-tab", "ctrl-c", "cmd-c"].contains(&key.as_str())
+}
 
 /// Keys GPUI Kit's root takes (Tab moves the focus, Ctrl+C copies) go to the shell here.
 pub fn bind_keys(cx: &mut App) {
     let context = Some("Terminal");
+    let [new, close, next, previous] = TAB_KEYS;
     cx.bind_keys([
         KeyBinding::new("tab", SendTab, context),
         KeyBinding::new("shift-tab", SendBackTab, context),
@@ -39,6 +55,10 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-c", Interrupt, context),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-c", CopySelection, context),
+        KeyBinding::new(new, NewTerminalTab, context),
+        KeyBinding::new(close, CloseTerminalTab, context),
+        KeyBinding::new(next, NextTerminalTab, context),
+        KeyBinding::new(previous, PreviousTerminalTab, context),
     ]);
 }
 
@@ -88,14 +108,27 @@ pub struct TerminalView {
     wheel: f32,
     /// The cell a move was last reported at.
     reported: Option<(usize, usize)>,
+    /// What the shell calls itself ("user@host: ~/src").
+    pub title: Option<String>,
     /// The pty and the shell's process: whether the shell waits at its prompt.
     #[cfg(unix)]
     shell: (i32, i32),
+    /// The shell's process group, as it first stood in front: under macOS's
+    /// login it is not the started process's.
+    #[cfg(unix)]
+    shell_group: Option<i32>,
+    /// It runs a program of ours (ssh), whose folder here says nothing.
+    #[cfg_attr(windows, allow(dead_code))]
+    remote: bool,
+    /// The shell's folder as last seen.
+    #[cfg_attr(windows, allow(dead_code))]
+    folder: Option<PathBuf>,
     _events: Task<()>,
     _focus: [Subscription; 2],
 }
 
 impl EventEmitter<Exited> for TerminalView {}
+impl EventEmitter<Moved> for TerminalView {}
 
 impl Drop for TerminalView {
     fn drop(&mut self) {
@@ -107,6 +140,7 @@ impl Drop for TerminalView {
 impl TerminalView {
     /// The user's shell in `dir`, or `program`.
     pub fn open(dir: &Path, program: Option<(String, Vec<String>)>, window: &mut Window, cx: &mut App) -> io::Result<Entity<Self>> {
+        let remote = program.is_some();
         let cells = Cells { columns: 80, lines: 24 };
         let (sender, mut events) = unbounded();
         let listener = Listener(sender);
@@ -150,8 +184,13 @@ impl TerminalView {
                 dark: true,
                 wheel: 0.,
                 reported: None,
+                title: None,
                 #[cfg(unix)]
                 shell,
+                #[cfg(unix)]
+                shell_group: None,
+                remote,
+                folder: None,
                 _events: events,
                 _focus: [focus_in, focus_out],
             }
@@ -168,14 +207,18 @@ impl TerminalView {
     pub fn idle(&self) -> Option<bool> {
         #[cfg(unix)]
         // SAFETY: a plain query of the pty, which the event loop keeps open.
-        return Some(unsafe { libc::tcgetpgrp(self.shell.0) } == self.shell.1);
+        return Some(unsafe { libc::tcgetpgrp(self.shell.0) } == self.shell_group.unwrap_or(self.shell.1));
         #[cfg(not(unix))]
         None
     }
 
     fn on_event(&mut self, event: TermEvent, cx: &mut Context<Self>) {
         match event {
-            TermEvent::Wakeup | TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => cx.notify(),
+            TermEvent::Wakeup => {
+                self.watch_folder(cx);
+                cx.notify();
+            }
+            TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => cx.notify(),
             TermEvent::PtyWrite(text) => self.write(text.into_bytes()),
             TermEvent::ClipboardStore(_, text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
             TermEvent::ClipboardLoad(_, format) => {
@@ -189,8 +232,37 @@ impl TerminalView {
             }
             TermEvent::TextAreaSizeRequest(format) => self.write(format(window_size(self.cells, self.cell)).into_bytes()),
             TermEvent::Exit | TermEvent::ChildExit(_) => cx.emit(Exited),
-            TermEvent::Title(_) | TermEvent::ResetTitle | TermEvent::Bell => {}
+            TermEvent::Title(title) => {
+                self.title = Some(title).filter(|title| !title.trim().is_empty());
+                cx.notify();
+            }
+            TermEvent::ResetTitle => {
+                self.title = None;
+                cx.notify();
+            }
+            TermEvent::Bell => {}
         }
+    }
+
+    /// At its prompt, the shell's folder: a new one is told (`Moved`).
+    fn watch_folder(&mut self, cx: &mut Context<Self>) {
+        #[cfg(unix)]
+        {
+            // SAFETY: a plain query of the pty, which the event loop keeps open.
+            let group = unsafe { libc::tcgetpgrp(self.shell.0) };
+            if group <= 0 || self.remote {
+                return;
+            }
+            let shell = *self.shell_group.get_or_insert(group);
+            if group == shell
+                && let Some(folder) = folder_of(shell)
+                && self.folder.as_ref() != Some(&folder)
+            {
+                self.folder = Some(folder.clone());
+                cx.emit(Moved(folder));
+            }
+        }
+        let _ = cx;
     }
 
     fn default_rgb(&self, index: usize) -> Rgb {
@@ -426,6 +498,32 @@ impl TerminalView {
             let _ = self.pty.send(Msg::Resize(window_size(cells, cell)));
         }
     }
+}
+
+/// A process's current folder.
+#[cfg(target_os = "linux")]
+fn folder_of(pid: i32) -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn folder_of(pid: i32) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let size = size_of::<libc::proc_vnodepathinfo>() as i32;
+    // SAFETY: a zeroed plain C struct the call fills, of the size given.
+    unsafe {
+        let mut info: libc::proc_vnodepathinfo = std::mem::zeroed();
+        if libc::proc_pidinfo(pid, libc::PROC_PIDVNODEPATHINFO, 0, (&raw mut info).cast(), size) != size {
+            return None;
+        }
+        let path = std::ffi::CStr::from_ptr(info.pvi_cdir.vip_path.as_ptr().cast());
+        Some(PathBuf::from(std::ffi::OsStr::from_bytes(path.to_bytes())))
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn folder_of(_: i32) -> Option<PathBuf> {
+    None
 }
 
 fn window_size(cells: Cells, cell: Size<Pixels>) -> WindowSize {
