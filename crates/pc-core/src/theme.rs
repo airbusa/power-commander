@@ -241,7 +241,7 @@ pub(crate) fn on_desktop(name: &str) -> bool {
 }
 
 /// How much of the window colour the sidebar paints over the system's own
-/// material behind it, macOS's blur, Windows 11's Mica, a Wayland
+/// material behind it, macOS's blur, Windows' acrylic, a Wayland
 /// compositor's blur, from its opacity in percent. None: solid, at 100% and
 /// where nothing blurs what is behind.
 pub fn sidebar_tint(opacity: u8) -> Option<f32> {

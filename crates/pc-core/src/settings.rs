@@ -8,7 +8,7 @@ use crate::Filter;
 use serde::{Deserialize, Serialize};
 
 /// How much the sidebar covers the desktop behind it, in percent, where it
-/// can be see-through (macOS's blur, Windows 11's Mica): 100 is solid.
+/// can be see-through (macOS's blur, Windows' acrylic): 100 is solid.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SidebarOpacity(pub u8);

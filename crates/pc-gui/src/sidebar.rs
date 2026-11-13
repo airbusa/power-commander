@@ -188,7 +188,6 @@ impl Commander {
         window.set_background_appearance(match see_through {
             false => WindowBackgroundAppearance::Opaque,
             true if !self.sidebar.blur => WindowBackgroundAppearance::Transparent,
-            true if cfg!(windows) => WindowBackgroundAppearance::MicaBackdrop,
             true => WindowBackgroundAppearance::Blurred,
         });
         window.set_see_through(see_through, cx);
