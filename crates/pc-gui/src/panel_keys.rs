@@ -186,8 +186,13 @@ impl Commander {
             return self.navigate_on(side, true, renamed, window, cx);
         }
         let folder = panel.folder().to_owned();
-        if let Err(err) = panel.rename_entry(&name, &to) {
-            window.push_notification(Notification::error(format!("Could not rename: {err}")), cx);
+        match panel.rename_entry(&name, &to) {
+            Err(err) if crate::denied(&err) => {
+                let action = pc_core::elevate::Action::Rename(folder.join(&name), folder.join(&to));
+                self.offer_admin(format!("Renaming to \"{to}\""), action, window, cx);
+            }
+            Err(err) => window.push_notification(Notification::error(format!("Could not rename: {err}")), cx),
+            Ok(()) => {}
         }
         self.refresh_folder(&folder, cx);
     }

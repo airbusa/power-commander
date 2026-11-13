@@ -631,7 +631,19 @@ fn ask(queue: &Queue, job: &JobView, window: &mut Window, cx: &mut App) {
                 (Answer::Cancel, "Cancel"),
             ],
         ),
-        Question::Failed { path, error } => (
+        // Permission denied: an administrator may, as Total Commander offers.
+        Question::Failed { path, error, elevatable: true } => (
+            "Error",
+            format!("{}\n\n{error}\n\nAs administrator: this and what else is refused, once the rest is done, asking for the password once.", path.display()),
+            &[
+                (Answer::Elevate, "As administrator"),
+                (Answer::Retry, "Retry"),
+                (Answer::Skip, "Skip"),
+                (Answer::SkipAll, "Skip all"),
+                (Answer::Cancel, "Cancel"),
+            ],
+        ),
+        Question::Failed { path, error, .. } => (
             "Error",
             format!("{}\n\n{error}", path.display()),
             &[

@@ -103,6 +103,8 @@ pub enum Question {
     Failed {
         path: PathBuf,
         error: String,
+        /// Permission denied between this computer's folders: an administrator may.
+        elevatable: bool,
     },
 }
 
@@ -115,6 +117,8 @@ pub enum Answer {
     /// This one copy gets a free name.
     Rename,
     Retry,
+    /// What is refused for permission is done as administrator, after the rest.
+    Elevate,
     Cancel,
 }
 
@@ -395,8 +399,13 @@ impl Queue {
                         progress: Progress::default(),
                         op: &operation,
                         done: Vec::new(),
+                        elevate: false,
+                        refused_now: false,
+                        refused: Vec::new(),
+                        elevated: None,
                     };
                     let ran = match run.all() {
+                        Ok(()) if let Some(why) = run.elevated.take() => (Status::Failed, Some(why)),
                         Ok(()) => (Status::Done, None),
                         Err(Cancelled) => (Status::Cancelled, None),
                     };
@@ -473,6 +482,14 @@ struct Run<'a> {
     progress: Progress,
     /// The sources done, and where each went, where nothing was before.
     done: Vec<(PathBuf, PathBuf)>,
+    /// "As administrator" was answered: what permission refuses is left for it.
+    elevate: bool,
+    /// The item at hand had something refused.
+    refused_now: bool,
+    /// Items with something refused, `(source, target)`: done whole as administrator at the end.
+    refused: Vec<(PathBuf, PathBuf)>,
+    /// Why that failed.
+    elevated: Option<String>,
 }
 
 impl Run<'_> {
@@ -494,6 +511,7 @@ impl Run<'_> {
                 Target::As(path) => path.clone(),
             };
             let new = op.to.metadata(&target).is_err();
+            self.refused_now = false;
             // Within one file system a move is a rename, if nothing is in the way.
             let renamed = op.kind == Kind::Move && op.same_fs() && new && op.from.rename(source, &target).is_ok();
             if renamed {
@@ -503,10 +521,23 @@ impl Run<'_> {
             } else {
                 self.item(source, &target)?;
             }
+            if self.refused_now {
+                self.refused.push((source.clone(), target));
+                continue;
+            }
             // Gone from there, where a move goes; there now.
             let went = op.kind == Kind::Copy || op.from.metadata(source).is_err();
             if new && went && op.to.metadata(&target).is_ok() {
                 self.done.push((source.clone(), target));
+            }
+        }
+        // One password for all that was refused.
+        if !self.refused.is_empty() {
+            self.progress.current = PathBuf::from("As administrator…");
+            self.report();
+            let action = crate::elevate::Action::Copy { items: std::mem::take(&mut self.refused), remove: op.kind == Kind::Move };
+            if let Err(err) = crate::elevate::run(&action) {
+                self.elevated = Some(format!("As administrator: {err}"));
             }
         }
         Ok(())
@@ -629,7 +660,7 @@ impl Run<'_> {
                         Overwrite::Skip
                     }
                     Answer::Rename => Overwrite::Rename,
-                    Answer::Retry | Answer::Cancel => return Err(Cancelled),
+                    Answer::Retry | Answer::Elevate | Answer::Cancel => return Err(Cancelled),
                 }
             }
             choice => choice,
@@ -690,15 +721,25 @@ impl Run<'_> {
                 Err(error) => error,
             };
             self.check()?;
+            let denied = error.kind() == io::ErrorKind::PermissionDenied && self.op.from.id() == "local" && self.op.to.id() == "local";
+            if denied && self.elevate {
+                self.refused_now = true;
+                return Ok(None);
+            }
             if self.skip_errors {
                 return Ok(None);
             }
             let question = Question::Failed {
                 path: path.to_owned(),
                 error: error.to_string(),
+                elevatable: denied,
             };
             match self.queue.ask(self.id, question) {
                 Answer::Retry => continue,
+                Answer::Elevate => {
+                    (self.elevate, self.refused_now) = (true, true);
+                    return Ok(None);
+                }
                 Answer::Skip => return Ok(None),
                 Answer::SkipAll => {
                     self.skip_errors = true;

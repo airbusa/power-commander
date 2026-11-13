@@ -18,6 +18,7 @@ pub mod devices;
 pub mod ebook;
 pub mod dates;
 pub mod edit;
+pub mod elevate;
 #[cfg(target_os = "macos")]
 pub mod finder;
 pub mod ftp;

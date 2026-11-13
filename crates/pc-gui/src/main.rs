@@ -49,7 +49,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -126,6 +126,12 @@ impl AssetSource for AppAssets {
 
 const CONTEXT: &str = "Commander";
 const ROW: Pixels = px(22.);
+/// Refused for want of rights, as the system says it (the trash's errors keep only the text).
+pub(crate) fn denied(err: &io::Error) -> bool {
+    let text = err.to_string();
+    err.kind() == io::ErrorKind::PermissionDenied || text.contains("ermission denied") || text.contains("Access is denied")
+}
+
 /// Longer than a key's repeat delay (X's 660 ms, KDE's 600 by default, a second at most).
 const REPEAT: Duration = Duration::from_millis(1200);
 
@@ -902,9 +908,13 @@ impl Commander {
                         return this.navigate_on(side, true, made, window, cx);
                     }
                     let folder = panel.folder().to_owned();
-                    if let Err(err) = panel.new_folder(&name) {
-                        let text = format!("Could not make the folder: {err}");
-                        window.push_notification(Notification::error(text), cx);
+                    match panel.new_folder(&name) {
+                        Err(err) if denied(&err) => {
+                            let action = pc_core::elevate::Action::MakeFolder(folder.join(name.trim()));
+                            this.offer_admin(format!("Making \"{}\"", name.trim()), action, window, cx);
+                        }
+                        Err(err) => window.push_notification(Notification::error(format!("Could not make the folder: {err}")), cx),
+                        Ok(()) => {}
                     }
                     this.refresh_folder(&folder, cx);
                 });
@@ -980,10 +990,55 @@ impl Commander {
             return self.navigate_on(side, true, move |panel| panel.delete(false), window, cx);
         }
         let folder = panel.folder().to_owned();
-        if let Err(err) = panel.delete(to_trash) {
-            window.push_notification(Notification::error(format!("Could not delete: {err}")), cx);
+        let paths: Vec<PathBuf> = panel.chosen().iter().map(|entry| folder.join(&entry.name)).collect();
+        match panel.delete(to_trash) {
+            // What is left of them, as administrator, for good.
+            Err(err) if denied(&err) => {
+                let left: Vec<PathBuf> = paths.into_iter().filter(|path| path.symlink_metadata().is_ok()).collect();
+                let what = format!("Deleting {} item(s)", left.len());
+                self.offer_admin(what, pc_core::elevate::Action::Delete(left), window, cx);
+            }
+            Err(err) => window.push_notification(Notification::error(format!("Could not delete: {err}")), cx),
+            Ok(()) => {}
         }
         self.refresh_folder(&folder, cx);
+    }
+
+    /// Permission refused `what`: asked whether as administrator, the system
+    /// asking for the password, in the background; then the panels read again.
+    pub(crate) fn offer_admin(&mut self, what: String, action: pc_core::elevate::Action, window: &mut Window, cx: &mut Context<Self>) {
+        let action = Arc::new(Mutex::new(Some(action)));
+        let commander = cx.entity().downgrade();
+        let text = format!("{what}: permission denied. As administrator, the system asks for the password; what is deleted so is gone for good.");
+        // After the dialog that asked for this closes: closing takes the topmost.
+        cx.defer_in(window, move |_, window, cx| window.open_alert_dialog(cx, move |alert, _, _| {
+            let (action, commander) = (action.clone(), commander.clone());
+            alert.title("Permission denied").description(text.clone()).ok_text("As administrator").show_cancel(true).on_ok(move |_, window, cx| {
+                let Some(action) = action.lock().unwrap().take() else {
+                    return true;
+                };
+                let _ = commander.update(cx, |_, cx| {
+                    let done = cx.background_executor().spawn(async move { pc_core::elevate::run(&action) });
+                    cx.spawn_in(window, async move |this, cx| {
+                        let done = done.await;
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            // Declined: nothing to say.
+                            if let Err(err) = done
+                                && err.kind() != io::ErrorKind::Interrupted
+                            {
+                                window.push_notification(Notification::error(format!("As administrator: {err}")), cx);
+                            }
+                            for ix in 0..2 {
+                                let remote = this.panels[ix].tabs.current().remote().is_some();
+                                this.navigate_on(ix, remote, Panel::reload, window, cx);
+                            }
+                        });
+                    })
+                    .detach();
+                });
+                true
+            })
+        }));
     }
 
     /// Every tab on `folder`, on both sides, reads it again.
