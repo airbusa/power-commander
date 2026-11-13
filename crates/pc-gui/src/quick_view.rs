@@ -165,7 +165,8 @@ impl Commander {
         }
     }
 
-    pub(crate) fn render_quick_view(&self, quick_focused: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// Under the side's `tab_bar`, inside the same border as a panel's, so the tabs stay put.
+    pub(crate) fn render_quick_view(&self, quick_focused: bool, tab_bar: Option<AnyElement>, cx: &mut Context<Self>) -> Option<AnyElement> {
         let quick = self.quick.as_ref()?;
         let theme = cx.theme();
         let name = |path: &Path| path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
@@ -204,6 +205,7 @@ impl Commander {
                     }
                 }),
             )
+            .children(tab_bar)
             .child(header)
             .child(div().flex_1().min_h_0().relative().child(body));
         Some(element.into_any_element())

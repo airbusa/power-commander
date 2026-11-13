@@ -1372,11 +1372,10 @@ impl Commander {
     /// A panel, or Quick View where it covers it.
     fn render_side(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         match self.quick.as_ref().is_some_and(|quick| quick.side == ix) {
-            true => v_flex()
-                .size_full()
-                .children(self.render_tab_bar(ix, cx))
-                .child(div().flex_1().min_h_0().children(self.render_quick_view(self.quick_keys, cx)))
-                .into_any_element(),
+            true => {
+                let tab_bar = self.render_tab_bar(ix, cx);
+                div().size_full().children(self.render_quick_view(self.quick_keys, tab_bar, cx)).into_any_element()
+            }
             false => self.render_panel(ix, cx).into_any_element(),
         }
     }
