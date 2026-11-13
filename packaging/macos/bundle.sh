@@ -95,7 +95,7 @@ codesign "$@" "$APP"/Contents/Frameworks/*.dylib "$APP/Contents/MacOS/7zz"
 codesign "$@" "$APP"
 codesign --verify --strict "$APP"
 
-ZIP="$OUT/PowerCommander-$VERSION-macos-$ARCH.zip"
+ZIP="$OUT/power-commander-$VERSION-macos-$ARCH.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 echo "$APP"

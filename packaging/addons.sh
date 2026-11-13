@@ -20,7 +20,7 @@ PY=python3
 case $PLATFORM in windows-*) EXE=.exe PY=python ;; esac
 # The bundled 7-Zip zips where zip is missing (Git Bash).
 SEVENZIP=$(pwd)/vendor/7zip/windows-x86_64/7z.exe
-REPO=airbusa/powercommander
+REPO=airbusa/power-commander
 TAG=addons
 URL=https://github.com/$REPO/releases/download/$TAG
 OUT=target/addons

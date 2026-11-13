@@ -17,10 +17,10 @@ if ($LASTEXITCODE) { throw 'cargo build failed' }
 $bin = "target\$target\release"
 
 # Each tool's folder, its license inside, beside the programs: where pc-core's bundled.rs looks.
-$dir = "target\release\powercommander-$version-$platform"
+$dir = "target\release\power-commander-$version-$platform"
 if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
 New-Item -ItemType Directory -Force $dir | Out-Null
-Copy-Item "$bin\powercommander.exe", "$bin\pc-tui.exe", LICENSE $dir
+Copy-Item "$bin\powercommander.exe", "$bin\pc.exe", LICENSE $dir
 foreach ($tool in '7zip', 'pdfium') {
     Copy-Item -Recurse "vendor\$tool\$platform" "$dir\$tool"
 }

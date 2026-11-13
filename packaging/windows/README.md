@@ -21,7 +21,7 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\package.ps1 -Arch aar
 
 | In the folder | From |
 |---|---|
-| `powercommander.exe`, `pc-tui.exe` | `cargo build --release`; the C runtime is linked in |
+| `powercommander.exe` (the app), `pc.exe` (in the terminal) | `cargo build --release`; the C runtime is linked in |
 | `7zip\` | `vendor/7zip`, with its license |
 | `pdfium\` | `vendor/pdfium`, with its licenses |
 

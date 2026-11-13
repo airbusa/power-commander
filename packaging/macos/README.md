@@ -2,7 +2,7 @@
 
 `bundle.sh` builds `Power Commander.app` for Apple silicon or Intel, and a
 zip of it for a GitHub release, both in `target/<arch>-apple-darwin/release`:
-two downloads, `PowerCommander-<version>-macos-aarch64.zip` and
+two downloads, `power-commander-<version>-macos-aarch64.zip` and
 `…-macos-x86_64.zip`. An Apple silicon Mac builds both (Intel's needs
 `rustup target add x86_64-apple-darwin`):
 
@@ -43,7 +43,7 @@ Program), it is signed with that and the hardened runtime, ready to notarize:
 
 ```sh
 SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" packaging/macos/bundle.sh
-xcrun notarytool submit target/release/PowerCommander-*-macos-*.zip --keychain-profile <profile> --wait
+xcrun notarytool submit target/release/power-commander-*-macos-*.zip --keychain-profile <profile> --wait
 xcrun stapler staple "target/release/Power Commander.app"
 ```
 

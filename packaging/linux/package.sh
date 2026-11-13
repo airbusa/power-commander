@@ -2,7 +2,7 @@
 # Builds the Linux release for this computer's processor: a folder with the
 # programs, 7-Zip, PDFium and rclone from vendor/ (fetched or built first),
 # the menu entry and icons, and a tar.gz of it, both in target/release.
-# BIN: a folder with powercommander and pc-tui (and the style helpers) already built
+# BIN: a folder with powercommander and pc (and the style helpers) already built
 # (for another distribution, in its container); unset, they are built here.
 set -eu
 cd "$(dirname "$0")/../.."
@@ -26,10 +26,10 @@ if [ -z "${BIN:-}" ]; then
 fi
 
 # Each tool's folder, its license inside, beside the programs: where pc-core's bundled.rs looks.
-DIR=target/release/powercommander-$VERSION-linux-$ARCH
+DIR=target/release/power-commander-$VERSION-linux-$ARCH
 rm -rf "$DIR"
 mkdir -p "$DIR/share/applications" "$DIR/share/icons"
-cp "$BIN/powercommander" "$BIN/pc-tui" "$DIR/"
+cp "$BIN/powercommander" "$BIN/pc" "$DIR/"
 # The desktop's look through its toolkit, KDE's Qt style and the GTK 3 theme
 # of Xfce, MATE and Cinnamon: built with the oldest Qt 6 and GTK 3 the release is for.
 for helper in pc-qtstyle:Qt6Widgets pc-gtkstyle:gtk+-3.0; do

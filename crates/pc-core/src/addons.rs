@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 /// The list of add-ons; `PC_ADDONS_MANIFEST` names another (a URL or a file), for testing.
-const MANIFEST: &str = "https://github.com/airbusa/powercommander/releases/download/addons/addons.json";
+const MANIFEST: &str = "https://github.com/airbusa/power-commander/releases/download/addons/addons.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Addon {

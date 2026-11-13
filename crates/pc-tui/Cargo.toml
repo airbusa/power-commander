@@ -5,6 +5,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# The command is short to type, as Midnight Commander's `mc`.
+[[bin]]
+name = "pc"
+path = "src/main.rs"
+
 [dependencies]
 pc-core.workspace = true
 ratatui = "0.30"
