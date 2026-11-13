@@ -63,6 +63,8 @@ pub struct Settings {
     pub date: crate::dates::DateSettings,
     /// The main window's font; the desktop's when none.
     pub font: Option<FontChoice>,
+    /// The viewer's, the editor's and comparison's fixed-width font; the desktop's when none.
+    pub fixed_font: Option<FontChoice>,
 }
 
 /// A font family and its size in points.

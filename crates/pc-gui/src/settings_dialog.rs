@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
@@ -82,9 +84,6 @@ pub fn open(
         let value = f32::from(settings.sidebar_opacity.0);
         SliderState::new().min(0.).max(100.).step(5.).default_value(value)
     });
-    // The desktop's font, which "As the system" puts back.
-    let system_font = system_font(&settings, cx);
-    let shown = settings.font.clone().unwrap_or_else(|| system_font.clone());
     let mut families: Vec<SharedString> = cx
         .text_system()
         .all_font_names()
@@ -94,12 +93,11 @@ pub fn open(
         .collect();
     families.sort_by_key(|name| name.to_lowercase());
     families.dedup();
-    let family_at = families.iter().position(|name| name.as_ref() == shown.family);
-    let fonts = cx.new(|cx| SelectState::new(SearchableVec::new(families), family_at.map(IndexPath::new), window, cx).searchable(true));
-    let size_text: SharedString = format!("{}", shown.size.round()).into();
-    let sizes_list: Vec<SharedString> = SIZES.iter().map(|&size| size.into()).collect();
-    let size_at = sizes_list.iter().position(|size| *size == size_text);
-    let sizes = cx.new(|cx| SelectState::new(sizes_list, size_at.map(IndexPath::new), window, cx));
+    let installed: HashSet<SharedString> = families.iter().cloned().collect();
+    let main = Picker::new(families.clone(), &settings.font, system_font(&settings, cx), window, cx);
+    // The fixed-width ones known: all of them until measured once (`fixed_width`).
+    let fixed_families = FIXED_WIDTH.get().cloned().unwrap_or_else(|| families.clone());
+    let fixed = Picker::new(fixed_families, &settings.fixed_font, system_fixed_font(&settings, cx), window, cx);
     let view = cx.new(|cx| {
         // Tried on the sidebar as it moves; closed, the dialog puts back what was applied.
         let trying = cx.subscribe_in(&opacity, window, |this: &mut SettingsDialog, _, event: &SliderEvent, window, cx| {
@@ -121,19 +119,22 @@ pub fn open(
                 }
             })
         };
-        let family = cx.subscribe(&fonts, |this: &mut SettingsDialog, _, event: &SelectEvent<SearchableVec<SharedString>>, cx| {
-            let SelectEvent::Confirm(Some(family)) = event else { return };
-            let size = this.draft.font.as_ref().map_or(this.system_font.size, |font| font.size);
-            this.draft.font = Some(FontChoice { family: family.to_string(), size });
-            cx.notify();
-        });
-        let size = cx.subscribe(&sizes, |this: &mut SettingsDialog, _, event: &SelectEvent<Vec<SharedString>>, cx| {
-            let SelectEvent::Confirm(Some(size)) = event else { return };
-            let Ok(size) = size.parse() else { return };
-            let family = this.draft.font.as_ref().map_or_else(|| this.system_font.family.clone(), |font| font.family.clone());
-            this.draft.font = Some(FontChoice { family, size });
-            cx.notify();
-        });
+        let pickers = [main.listen(Which::Main, cx), fixed.listen(Which::Fixed, cx)];
+        // The list of fixed-width fonts, measured once in the background.
+        let measuring = match FIXED_WIDTH.get() {
+            Some(_) => Task::ready(()),
+            None => {
+                let text_system = cx.text_system().clone();
+                cx.spawn_in(window, async move |this, cx| {
+                    let fixed = cx
+                        .background_executor()
+                        .spawn(async move { families.into_iter().filter(|family| fixed_width(&text_system, family)).collect::<Vec<_>>() })
+                        .await;
+                    let fixed = FIXED_WIDTH.get_or_init(|| fixed).clone();
+                    let _ = this.update_in(cx, |this, window, cx| this.fixed.set_families(fixed, &this.draft.fixed_font, window, cx));
+                })
+            }
+        };
         SettingsDialog {
             _inputs: [
                 bind(cx, &text_width, |s, text| {
@@ -161,15 +162,16 @@ pub fn open(
                     }
                 }),
             ],
-            _fonts: [family, size],
+            _pickers: pickers.into_iter().flatten().collect(),
+            _measuring: measuring,
             text_width,
             binary_width,
             limit,
             external,
             pattern,
-            fonts,
-            sizes,
-            system_font,
+            main,
+            fixed,
+            installed,
             opacity,
             _opacity: trying,
             _addons: cx.observe(&crate::addons::entity(cx), |_, _, cx| cx.notify()),
@@ -208,6 +210,92 @@ fn system_font(settings: &Settings, cx: &App) -> FontChoice {
     }
 }
 
+/// The desktop's fixed-width font; GPUI Kit's where it names none.
+fn system_fixed_font(settings: &Settings, cx: &App) -> FontChoice {
+    let theme = cx.theme();
+    // The theme has the system's while no other is chosen.
+    let current = (theme.mono_font_family.to_string(), pc_core::theme::font_points(f32::from(theme.mono_font_size)));
+    let (family, size) = match &settings.fixed_font {
+        None => current,
+        Some(_) => pc_core::theme::desktop_fixed_font().unwrap_or(current),
+    };
+    FontChoice { family, size: size.round() }
+}
+
+/// The fixed-width families among `families`, measured once.
+static FIXED_WIDTH: std::sync::OnceLock<Vec<SharedString>> = std::sync::OnceLock::new();
+
+/// A font whose i, W and m are as wide.
+fn fixed_width(text_system: &TextSystem, family: &str) -> bool {
+    let id = text_system.resolve_font(&font(family.to_owned()));
+    let width = |c| text_system.advance(id, px(16.), c).ok().map(|size| size.width);
+    match (width('i'), width('W'), width('m')) {
+        (Some(i), Some(w), Some(m)) => (i - w).abs() < px(0.05) && (i - m).abs() < px(0.05),
+        _ => false,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Which {
+    Main,
+    Fixed,
+}
+
+/// A font's family and size, chosen or the system's.
+struct Picker {
+    fonts: Entity<Fonts>,
+    sizes: Entity<Sizes>,
+    system: FontChoice,
+}
+
+impl Picker {
+    fn new(families: Vec<SharedString>, chosen: &Option<FontChoice>, system: FontChoice, window: &mut Window, cx: &mut App) -> Self {
+        let shown = chosen.clone().unwrap_or_else(|| system.clone());
+        let at = families.iter().position(|name| name.as_ref() == shown.family);
+        let fonts = cx.new(|cx| SelectState::new(SearchableVec::new(families), at.map(IndexPath::new), window, cx).searchable(true));
+        let size: SharedString = format!("{}", shown.size.round()).into();
+        let list: Vec<SharedString> = SIZES.iter().map(|&size| size.into()).collect();
+        let at = list.iter().position(|item| *item == size);
+        let sizes = cx.new(|cx| SelectState::new(list, at.map(IndexPath::new), window, cx));
+        Picker { fonts, sizes, system }
+    }
+
+    /// Choosing either sets the draft's font of `which`.
+    fn listen(&self, which: Which, cx: &mut Context<SettingsDialog>) -> [Subscription; 2] {
+        let family = cx.subscribe(&self.fonts, move |this: &mut SettingsDialog, _, event: &SelectEvent<SearchableVec<SharedString>>, cx| {
+            let SelectEvent::Confirm(Some(family)) = event else { return };
+            let size = this.chosen(which).map_or(this.picker(which).system.size, |font| font.size);
+            *this.chosen_mut(which) = Some(FontChoice { family: family.to_string(), size });
+            cx.notify();
+        });
+        let size = cx.subscribe(&self.sizes, move |this: &mut SettingsDialog, _, event: &SelectEvent<Vec<SharedString>>, cx| {
+            let SelectEvent::Confirm(Some(size)) = event else { return };
+            let Ok(size) = size.parse() else { return };
+            let family = this.chosen(which).map_or_else(|| this.picker(which).system.family.clone(), |font| font.family.clone());
+            *this.chosen_mut(which) = Some(FontChoice { family, size });
+            cx.notify();
+        });
+        [family, size]
+    }
+
+    /// Another list of families, the shown one kept.
+    fn set_families(&self, families: Vec<SharedString>, chosen: &Option<FontChoice>, window: &mut Window, cx: &mut App) {
+        let shown: SharedString = chosen.as_ref().map_or_else(|| self.system.family.clone(), |font| font.family.clone()).into();
+        self.fonts.update(cx, |select, cx| {
+            select.set_items(SearchableVec::new(families), window, cx);
+            select.set_selected_value(&shown, window, cx);
+        });
+    }
+
+    /// Back to the system's font.
+    fn reset(&self, window: &mut Window, cx: &mut App) {
+        let family: SharedString = self.system.family.clone().into();
+        let size: SharedString = format!("{}", self.system.size).into();
+        self.fonts.update(cx, |select, cx| select.set_selected_value(&family, window, cx));
+        self.sizes.update(cx, |select, cx| select.set_selected_value(&size, window, cx));
+    }
+}
+
 struct SettingsDialog {
     commander: WeakEntity<Commander>,
     /// As last applied.
@@ -219,17 +307,40 @@ struct SettingsDialog {
     limit: Entity<InputState>,
     external: Entity<InputState>,
     pattern: Entity<InputState>,
-    fonts: Entity<Fonts>,
-    sizes: Entity<Sizes>,
-    system_font: FontChoice,
+    main: Picker,
+    fixed: Picker,
+    /// The fonts this computer has, for the samples.
+    installed: HashSet<SharedString>,
     opacity: Entity<SliderState>,
     _inputs: [Subscription; 5],
-    _fonts: [Subscription; 2],
+    _pickers: Vec<Subscription>,
+    _measuring: Task<()>,
     _opacity: Subscription,
     _addons: Subscription,
 }
 
 impl SettingsDialog {
+    fn chosen(&self, which: Which) -> Option<&FontChoice> {
+        match which {
+            Which::Main => self.draft.font.as_ref(),
+            Which::Fixed => self.draft.fixed_font.as_ref(),
+        }
+    }
+
+    fn chosen_mut(&mut self, which: Which) -> &mut Option<FontChoice> {
+        match which {
+            Which::Main => &mut self.draft.font,
+            Which::Fixed => &mut self.draft.fixed_font,
+        }
+    }
+
+    fn picker(&self, which: Which) -> &Picker {
+        match which {
+            Which::Main => &self.main,
+            Which::Fixed => &self.fixed,
+        }
+    }
+
     /// The sidebar as last applied, whatever was tried.
     fn untry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (opacity, blur) = (self.saved.sidebar_opacity.0, self.saved.sidebar_blur.0);
@@ -375,34 +486,44 @@ impl SettingsDialog {
         ]
     }
 
-    /// The main window's font: chosen, or the desktop's.
-    fn render_font(&self, cx: &mut Context<Self>) -> GroupBox {
-        let font = self.draft.font.clone().unwrap_or_else(|| self.system_font.clone());
-        let dim = cx.theme().muted_foreground;
-        let (fonts, sizes, system) = (self.fonts.clone(), self.sizes.clone(), self.system_font.clone());
-        let state = match &self.draft.font {
+    /// A font of `which`: chosen, or the desktop's; with its sample.
+    fn render_font(&self, which: Which, cx: &mut Context<Self>) -> GroupBox {
+        let picker = self.picker(which);
+        let chosen = self.chosen(which);
+        let font = chosen.cloned().unwrap_or_else(|| picker.system.clone());
+        // Never a family this computer lacks: GPUI panics on it.
+        let family = match self.installed.contains(font.family.as_str()) {
+            true => font.family.clone(),
+            false => picker.system.family.clone(),
+        };
+        let theme = cx.theme();
+        let dim = theme.muted_foreground;
+        let system = &picker.system;
+        let state = match chosen {
             None => "The system's font".to_owned(),
             Some(_) => format!("Chosen; the system's is {}, {}", system.family, system.size),
         };
-        GroupBox::new().outline().title("Main window font").child(
+        let (title, note, id) = match which {
+            Which::Main => ("Main window font", None, "font-system"),
+            Which::Fixed => ("Viewer", Some("Fixed-width fonts only; also the editor's and file comparison's."), "fixed-system"),
+        };
+        GroupBox::new().outline().title(title).child(
             v_flex()
                 .gap_3()
+                .children(note.map(|note| div().text_color(dim).child(note)))
                 .child(
                     h_flex()
                         .gap_2()
-                        .child(div().flex_1().min_w_0().child(Select::new(&self.fonts).menu_max_h(px(320.))))
-                        .child(div().w(px(84.)).flex_none().child(Select::new(&self.sizes)))
+                        .child(div().flex_1().min_w_0().child(Select::new(&picker.fonts).menu_max_h(px(320.))))
+                        .child(div().w(px(84.)).flex_none().child(Select::new(&picker.sizes)))
                         .child(
-                            Button::new("font-system")
+                            Button::new(id)
                                 .outline()
                                 .label("As the system")
-                                .disabled(self.draft.font.is_none())
+                                .disabled(chosen.is_none())
                                 .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.draft.font = None;
-                                    let family: SharedString = system.family.clone().into();
-                                    let size: SharedString = format!("{}", system.size).into();
-                                    fonts.update(cx, |select, cx| select.set_selected_value(&family, window, cx));
-                                    sizes.update(cx, |select, cx| select.set_selected_value(&size, window, cx));
+                                    *this.chosen_mut(which) = None;
+                                    this.picker(which).reset(window, cx);
                                     cx.notify();
                                 })),
                         ),
@@ -413,9 +534,9 @@ impl SettingsDialog {
                         .p_3()
                         .rounded(px(6.))
                         .border_1()
-                        .border_color(cx.theme().border)
-                        .bg(cx.theme().background)
-                        .font_family(font.family.clone())
+                        .border_color(theme.border)
+                        .bg(theme.background)
+                        .font_family(family)
                         .text_size(px(pc_core::theme::font_pixels(font.size)))
                         .child(SAMPLE),
                 ),
@@ -815,7 +936,7 @@ impl SettingsDialog {
                 groups
             }
             "Display" => self.render_files(cx),
-            "Font" => vec![self.render_font(cx)],
+            "Font" => vec![self.render_font(Which::Main, cx), self.render_font(Which::Fixed, cx)],
             "Date" => self.render_date(cx),
             "Language" => vec![self.render_language()],
             "Edit/View" => vec![self.render_viewer(cx), self.render_editor(cx)],

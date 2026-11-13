@@ -10,7 +10,20 @@ use gpui_kit::component::{ActiveTheme, StateImages, ToolkitControls};
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use gpui_kit::{Global, RenderImage, Window};
 use gpui_kit::{App, Hsla, hsla, px, rgb};
+use pc_core::settings::FontChoice;
 use pc_core::theme::{ControlColors, ControlStyle, Palette};
+
+/// The fixed-width font chosen in Settings > Font, for `apply`: the
+/// viewer's, the editor's and comparison's. The desktop's when none.
+pub struct FixedFont(pub Option<FontChoice>);
+
+impl gpui_kit::Global for FixedFont {}
+
+/// GPUI panics laying out text in a family the system lacks: one chosen on
+/// another machine, or since uninstalled, is not used.
+pub fn installed(family: &str, cx: &App) -> bool {
+    cx.text_system().all_font_names().iter().any(|name| name == family)
+}
 
 #[derive(Clone, Copy)]
 pub struct PanelColors {
@@ -44,9 +57,19 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
     let list = palette.list();
     let menu = palette.menu();
     KitTheme::change(mode, None, cx);
+    let font = palette.font.clone().filter(|font| installed(font, cx));
+    let fixed = match cx.try_global::<FixedFont>().and_then(|fixed| fixed.0.clone()) {
+        Some(font) => Some((font.family, font.size)),
+        None => pc_core::theme::desktop_fixed_font(),
+    };
+    let fixed = fixed.filter(|(family, _)| installed(family, cx));
     KitTheme::update(cx, |kit| {
-        if let Some(font) = &palette.font {
-            kit.font_family = font.clone().into();
+        if let Some(font) = font {
+            kit.font_family = font.into();
+        }
+        if let Some((family, points)) = fixed {
+            kit.mono_font_family = family.into();
+            kit.mono_font_size = px(pc_core::theme::font_pixels(points));
         }
         // The app writes in `text_sm`, 0.875 of the base: that is the desktop's size.
         if let Some(size) = palette.font_size {

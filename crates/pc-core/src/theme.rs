@@ -234,6 +234,31 @@ fn desktop_font() -> Option<String> {
     FONT.get_or_init(|| find().map(real_family)).clone()
 }
 
+/// The desktop's fixed-width font, its family and size in points: KDE's
+/// "fixed", GNOME's, Cinnamon's and MATE's monospace font, Xfce's.
+pub fn desktop_fixed_font() -> Option<(String, f32)> {
+    static FONT: OnceLock<Option<(String, f32)>> = OnceLock::new();
+    let find = || -> Option<(String, f32)> {
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        if on_kde() {
+            let entry = crate::desktop::kde_setting("General", "fixed")?;
+            let points = qt_font_pixels(&entry).map_or(10., font_points);
+            return Some((entry.split(',').next()?.trim().to_owned(), points));
+        }
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        let pango = match on_desktop("XFCE") {
+            true => crate::desktop::xfce_setting("MonospaceFontName"),
+            false => interface_setting("monospace-font-name"),
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+        let pango: Option<String> = None;
+        let pango = pango?;
+        let points = pango.rsplit_once(' ').and_then(|(_, size)| size.parse().ok()).unwrap_or(10.);
+        Some((font_family(&pango), points))
+    };
+    FONT.get_or_init(|| find().map(|(family, points)| (real_family(family), points))).clone()
+}
+
 /// The family a fontconfig alias ("Sans", Cinnamon's) stands for, which GPUI needs.
 fn real_family(family: String) -> String {
     let alias = ["sans", "sans-serif", "sans serif", "serif", "monospace", "mono"].contains(&family.to_lowercase().as_str());

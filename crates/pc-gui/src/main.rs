@@ -460,6 +460,7 @@ impl Commander {
                 window.push_notification(Notification::error(text).autohide(false), cx)
             });
         }
+        cx.set_global(appearance::FixedFont(settings.fixed_font.clone()));
         let colors = appearance::apply(&palette(&settings, window), cx);
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         appearance::draw_toolkit_controls(window, cx);
@@ -590,7 +591,9 @@ impl Commander {
             }
             cx.refresh_windows();
         }
-        let look = (settings.appearance, &settings.font) != (self.settings.appearance, &self.settings.font);
+        let look = (settings.appearance, &settings.font, &settings.fixed_font)
+            != (self.settings.appearance, &self.settings.font, &self.settings.fixed_font);
+        cx.set_global(appearance::FixedFont(settings.fixed_font.clone()));
         let menu = settings.menu != self.settings.menu;
         self.settings = settings;
         if menu {
