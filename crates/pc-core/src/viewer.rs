@@ -904,7 +904,7 @@ pub struct Shown {
     markdown: bool,
     /// An EPUB or FB2, which the viewer renders.
     pub book: bool,
-    /// The front end plays video and sound, and shows office documents.
+    /// The front end plays video and sound.
     plays: bool,
 }
 
@@ -959,7 +959,7 @@ impl Shown {
             && std::fs::metadata(path)?.len() <= MARKDOWN_LIMIT;
         let book = self.markdown && crate::ebook::is_book(path);
         let detected = detect(path)?;
-        let office = match self.plays && crate::pdf::available() {
+        let office = match crate::pdf::available() {
             true => crate::convert::converter_for(path),
             false => None,
         };
