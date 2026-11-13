@@ -803,7 +803,7 @@ impl SettingsDialog {
             let presence = state.presence.get(&addon).cloned().unwrap_or(Presence::Missing);
             let installed = match &presence {
                 Presence::Ours(version) => version.clone(),
-                Presence::Elsewhere(_) => "the system's".to_owned(),
+                Presence::Elsewhere(_) => "comes with Power Commander".to_owned(),
                 Presence::Missing => "none".to_owned(),
             };
             let online = match &offered {
@@ -892,9 +892,18 @@ impl SettingsDialog {
         };
         let checking = state.checking;
         groups.push(
-            GroupBox::new().outline().title("Updates").child(
+            GroupBox::new().outline().title("Offers and updates").child(
                 v_flex()
                     .gap_2()
+                    .child(
+                        Checkbox::new("addon-never-offer")
+                            .label("Never offer add-ons when a file needs one")
+                            .checked(self.draft.never_offer_addons)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.draft.never_offer_addons = *checked;
+                                cx.notify();
+                            })),
+                    )
                     .child(
                         Checkbox::new("addon-updates")
                             .label("Look for add-on updates at start and daily, and offer them")

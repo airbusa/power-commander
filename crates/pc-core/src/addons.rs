@@ -73,22 +73,23 @@ impl Addon {
         }
     }
 
-    /// Ours, the system's or none.
+    /// The add-on, else shipped or built from source, else none; the system's copy is not used.
     pub fn presence(self) -> Presence {
         if let Some(version) = installed_version(self) {
             return Presence::Ours(version);
         }
-        let elsewhere = match self {
-            Addon::Office => crate::convert::system_tool(),
-            // Linux also has the system's.
-            Addon::Media => crate::bundled::builtin("mpv", self.files()[0]).or_else(|| {
-                (crate::media::BUNDLED.is_none() && crate::media::available()).then(|| PathBuf::from("libmpv"))
-            }),
-            Addon::Cloud => crate::bundled::builtin("rclone", self.files()[0])
-                .or_else(|| crate::convert::on_path(self.files()[0])),
-        };
-        elsewhere.map_or(Presence::Missing, Presence::Elsewhere)
+        let builtin = crate::bundled::builtin(self.id(), self.files()[0]);
+        builtin.map_or(Presence::Missing, Presence::Elsewhere)
     }
+}
+
+/// The missing add-on that would show this file: libmpv a video or sound, the Craft tools an office document.
+pub fn wanted_for(path: &Path) -> Option<Addon> {
+    if crate::media::is_media(path) {
+        return (!crate::media::available()).then_some(Addon::Media);
+    }
+    let office = crate::convert::is_office(path) && crate::pdf::available();
+    (office && crate::convert::converter_for(path).is_none()).then_some(Addon::Office)
 }
 
 /// What comes with the app, shown beside the add-ons: the same facts, no download.
@@ -146,7 +147,7 @@ impl Builtin {
 pub enum Presence {
     /// Installed as an add-on, this version.
     Ours(String),
-    /// The system's, or one shipped with the app or built from source.
+    /// Shipped with the app or built from source.
     Elsewhere(PathBuf),
     Missing,
 }

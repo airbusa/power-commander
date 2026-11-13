@@ -67,6 +67,10 @@ pub struct Settings {
     pub fixed_font: Option<FontChoice>,
     /// The Show menu's last custom filter, which it offers again ("*.*" before one).
     pub last_filter: String,
+    /// The sidebar's Places > Bookmarks: folders dropped there.
+    pub bookmarks: Vec<PathBuf>,
+    /// No dialog offers a missing add-on when its kind of file is opened.
+    pub never_offer_addons: bool,
 }
 
 /// A font family and its size in points.

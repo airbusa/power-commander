@@ -58,15 +58,12 @@ fn rclone_command(program: &Path) -> Command {
     command
 }
 
-/// Ours (vendor/rclone, or `rclone/` beside the app), else the system's.
+/// Ours (the add-on, vendor/rclone, or `rclone/` beside the app), never the system's.
 fn rclone() -> io::Result<PathBuf> {
-    let name = if cfg!(windows) { "rclone.exe" } else { "rclone" };
-    let ours = crate::bundled::path("rclone", name);
+    let ours = crate::bundled::path("rclone", if cfg!(windows) { "rclone.exe" } else { "rclone" });
     match ours.is_file() {
         true => Ok(ours),
-        // shortcut: no download on first use yet; releases ship it, source builds run vendor/rclone/build.sh.
-        false => crate::convert::on_path(name)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "rclone is missing: Settings > Add-ons downloads it")),
+        false => Err(io::Error::new(io::ErrorKind::NotFound, "rclone is missing: Settings > Add-ons downloads it")),
     }
 }
 

@@ -521,13 +521,11 @@ struct Mpv {
     _library: libloading::Library,
 }
 
-/// Linux's, after ours (an add-on, vendor/mpv); macOS and Windows have none.
-const NAMES: &[&str] = &["libmpv.so.2", "libmpv.so"];
-/// The shipped one, and what makes it.
-pub(crate) const BUNDLED: Option<(&str, &str)> = match () {
-    _ if cfg!(target_os = "macos") => Some(("libmpv.2.dylib", "build.sh")),
-    _ if cfg!(windows) => Some(("libmpv-2.dll", "fetch.bat")),
-    _ => None,
+/// Ours (an add-on, or shipped), never the system's, and what makes it from source.
+const BUNDLED: (&str, &str) = match () {
+    _ if cfg!(target_os = "macos") => ("libmpv.2.dylib", "build.sh"),
+    _ if cfg!(windows) => ("libmpv-2.dll", "fetch.bat"),
+    _ => ("libmpv.so.2", "build.sh"),
 };
 
 /// Loaded once found; tried again while missing, as an add-on may come meanwhile.
@@ -541,22 +539,13 @@ fn library() -> Result<&'static Mpv, String> {
 }
 
 fn load() -> Result<Mpv, String> {
-    let library = if let Some((name, script)) = BUNDLED {
-        let path = crate::bundled::path("mpv", name);
-        if !path.exists() {
-            return Err(format!("libmpv is missing: Settings > Add-ons downloads it (a source build: vendor/mpv/{script})"));
-        }
-        // SAFETY: loading libmpv runs only its libraries' initialisers.
-        unsafe { libloading::Library::new(&path) }.map_err(|err| format!("libmpv: {err}"))?
-    } else {
-        let ours = crate::bundled::path("mpv", NAMES[0]);
-        let ours = ours.exists().then_some(ours.into_os_string());
-        // SAFETY: as above.
-        ours.into_iter()
-            .chain(NAMES.iter().map(Into::into))
-            .find_map(|name| unsafe { libloading::Library::new(name) }.ok())
-            .ok_or_else(|| format!("libmpv is not installed ({}): Settings > Add-ons downloads it", NAMES[0]))?
-    };
+    let (name, script) = BUNDLED;
+    let path = crate::bundled::path("mpv", name);
+    if !path.exists() {
+        return Err(format!("libmpv is missing: Settings > Add-ons downloads it (a source build: vendor/mpv/{script})"));
+    }
+    // SAFETY: loading libmpv runs only its libraries' initialisers.
+    let library = unsafe { libloading::Library::new(&path) }.map_err(|err| format!("libmpv: {err}"))?;
     /// A function of libmpv's, typed as the header says.
     fn get<T: Copy>(library: &libloading::Library, name: &str) -> Result<T, String> {
         // SAFETY: the types above follow libmpv's headers.

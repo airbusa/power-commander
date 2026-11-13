@@ -12,9 +12,11 @@ use crate::remote::{Address, Scheme};
 pub enum SidebarTab {
     #[default]
     Tree,
-    Favourites,
-    /// Shown while KDE Connect has paired devices.
-    Devices,
+    #[serde(alias = "Favourites")]
+    Connections,
+    /// Bookmarks, drives, cloud and devices.
+    #[serde(alias = "Devices")]
+    Places,
 }
 
 struct Node {
@@ -190,9 +192,9 @@ fn subfolders(path: &Path, hidden: bool) -> Vec<Node> {
     nodes
 }
 
-/// A server of the Favourites tab.
+/// A server of the Connections section.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Favourite {
+pub struct Server {
     pub name: String,
     pub detail: String,
     /// Its place among the saved; none for a host of `~/.ssh/config`.
@@ -202,11 +204,11 @@ pub struct Favourite {
 
 /// The servers by protocol: the saved, then `~/.ssh/config`'s hosts under
 /// SFTP. Protocols with none are left out.
-pub fn favourites(saved: &[Connection], hosts: &[String]) -> Vec<(Scheme, Vec<Favourite>)> {
+pub fn servers(saved: &[Connection], hosts: &[String]) -> Vec<(Scheme, Vec<Server>)> {
     let groups = Scheme::ALL.map(|scheme| {
         let saved = saved.iter().enumerate().filter(|(_, c)| c.scheme == scheme);
-        let mut servers: Vec<Favourite> = saved
-            .map(|(ix, connection)| Favourite {
+        let mut servers: Vec<Server> = saved
+            .map(|(ix, connection)| Server {
                 name: connection.name.clone(),
                 detail: connection.url().split_once("://").map_or_else(String::new, |(_, rest)| rest.to_owned()),
                 saved: Some(ix),
@@ -214,7 +216,7 @@ pub fn favourites(saved: &[Connection], hosts: &[String]) -> Vec<(Scheme, Vec<Fa
             })
             .collect();
         if scheme == Scheme::Sftp {
-            servers.extend(hosts.iter().map(|host| Favourite {
+            servers.extend(hosts.iter().map(|host| Server {
                 name: host.clone(),
                 detail: "~/.ssh/config".to_owned(),
                 saved: None,
@@ -259,10 +261,21 @@ mod tests {
     #[test]
     fn groups_servers_by_protocol() {
         let ftp = Connection { name: "nas".into(), scheme: Scheme::Ftp, host: "nas.lan".into(), user: Some("me".into()), ..Default::default() };
-        let groups = favourites(&[ftp], &["homelab".into()]);
+        let groups = servers(&[ftp], &["homelab".into()]);
         let shown: Vec<_> = groups.iter().map(|(scheme, servers)| (*scheme, servers.len())).collect();
         assert_eq!(shown, [(Scheme::Sftp, 1), (Scheme::Ftp, 1)]);
         assert_eq!(groups[1].1[0].detail, "me@nas.lan");
         assert_eq!((groups[1].1[0].saved, groups[0].1[0].saved), (Some(0), None));
+    }
+
+    /// Settings and sessions saved under the old names still load.
+    #[test]
+    fn reads_the_old_names() {
+        use crate::menu::Command;
+        let tabs: Vec<SidebarTab> = serde_json::from_str(r#"["Favourites", "Devices"]"#).unwrap();
+        assert_eq!(tabs, [SidebarTab::Connections, SidebarTab::Places]);
+        let keys: std::collections::BTreeMap<Command, String> =
+            serde_json::from_str(r#"{"SidebarFavourites": "a", "DirectoryHotlist": "b"}"#).unwrap();
+        assert_eq!(keys.into_keys().collect::<Vec<_>>(), [Command::Bookmarks, Command::SidebarConnections]);
     }
 }

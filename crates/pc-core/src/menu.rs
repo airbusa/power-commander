@@ -47,7 +47,9 @@ pub enum Command {
     VolumeLabel,
     SystemInformation,
     SynchronizeDirs,
-    DirectoryHotlist,
+    /// Places' bookmarks in the sidebar: Total Commander's Directory Hotlist.
+    #[serde(alias = "DirectoryHotlist")]
+    Bookmarks,
     GoBack,
     OpenTerminal,
     BranchView,
@@ -61,7 +63,9 @@ pub enum Command {
     /// Shows or hides the sidebar's tab.
     #[serde(alias = "Tree")]
     SidebarTree,
-    SidebarFavourites,
+    #[serde(alias = "SidebarFavourites")]
+    SidebarConnections,
+    SidebarPlaces,
     ToggleSidebar,
     ThumbnailView,
     QuickViewPanel,
@@ -88,6 +92,7 @@ pub enum Command {
     EditExternally,
     ToggleMark,
     OperationQueue,
+    /// Gone with the Net menu; kept so old settings files load.
     ConnectToServer,
     Disconnect,
     Copy,
@@ -153,7 +158,7 @@ const SEP: Item = Item::Separator;
 
 use Command::*;
 
-/// Total Commander's menus in its order, Go and Net added; long lists in
+/// Total Commander's menus in its order, Go added; long lists in
 /// submenus, every command that works on one.
 pub const MENUS: &[Menu] = &[
     Menu {
@@ -256,7 +261,7 @@ pub const MENUS: &[Menu] = &[
             cmd("Root Folder", GoToRoot),
             cmd("Desktop Folder", OpenDesktopFolder),
             SEP,
-            cmd("Directory Hotlist", DirectoryHotlist),
+            cmd("Bookmarks", Bookmarks),
             cmd("CD Tree...", CdTree),
         ],
     },
@@ -278,10 +283,6 @@ pub const MENUS: &[Menu] = &[
         ],
     },
     Menu {
-        label: "Net",
-        items: &[cmd("Connect to Server...", ConnectToServer), cmd("Disconnect", Disconnect)],
-    },
-    Menu {
         label: "Show",
         items: &[
             cmd("Brief", Brief),
@@ -294,7 +295,8 @@ pub const MENUS: &[Menu] = &[
                     cmd("Show Sidebar", ToggleSidebar),
                     SEP,
                     cmd("Folders", SidebarTree),
-                    cmd("Connections", SidebarFavourites),
+                    cmd("Connections", SidebarConnections),
+                    cmd("Places", SidebarPlaces),
                 ],
             },
             cmd("Quick View Panel", QuickViewPanel),
@@ -379,6 +381,7 @@ pub const BUTTON_BAR: &[Item] = &[
 
 /// Commands on no menu or button.
 pub const OTHER: &[Item] = &[
+    cmd("Disconnect from the server", Disconnect),
     cmd("Show in the left panel", OpenInLeftPanel),
     cmd("Show in the right panel", OpenInRightPanel),
     cmd("Open the folder in a new tab of the other panel", OpenInOtherNewTab),
@@ -392,7 +395,8 @@ const FULL_NAMES: &[(Command, &str)] = &[
     (Brief, "Brief View"),
     (Full, "Full View"),
     (SidebarTree, "Sidebar: Folders"),
-    (SidebarFavourites, "Sidebar: Connections"),
+    (SidebarConnections, "Sidebar: Connections"),
+    (SidebarPlaces, "Sidebar: Places"),
     (ToggleSidebar, "Sidebar: show or hide"),
     (AllFiles, "Show All Files"),
     (Programs, "Show Programs"),

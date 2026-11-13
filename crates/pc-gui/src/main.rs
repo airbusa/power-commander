@@ -721,6 +721,7 @@ impl Commander {
         };
         let around = (how == remote::Open::View && origin.is_local()).then(|| panel.files_around());
         let (settings, bounds, name) = (self.settings.clone(), Over::window(window, cx), origin.name());
+        let commander = cx.entity().downgrade();
         // The file's own viewer or editor, by its association.
         let entry = panel
             .current_entry()
@@ -747,7 +748,19 @@ impl Commander {
                 (_, None) if let Some(program) = &program => edit::edit_externally(program, &file),
                 (remote::Open::View, _) => {
                     let (files, at) = around.unwrap_or_else(|| (vec![file], 0));
-                    viewer::open(files, at, settings.viewer, bounds, cx)
+                    let wanted = pc_core::addons::wanted_for(&files[at]).filter(|_| !settings.never_offer_addons);
+                    let Some(addon) = wanted else {
+                        return viewer::open(files, at, settings.viewer, bounds, cx);
+                    };
+                    let shown = files[at].file_name().map_or_else(|| name.clone(), |file| file.to_string_lossy().into_owned());
+                    let viewer = settings.viewer.clone();
+                    let go_on = move |window: &mut Window, cx: &mut App| {
+                        if let Err(err) = viewer::open(files.clone(), at, viewer.clone(), bounds, cx) {
+                            window.push_notification(Notification::error(err.to_string()), cx);
+                        }
+                    };
+                    addons::offer(addon, &shown, commander.clone(), window, cx, go_on);
+                    Ok(())
                 }
                 (remote::Open::Edit | remote::Open::External, upload) => {
                     editor::open(file, settings.editor.clone(), upload, bounds, cx)
@@ -1911,10 +1924,6 @@ impl Render for Commander {
                     Command::CutToClipboard => this.copy_files(true, window, cx),
                     Command::PasteFromClipboard => this.paste_files(window, cx),
                     Command::Move => this.transfer(ops::Kind::Move, window, cx),
-                    Command::ConnectToServer => {
-                        let side = this.active;
-                        connections_dialog::open(cx.entity().downgrade(), side, window, cx)
-                    }
                     Command::Disconnect => this.disconnect(window, cx),
                     Command::QuickViewPanel => this.toggle_quick_view(window, cx),
                     Command::Brief => this.set_view(View::Brief, cx),
@@ -1925,12 +1934,14 @@ impl Render for Commander {
                         cx.notify()
                     }
                     Command::SidebarTree => this.toggle_sidebar(SidebarTab::Tree, window, cx),
+                    Command::SidebarPlaces => this.toggle_sidebar(SidebarTab::Places, window, cx),
+                    Command::Bookmarks => this.show_bookmarks(window, cx),
                     Command::ToggleSidebar => {
                         let tab = this.sidebar.tab.unwrap_or(this.sidebar.last);
                         this.toggle_sidebar(tab, window, cx)
                     }
-                    Command::SidebarFavourites => {
-                        this.toggle_sidebar(SidebarTab::Favourites, window, cx)
+                    Command::SidebarConnections => {
+                        this.toggle_sidebar(SidebarTab::Connections, window, cx)
                     }
                     Command::OperationQueue => {
                         transfer::open_queue(this.transfers.queue.clone(), window, cx)

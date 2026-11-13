@@ -1,6 +1,6 @@
 //! The sidebar: its sections as an accordion, one open and filling it;
 //! this computer's folders as a tree that follows the active panel, the
-//! servers by protocol, and devices.
+//! servers by protocol, and Places: bookmarks, drives and devices.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -21,6 +21,7 @@ use pc_core::remote::{Address, Scheme};
 use pc_core::sidebar::{self, FolderTree, SidebarTab};
 use pc_core::{icons, theme};
 
+use crate::drag_drop::Dragged;
 use crate::{Commander, connections_dialog};
 
 pub(crate) const WIDTH: f32 = 260.;
@@ -55,7 +56,7 @@ pub(crate) struct Sidebar {
     hosts: Vec<String>,
     closed: Vec<Scheme>,
     selected: Option<(Scheme, usize)>,
-    /// KDE Connect's paired devices; with no volumes either, their tab hides.
+    /// KDE Connect's paired devices.
     devices: Vec<Device>,
     volumes: Vec<Volume>,
     /// The folders of the devices mounted, by id.
@@ -97,7 +98,8 @@ impl Sidebar {
     pub(crate) fn shows(&self, command: Command) -> bool {
         match command {
             Command::SidebarTree => self.tab == Some(SidebarTab::Tree),
-            Command::SidebarFavourites => self.tab == Some(SidebarTab::Favourites),
+            Command::SidebarConnections => self.tab == Some(SidebarTab::Connections),
+            Command::SidebarPlaces => self.tab == Some(SidebarTab::Places),
             Command::ToggleSidebar => self.tab.is_some(),
             _ => false,
         }
@@ -106,10 +108,6 @@ impl Sidebar {
     /// Reads the open folders again; `hidden` shows dot folders.
     pub(crate) fn refresh(&mut self, hidden: bool) {
         self.tree.refresh(hidden);
-    }
-
-    fn has_devices(&self) -> bool {
-        !self.devices.is_empty() || !self.volumes.is_empty()
     }
 
     pub(crate) fn reload_servers(&mut self) {
@@ -271,17 +269,15 @@ impl Commander {
             self.follow_active();
         }
         let background = self.colors.window.opacity(self.sidebar.tint.unwrap_or(1.));
-        let mut sections = vec![
+        let sections = [
             (SidebarTab::Tree, "tree.svg", "Folders"),
-            (SidebarTab::Favourites, "folder-server.svg", "Connections"),
+            (SidebarTab::Connections, "folder-server.svg", "Connections"),
+            (SidebarTab::Places, "folder-favicon.svg", "Places"),
         ];
-        if self.sidebar.has_devices() {
-            sections.push((SidebarTab::Devices, "folder-mobile.svg", "Devices"));
-        }
         let mut accordion = v_flex().h_full().flex_1().min_w_0();
         for (at, (which, icon, name)) in sections.into_iter().enumerate() {
             let open = tab == which;
-            let button = (which == SidebarTab::Favourites).then(|| self.new_favourite_button(cx));
+            let button = (which == SidebarTab::Connections).then(|| self.new_connection_button(cx));
             let theme = cx.theme();
             let chevron = match open {
                 true => IconName::ChevronDown,
@@ -307,8 +303,8 @@ impl Commander {
             if open || leaving {
                 let content = match which {
                     SidebarTab::Tree => self.render_tree(cx).into_any_element(),
-                    SidebarTab::Favourites => self.render_favourites(cx).into_any_element(),
-                    SidebarTab::Devices => self.render_devices(cx).into_any_element(),
+                    SidebarTab::Connections => self.render_connections(cx).into_any_element(),
+                    SidebarTab::Places => self.render_places(cx).into_any_element(),
                 };
                 let content = v_flex().flex_1().min_h_0().overflow_hidden().pb_1().child(content);
                 accordion = match self.sidebar.leaving.is_some() {
@@ -478,9 +474,6 @@ impl Commander {
         self.sidebar.device_folders.retain(|id, _| browsable(id));
         self.sidebar.devices = devices;
         self.sidebar.volumes = volumes;
-        if !self.sidebar.has_devices() && self.sidebar.tab == Some(SidebarTab::Devices) {
-            self.sidebar.tab = Some(SidebarTab::Tree);
-        }
         cx.notify();
     }
 
@@ -620,10 +613,11 @@ impl Commander {
         .detach();
     }
 
-    fn render_devices(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_places(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let panel = self.panels[self.active].tabs.current();
         let here = panel.remote().is_none().then(|| panel.folder().to_owned());
-        let mut list = v_flex().id("devices").flex_1().min_h_0().overflow_y_scroll().px_1();
+        let mut list = v_flex().id("places").flex_1().min_h_0().overflow_y_scroll().px_1();
+        list = list.child(self.render_bookmarks(here.as_deref(), cx));
         // The deepest volume the active panel is in.
         let inside: Option<PathBuf> = here.as_ref().and_then(|here| {
             let mounted = self.sidebar.volumes.iter().filter_map(|volume| volume.path.as_ref());
@@ -649,7 +643,7 @@ impl Commander {
             list = list.child(self.render_volume(*ix, volume, inside.as_deref(), cx));
         }
         if !phones.is_empty() || !self.sidebar.devices.is_empty() {
-            list = list.child(section("Phones", cx));
+            list = list.child(section("Devices", cx));
         }
         for (ix, volume) in &phones {
             list = list.child(self.render_volume(*ix, volume, inside.as_deref(), cx));
@@ -728,8 +722,107 @@ impl Commander {
         v_flex().size_full().child(list)
     }
 
-    /// On the Favourites header: a new one.
-    fn new_favourite_button(&self, cx: &mut Context<Self>) -> Button {
+    /// Places > Bookmarks, shown also when empty: where folders are dropped.
+    fn render_bookmarks(&self, here: Option<&Path>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme();
+        let target = theme.accent.opacity(0.35);
+        let mut block = v_flex()
+            .id("bookmarks")
+            .rounded(theme.radius)
+            .drag_over::<Dragged>(move |style, _, _, _| style.bg(target))
+            .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(target))
+            .on_drop(cx.listener(|this, dragged: &Dragged, window, cx| {
+                let folders = this.dragged_folders(*dragged);
+                this.add_bookmarks(folders, window, cx)
+            }))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.add_bookmarks(paths.paths().to_vec(), window, cx)
+            }))
+            .child(section("Bookmarks", cx));
+        if self.settings.bookmarks.is_empty() {
+            let hint = div().px_1().pb_1().text_xs().text_color(theme.muted_foreground);
+            block = block.child(hint.child("Drop folders here."));
+        }
+        let home = std::env::home_dir();
+        for (ix, path) in self.settings.bookmarks.iter().enumerate() {
+            let theme = cx.theme();
+            let name = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
+            let parent = path.parent().map(|parent| match home.as_deref().and_then(|home| parent.strip_prefix(home).ok()) {
+                Some(inside) if inside.as_os_str().is_empty() => "~".to_owned(),
+                Some(inside) => format!("~/{}", inside.display()),
+                None => parent.display().to_string(),
+            });
+            let selected = here == Some(path.as_path());
+            let icon = icons::material().icon(&name, true, !theme.mode.is_dark());
+            let (opened, commander) = (path.clone(), cx.entity().downgrade());
+            block = block.child(
+                h_flex()
+                    .id(("bookmark", ix))
+                    .h(ROW + px(2.))
+                    .px_1()
+                    .gap_1p5()
+                    .rounded(theme.radius)
+                    .cursor_pointer()
+                    .when(selected, |el| el.bg(self.colors.sidebar_selection))
+                    .when(!selected, |el| el.hover(|style| style.bg(theme.foreground.opacity(0.06))))
+                    .child(img(format!("material/{icon}")).size(px(16.)).flex_none())
+                    .child(div().flex_none().max_w(relative(0.6)).truncate().child(name))
+                    .child(div().flex_1().min_w_0().truncate().text_xs().text_color(theme.muted_foreground).children(parent))
+                    .on_click(cx.listener(move |this, _, window, cx| this.open_folder(opened.clone(), window, cx)))
+                    .context_menu(move |menu, _, _| {
+                        let commander = commander.clone();
+                        menu.item(PopupMenuItem::new("Remove from Bookmarks").on_click(move |_, window, cx| {
+                            let _ = commander.update(cx, |this, cx| {
+                                this.settings.bookmarks.remove(ix);
+                                this.save_settings(window, cx);
+                                cx.notify();
+                            });
+                        }))
+                    }),
+            );
+        }
+        block
+    }
+
+    /// A panel's dragged folders, this computer's only.
+    fn dragged_folders(&self, dragged: Dragged) -> Vec<PathBuf> {
+        let panel = self.panels[dragged.side].tabs.current();
+        if panel.remote().is_some() || panel.in_archive() {
+            return Vec::new();
+        }
+        let entries = panel.dragged(dragged.row);
+        entries.iter().filter(|e| e.is_dir && !e.is_parent()).map(|e| panel.folder().join(&e.name)).collect()
+    }
+
+    /// The folders among `paths` bookmarked, once each; files are not.
+    fn add_bookmarks(&mut self, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        let folders: Vec<PathBuf> = paths.into_iter().filter(|path| path.is_dir()).collect();
+        if folders.is_empty() {
+            window.push_notification(Notification::warning("Only this computer's folders can be bookmarked."), cx);
+            return;
+        }
+        let bookmarks = &mut self.settings.bookmarks;
+        let before = bookmarks.len();
+        for folder in folders {
+            if !bookmarks.contains(&folder) {
+                bookmarks.push(folder);
+            }
+        }
+        if bookmarks.len() != before {
+            self.save_settings(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Go > Bookmarks: the sidebar on Places.
+    pub(crate) fn show_bookmarks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar.tab != Some(SidebarTab::Places) {
+            self.toggle_sidebar(SidebarTab::Places, window, cx);
+        }
+    }
+
+    /// On the Connections header: a new one.
+    fn new_connection_button(&self, cx: &mut Context<Self>) -> Button {
         Button::new("server-new")
             .ghost()
             .xsmall()
@@ -738,10 +831,10 @@ impl Commander {
             .on_click(cx.listener(|this, _, window, cx| this.edit_server(None, false, window, cx)))
     }
 
-    fn render_favourites(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_connections(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme();
-        let groups = sidebar::favourites(&self.sidebar.servers, &self.sidebar.hosts);
-        let mut list = v_flex().id("favourites").flex_1().min_h_0().overflow_y_scroll().px_1();
+        let groups = sidebar::servers(&self.sidebar.servers, &self.sidebar.hosts);
+        let mut list = v_flex().id("connections").flex_1().min_h_0().overflow_y_scroll().px_1();
         if groups.is_empty() {
             list = list.child(
                 div()
@@ -788,7 +881,7 @@ impl Commander {
         v_flex().size_full().pt_1().child(list)
     }
 
-    fn render_server(&self, scheme: Scheme, ix: usize, server: sidebar::Favourite, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_server(&self, scheme: Scheme, ix: usize, server: sidebar::Server, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme();
         let selected = self.sidebar.selected == Some((scheme, ix));
         let commander = cx.entity().downgrade();

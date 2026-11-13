@@ -1,14 +1,17 @@
 //! The add-ons' downloads and updates (pc_core::addons) for Settings >
 //! Add-ons: the list looked up at start and daily, updates offered in a
-//! notification, installs run in the background with their progress.
+//! notification, installs run in the background with their progress; a
+//! missing one offered when a file needs it.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::{WindowExt, h_flex, v_flex};
 use gpui_kit::*;
 use pc_core::addons::{Addon, Manifest, Presence};
 
@@ -135,6 +138,63 @@ fn offer_updates(updates: Vec<(Addon, String)>, cx: &mut App) {
         }),
         cx,
     );
+}
+
+/// `name` needs the missing `addon`: Yes shows Settings > Add-ons; No, and
+/// Never show again (which the settings keep), `go_on` without it.
+pub fn offer(
+    addon: Addon,
+    name: &str,
+    commander: WeakEntity<crate::Commander>,
+    window: &mut Window,
+    cx: &mut App,
+    go_on: impl Fn(&mut Window, &mut App) + 'static,
+) {
+    let text = format!("{name} needs an add-on that is not installed: {}. Download it in Settings > Add-ons?", addon.name());
+    let go_on: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(go_on);
+    window.open_dialog(cx, move |dialog, _, _| {
+        let (yes, no, never, cancel) = (commander.clone(), go_on.clone(), go_on.clone(), go_on.clone());
+        let commander = commander.clone();
+        dialog
+            .title("Add-on")
+            .width(px(480.))
+            .overlay_closable(false)
+            .on_cancel(move |_, window, cx| {
+                cancel(window, cx);
+                true
+            })
+            .child(
+                v_flex()
+                    .gap_3()
+                    .text_sm()
+                    .child(div().whitespace_normal().child(text.clone()))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .justify_end()
+                            .child(Button::new("offer-yes").primary().label("Yes").on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                let Some(settings) = yes.upgrade().map(|this| this.read(cx).settings.clone()) else { return };
+                                let page = pc_core::settings::PAGES.iter().position(|&page| page == "Add-ons").unwrap_or(0);
+                                crate::settings_dialog::open(yes.clone(), settings, page, window, cx);
+                            }))
+                            .child(Button::new("offer-no").outline().label("No").on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                no(window, cx);
+                            }))
+                            .child(Button::new("offer-never").outline().label("Never show again").on_click(
+                                move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    let _ = commander.update(cx, |this, cx| {
+                                        this.settings.never_offer_addons = true;
+                                        this.save_settings(window, cx);
+                                    });
+                                    never(window, cx);
+                                },
+                            )),
+                    ),
+            )
+    });
 }
 
 /// Downloads and installs the add-on's current release.

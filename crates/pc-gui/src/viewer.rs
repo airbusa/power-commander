@@ -1696,7 +1696,7 @@ impl Render for Viewer {
             .when(self.quick, |el| {
                 el.on_action(|Run(command): &Run, _, cx| {
                     let general = [Command::QuickViewPanel, Command::Quit, Command::Settings, Command::Shortcuts];
-                    let sidebar = [Command::SidebarTree, Command::SidebarFavourites, Command::ToggleSidebar];
+                    let sidebar = [Command::SidebarTree, Command::SidebarConnections, Command::SidebarPlaces, Command::ToggleSidebar];
                     if general.contains(command) || sidebar.contains(command) {
                         cx.propagate();
                     }
