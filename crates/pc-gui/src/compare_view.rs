@@ -55,17 +55,8 @@ fn title(files: &[Arc<Origin>; 2]) -> String {
 }
 
 fn open(files: [Arc<Origin>; 2], over: crate::Over, cx: &mut App) -> Result<(), String> {
-    let options = WindowOptions {
-        window_bounds: Some(over.bounds),
-        display_id: over.display,
-        titlebar: Some(TitlebarOptions {
-            title: Some(title(&files).into()),
-            ..Default::default()
-        }),
-        app_id: Some("powercommander".into()),
-        icon: crate::window_icon(),
-        ..Default::default()
-    };
+    // Over the main window, as the viewer's: Wayland places it only as its child.
+    let options = crate::over_main_window(title(&files), over, cx);
     gpui_kit::open_window(options, cx, |window, cx| {
         let inputs = files.each_ref().map(|origin| {
             let path = origin.name();
