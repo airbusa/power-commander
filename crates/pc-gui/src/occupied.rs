@@ -110,6 +110,47 @@ impl Commander {
     }
 }
 
+impl Commander {
+    /// Alt+Shift+Enter, as Total Commander's: every folder shown gets its size
+    /// in the Size column, one after another in the background, no dialog;
+    /// the panel moving on stops it after the folder at hand.
+    pub(crate) fn all_folder_sizes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let side = self.active;
+        let panel = self.panels[side].tabs.current();
+        if panel.in_archive() {
+            let text = "Inside archives the Size column has the sizes already.";
+            return window.push_notification(Notification::warning(text), cx);
+        }
+        let folders: Vec<OsString> = panel.entries().iter().filter(|e| e.is_dir && !e.is_parent()).map(|e| e.name.clone()).collect();
+        let (fs, folder) = (panel.fs(), panel.folder().to_owned());
+        cx.spawn(async move |this, cx| {
+            for name in folders {
+                let (fs, path) = (fs.clone(), folder.join(&name));
+                let measured = cx.background_executor().spawn(async move {
+                    let mut space = Space::default();
+                    space::measure(&*fs, &path, &mut space, &AtomicBool::new(false), &mut |_| {}).map(|()| space.bytes)
+                });
+                let bytes = measured.await;
+                let going = this.update(cx, |this, cx| {
+                    let panel = this.panels[side].tabs.current_mut();
+                    if panel.folder() != folder {
+                        return false;
+                    }
+                    if let Ok(bytes) = bytes {
+                        panel.set_measured(name, bytes);
+                        cx.notify();
+                    }
+                    true
+                });
+                if !going.unwrap_or(false) {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+}
+
 fn found_done(this: &WeakEntity<SpaceDialog>, cx: &mut AsyncApp) -> bool {
     this.read_with(cx, |this, _| this.found.lock().unwrap().done)
         .unwrap_or(true)

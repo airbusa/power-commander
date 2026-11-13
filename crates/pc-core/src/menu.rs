@@ -16,6 +16,8 @@ pub enum Command {
     InternalAssociations,
     Properties,
     CalculateOccupiedSpace,
+    /// Every folder shown gets its size in the Size column.
+    AllFolderSizes,
     MultiRenameTool,
     SplitFile,
     CombineFiles,
@@ -199,6 +201,7 @@ pub const MENUS: &[Menu] = &[
             cmd("Properties...", Properties),
             cmd("Change Attributes...", ChangeAttributes),
             cmd("Calculate Occupied Space...", CalculateOccupiedSpace),
+            cmd("Calculate All Folder Sizes", AllFolderSizes),
             cmd("Multi-Rename Tool...", MultiRenameTool),
             cmd("Compare By Content...", CompareByContent),
             SEP,

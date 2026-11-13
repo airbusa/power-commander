@@ -2163,6 +2163,7 @@ impl Render for Commander {
                     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
                     Command::OpenTerminal => this.open_terminal(window, cx),
                     Command::CalculateOccupiedSpace => this.calculate_space(window, cx),
+                    Command::AllFolderSizes => this.all_folder_sizes(window, cx),
                     Command::ChangeAttributes => this.change_attributes(window, cx),
                     Command::Properties => this.show_properties(window, cx),
                     Command::Pack => this.pack(window, cx),
