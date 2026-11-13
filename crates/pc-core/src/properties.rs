@@ -33,6 +33,7 @@ pub struct Properties {
 /// The system's own properties dialog for files of this computer: the
 /// file manager's (Dolphin, Nautilus) by its D-Bus interface on Linux,
 /// Finder's on macOS. Blocks until it is asked; elsewhere, unsupported.
+#[cfg_attr(windows, allow(unused_variables))]
 pub fn show_in_system(paths: &[std::path::PathBuf]) -> io::Result<()> {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {

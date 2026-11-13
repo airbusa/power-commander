@@ -112,6 +112,7 @@ pub fn system() -> (u16, u16) {
 }
 
 /// As Windows sets them for a language: `hu_HU.UTF-8` is 1250 and 852.
+#[cfg(any(not(windows), test))]
 fn by_language(lang: &str) -> (u16, u16) {
     let lang = lang.to_ascii_lowercase();
     if lang.starts_with("zh_tw") || lang.starts_with("zh_hk") {
