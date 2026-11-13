@@ -12,7 +12,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::properties::{self, Kind, Properties};
 use pc_core::space::{self, Space};
-use pc_core::{grouped, human_size, local_time};
+use pc_core::{grouped, human_size};
 
 use crate::Commander;
 
@@ -154,7 +154,7 @@ impl Drop for PropertiesDialog {
 }
 
 fn time(time: Option<SystemTime>) -> Option<String> {
-    time.map(|time| local_time(time, "%Y-%m-%d %H:%M:%S"))
+    time.map(pc_core::dates::date_time_seconds)
 }
 
 impl Render for PropertiesDialog {

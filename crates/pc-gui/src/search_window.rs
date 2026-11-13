@@ -19,7 +19,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::origin::Origin;
 use pc_core::search::{self, Age, Attribute, Duplicates, Event, Found, Query, Saved, SizeOp, Text, Unit};
-use pc_core::{grouped, local_time};
+use pc_core::grouped;
 
 use crate::{Commander, MainWindow, editor, viewer};
 
@@ -932,7 +932,7 @@ impl FindFiles {
             true => "<DIR>".to_owned(),
             false => grouped(found.size),
         };
-        let time = found.modified.map(|time| local_time(time, "%Y-%m-%d %H:%M")).unwrap_or_default();
+        let time = found.modified.map(pc_core::dates::date_time).unwrap_or_default();
         h_flex()
             .id(("found", at))
             .w_full()

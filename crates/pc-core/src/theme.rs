@@ -45,6 +45,16 @@ pub struct Palette {
     pub font_size: Option<f32>,
 }
 
+/// A font's size in points as the UI's pixels: 96 to the inch, macOS's 72.
+pub fn font_pixels(points: f32) -> f32 {
+    if cfg!(target_os = "macos") { points } else { points * 96. / 72. }
+}
+
+/// The other way, for showing a size.
+pub fn font_points(pixels: f32) -> f32 {
+    if cfg!(target_os = "macos") { pixels } else { pixels * 72. / 96. }
+}
+
 /// The file lists' colours, from the look's background, text and accent.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ListColors {

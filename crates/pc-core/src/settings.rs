@@ -58,6 +58,18 @@ pub struct Settings {
     pub associations: Vec<crate::associations::Association>,
     pub keys: crate::keymap::KeySettings,
     pub addon_updates: AddonUpdates,
+    /// Folders sorted as files are, also by time; else always by name.
+    pub folders_like_files: bool,
+    pub date: crate::dates::DateSettings,
+    /// The main window's font; the desktop's when none.
+    pub font: Option<FontChoice>,
+}
+
+/// A font family and its size in points.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FontChoice {
+    pub family: String,
+    pub size: f32,
 }
 
 /// Where the menus are: a bar under the title, or behind a ☰ button in the
@@ -169,36 +181,8 @@ impl Default for ViewerSettings {
     }
 }
 
-/// The settings dialog's pages, with their depth in its tree.
-pub const PAGES: &[(u8, &str)] = &[
-    (0, "Layout"),
-    (0, "Display"),
-    (1, "Icons"),
-    (1, "Font"),
-    (1, "Color"),
-    (1, "Tabstops/Data Formats"),
-    (1, "Folder Tabs"),
-    (1, "Custom columns"),
-    (1, "View Mode"),
-    (2, "Auto Switch Mode"),
-    (1, "Language"),
-    (0, "Operation"),
-    (1, "Edit/View"),
-    (1, "Copy/Delete"),
-    (1, "Refresh"),
-    (1, "Quick Search"),
-    (1, "FTP"),
-    (1, "Plugins"),
-    (1, "Thumbnails"),
-    (1, "Log file"),
-    (1, "Ignore list"),
-    (1, "History"),
-    (0, "Packer"),
-    (1, "Zip packer"),
-    (1, "7-Zip packer"),
-    (0, "Misc."),
-    (0, "Add-ons"),
-];
+/// The settings dialog's pages.
+pub const PAGES: &[&str] = &["Layout", "Display", "Font", "Date", "Language", "Edit/View", "Add-ons"];
 
 pub fn config_dir() -> Option<PathBuf> {
     Some(dirs::config_dir()?.join("powercommander"))
@@ -210,6 +194,12 @@ impl Settings {
             hidden: self.show_hidden,
             system: self.show_system,
         }
+    }
+
+    /// What the core shows by them everywhere: dates, folders' order.
+    pub fn apply_globally(&self) {
+        crate::dates::set(&self.date);
+        crate::set_folders_like_files(self.folders_like_files);
     }
 
     pub fn load() -> io::Result<Self> {

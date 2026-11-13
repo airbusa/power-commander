@@ -578,7 +578,7 @@ fn ask(queue: &Queue, job: &JobView, window: &mut Window, cx: &mut App) {
 fn describe(meta: &Meta) -> String {
     let time = meta
         .modified
-        .map(|time| pc_core::local_time(time, "%Y-%m-%d %H:%M:%S"));
+        .map(pc_core::dates::date_time_seconds);
     format!(
         "{} bytes, {}",
         pc_core::grouped(meta.size),

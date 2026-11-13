@@ -73,6 +73,8 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
         kit.accent_foreground = color(palette.text);
         kit.ring = color(menu.hover_frame);
         kit.list_active = color(palette.selection);
+        // Selected text as the panels' cursor row: the editor's and the fields'.
+        kit.selection = color(if cfg!(target_os = "macos") { palette.selection } else { list.selected_row });
         // Column titles and the button bar.
         kit.list_head = color(list.header);
         kit.tab_bar = color(palette.window);

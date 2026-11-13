@@ -252,7 +252,6 @@ pub const MENUS: &[Menu] = &[
         items: &[
             cmd("Settings...", Settings),
             cmd("Shortcuts...", Shortcuts),
-            Item::Appearance { label: "Appearance" },
         ],
     },
 ];

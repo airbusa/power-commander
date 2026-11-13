@@ -95,7 +95,7 @@ actions!(
 include!(concat!(env!("OUT_DIR"), "/material_icons.rs"));
 
 // Lucide icons beyond GPUI Kit's own set.
-gpui_kit::assets::icon_assets!(ExtraIcons, [Server, Smartphone, Tablet, Laptop, Monitor, Tv, Usb, Menu, Cloud, CaseSensitive, WholeWord, Regex, Replace, ReplaceAll, CaseUpper, SquareDashedText, X]);
+gpui_kit::assets::icon_assets!(ExtraIcons, [PanelsTopLeft, Type, CalendarClock, Languages, FilePen, Puzzle, Server, Smartphone, Tablet, Laptop, Monitor, Tv, Usb, Menu, Cloud, CaseSensitive, WholeWord, Regex, Replace, ReplaceAll, CaseUpper, SquareDashedText, X]);
 
 /// GPUI Kit's icons, the file icons as `material/<name>.svg`, the player's as `media/`.
 struct AppAssets;
@@ -231,7 +231,7 @@ fn main() {
         .expect("open the main window");
         // Debug builds open Settings on a page by its name, for looking at it.
         #[cfg(debug_assertions)]
-        if let Some(page) = std::env::var("PC_SETTINGS_PAGE").ok().and_then(|name| settings::PAGES.iter().position(|&(_, page)| page == name)) {
+        if let Some(page) = std::env::var("PC_SETTINGS_PAGE").ok().and_then(|name| settings::PAGES.iter().position(|&page| page == name)) {
             cx.defer(move |cx| configure(Some(page), cx));
         }
     });
@@ -325,7 +325,7 @@ fn to_main_window(action: Box<dyn Action>, cx: &mut App) -> bool {
 fn configure_viewer(cx: &mut App) {
     let page = settings::PAGES
         .iter()
-        .position(|&(_, name)| name == "Edit/View");
+        .position(|&name| name == "Edit/View");
     configure(Some(page.unwrap_or(0)), cx);
 }
 
@@ -383,10 +383,18 @@ fn change_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
     });
 }
 
+/// Quick search: what was typed in a panel, and the row it found.
+struct Typing {
+    side: usize,
+    typed: String,
+    row: usize,
+}
+
 struct Commander {
     panels: [Side; 2],
     active: usize,
     focus: FocusHandle,
+    typing: Option<Typing>,
     menu_bar: Entity<AppMenuBar>,
     settings: Settings,
     colors: PanelColors,
@@ -440,6 +448,7 @@ impl Commander {
             Settings::default()
         });
         cx.set_global(ShowMinimap(settings.viewer.minimap));
+        settings.apply_globally();
         let session = Session::load().unwrap_or_else(|err| {
             problems.push(format!("Could not read the open tabs: {err}"));
             Session::default()
@@ -528,6 +537,7 @@ impl Commander {
                 _ => 0.5,
             },
             focus,
+            typing: None,
             menu_bar: AppMenuBar::new(cx),
             settings,
             colors,
@@ -570,10 +580,26 @@ impl Commander {
             menus::bind(&settings.keys, Some(&self.settings.keys), cx);
             self.menu_bar.update(cx, |bar, cx| bar.reload(cx));
         }
+        if (&settings.date, settings.folders_like_files) != (&self.settings.date, self.settings.folders_like_files) {
+            settings.apply_globally();
+            if settings.folders_like_files != self.settings.folders_like_files {
+                for side in &mut self.panels {
+                    side.tabs.resort();
+                    side.scroll_to_cursor();
+                }
+            }
+            cx.refresh_windows();
+        }
+        let look = (settings.appearance, &settings.font) != (self.settings.appearance, &self.settings.font);
         let menu = settings.menu != self.settings.menu;
         self.settings = settings;
         if menu {
             self.request_frame(window);
+        }
+        if look {
+            self.colors = appearance::apply(&palette(&self.settings, window), cx);
+            self.reload_menus(cx);
+            cx.refresh_windows();
         }
         self.save_settings(window, cx);
         cx.notify();
@@ -602,6 +628,62 @@ impl Commander {
     /// The menus show these commands checked.
     fn checked(&self, command: Command) -> bool {
         self.sidebar.shows(command) || (command == Command::QuickViewPanel && self.quick.is_some())
+    }
+
+    /// What is typed in panel `ix`, while its cursor stays on the row it found.
+    fn typed(&self, ix: usize) -> Option<&str> {
+        let typing = self.typing.as_ref().filter(|t| t.side == ix && ix == self.active)?;
+        (self.panels[ix].tabs.current().cursor() == typing.row).then_some(typing.typed.as_str())
+    }
+
+    /// Quick search, with no key to start it: a name's first letters typed in
+    /// a panel move the cursor to it (Total Commander's, WDS's tree).
+    /// Backspace takes a letter back (`quick_back`, by Parent's binding), Escape
+    /// or another key ends it; a key with a command of its own keeps it.
+    fn quick_search(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let keystroke = &event.keystroke;
+        let modifiers = keystroke.modifiers;
+        let side = self.active;
+        let typed = self.typed(side).unwrap_or_default().to_owned();
+        let key = keystroke.key.as_str();
+        if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
+            self.typing = None;
+            return;
+        }
+        if key == "escape" && !typed.is_empty() {
+            self.typing = None;
+            cx.stop_propagation();
+            return cx.notify();
+        }
+        let bound = self.settings.keys.bindings().iter().any(|(bound, _)| bound == key);
+        let text = keystroke.key_char.as_deref().filter(|text| !text.is_empty() && !text.chars().any(char::is_control));
+        let Some(text) = text.filter(|_| !bound && key != "backspace") else {
+            self.typing = None;
+            return;
+        };
+        let wanted = format!("{typed}{text}");
+        let panel = self.panels[side].tabs.current();
+        // A new search starts below the cursor; typing on may stay on its row.
+        let from = panel.cursor() + usize::from(typed.is_empty());
+        if let Some(row) = panel.quick_find(&wanted, from) {
+            let found = &mut self.panels[side];
+            found.tabs.current_mut().set_cursor(row);
+            found.scroll_to_cursor();
+            self.typing = Some(Typing { side, typed: wanted, row });
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    /// Backspace in a quick search: its last letter back, the cursor where it is.
+    fn quick_back(&mut self, cx: &mut Context<Self>) {
+        if let Some(typing) = self.typing.as_mut() {
+            typing.typed.pop();
+            if typing.typed.is_empty() {
+                self.typing = None;
+            }
+        }
+        cx.notify();
     }
 
     fn move_cursor(&mut self, rows: isize, cx: &mut Context<Self>) {
@@ -1264,12 +1346,69 @@ impl Commander {
     /// A panel, or Quick View where it covers it.
     fn render_side(&self, ix: usize, cx: &mut Context<Self>) -> AnyElement {
         match self.quick.as_ref().is_some_and(|quick| quick.side == ix) {
-            true => self.render_quick_view(self.quick_keys, cx).expect("Quick View is on"),
+            true => v_flex()
+                .size_full()
+                .children(self.render_tab_bar(ix, cx))
+                .child(div().flex_1().min_h_0().children(self.render_quick_view(self.quick_keys, cx)))
+                .into_any_element(),
             false => self.render_panel(ix, cx).into_any_element(),
         }
     }
 
+    /// Panel `ix`'s folder tabs, when it has more than one or the setting
+    /// shows them always; above Quick View too, as Total Commander's.
+    fn render_tab_bar(&self, ix: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let side = &self.panels[ix];
+        if side.tabs.panels().len() < 2 && !self.settings.tab_header_always {
+            return None;
+        }
+        let commander = cx.entity();
+        let focus = self.focus.clone();
+        let tabs = side.tabs.panels().iter().enumerate().map(|(tab, panel)| {
+            // Right-click acts on the clicked tab.
+            Tab::new().label(panel.title()).on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, _, window, cx| {
+                    this.select_tab(ix, tab, cx);
+                    window.focus(&this.focus, cx);
+                }),
+            )
+        });
+        Some(
+            div()
+                .child(
+                    TabBar::new(("tabs", ix))
+                        .small()
+                        .selected_index(side.tabs.active())
+                        .children(tabs)
+                        .on_click(cx.listener(move |this, tab: &usize, window, cx| {
+                            this.select_tab(ix, *tab, cx);
+                            window.focus(&this.focus, cx);
+                        })),
+                )
+                .context_menu(move |menu, window, cx| {
+                    let tabs = &commander.read(cx).panels[ix].tabs;
+                    let locked = tabs.current().is_locked();
+                    let closed = tabs
+                        .closed()
+                        .iter()
+                        .map(|panel| panel.path().display().to_string().into())
+                        .collect();
+                    menus::context_menu(
+                        menu.action_context(focus.clone()),
+                        TAB_MENU,
+                        |c| c == Command::LockTab && locked,
+                        closed,
+                        window,
+                        cx,
+                    )
+                }),
+        )
+        .map(IntoElement::into_any_element)
+    }
+
     fn render_panel(&self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let tab_bar = self.render_tab_bar(ix, cx);
         let theme = cx.theme();
         let side = &self.panels[ix];
         let panel = side.tabs.current();
@@ -1308,6 +1447,7 @@ impl Commander {
                 .when(sorted, |el| el.child(Icon::new(arrow).small().text_color(accent)))
         };
         let [name, ext, size, date, attr] = self.columns.map(px);
+        let date = date.max(date_fits(cx));
         let (scrolled, wide) = {
             let scroll = &side.scroll.0.borrow().base_handle;
             (scroll.offset().x, scroll.max_offset().x > px(0.))
@@ -1441,53 +1581,7 @@ impl Commander {
                         .child(div().occlude().child(list.clone())),
                 ))
             })
-            .when(
-                side.tabs.panels().len() > 1 || self.settings.tab_header_always,
-                |el| {
-                    let commander = cx.entity();
-                    let focus = self.focus.clone();
-                    let tabs = side.tabs.panels().iter().enumerate().map(|(tab, panel)| {
-                        // Right-click acts on the clicked tab.
-                        Tab::new().label(panel.title()).on_mouse_down(
-                            MouseButton::Right,
-                            cx.listener(move |this, _, window, cx| {
-                                this.select_tab(ix, tab, cx);
-                                window.focus(&this.focus, cx);
-                            }),
-                        )
-                    });
-                    el.child(
-                        div()
-                            .child(
-                                TabBar::new(("tabs", ix))
-                                    .small()
-                                    .selected_index(side.tabs.active())
-                                    .children(tabs)
-                                    .on_click(cx.listener(move |this, tab: &usize, window, cx| {
-                                        this.select_tab(ix, *tab, cx);
-                                        window.focus(&this.focus, cx);
-                                    })),
-                            )
-                            .context_menu(move |menu, window, cx| {
-                                let tabs = &commander.read(cx).panels[ix].tabs;
-                                let locked = tabs.current().is_locked();
-                                let closed = tabs
-                                    .closed()
-                                    .iter()
-                                    .map(|panel| panel.path().display().to_string().into())
-                                    .collect();
-                                menus::context_menu(
-                                    menu.action_context(focus.clone()),
-                                    TAB_MENU,
-                                    |c| c == Command::LockTab && locked,
-                                    closed,
-                                    window,
-                                    cx,
-                                )
-                            }),
-                    )
-                },
-            )
+            .children(tab_bar)
             .child(match editing {
                 Some(input) => div()
                     .key_context("PathEdit")
@@ -1539,13 +1633,23 @@ impl Commander {
                     .border_color(theme.border)
                     .text_color(theme.muted_foreground)
                     .truncate()
-                    .child(match panel.view() {
+                    .child(match self.typed(ix) {
+                        // Quick search: what is typed, where the status was.
+                        Some(typed) => h_flex()
+                            .gap_1p5()
+                            .text_color(theme.foreground)
+                            .child(Icon::new(IconName::Search).small().text_color(theme.muted_foreground))
+                            .child(typed.to_owned())
+                            .into_any_element(),
+                        None => div().truncate().child(match panel.view() {
                         // Names only: the line tells the rest, as Total Commander's.
                         View::Brief => panel.current_entry().map_or_else(String::new, |entry| {
                             let size = panel.size_text(entry);
                             format!("{}   {size}   {}   {}", entry.display_name(), entry.modified_text(), entry.attributes)
                         }),
                         View::Full | View::Thumbnails => panel.status_text(),
+                    })
+                    .into_any_element(),
                     }),
             )
     }
@@ -1556,6 +1660,7 @@ impl Commander {
         let icon = self.entry_icon(ix, entry, px(16.), cx);
         let (name, extension) = entry.name_and_extension();
         let [name_width, ext, size, date, attr] = self.columns.map(px);
+        let date = date.max(date_fits(cx));
         self.entry_base(ix, row, true, cx)
             .flex()
             .flex_row()
@@ -1702,6 +1807,7 @@ impl Render for Commander {
             .map(|el| if vertical { el.flex_col() } else { el.flex_row() })
             .when(self.path_edit.is_none(), |el| el.key_context(CONTEXT))
             .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::quick_search))
             .relative()
             .flex_1()
             .min_h_0()
@@ -1734,7 +1840,13 @@ impl Render for Commander {
             .on_action(cx.listener(|this, _: &End, _, cx| this.move_cursor(isize::MAX, cx)))
             .on_action(cx.listener(|this, _: &Open, window, cx| this.enter(window, cx)))
             .on_action(
-                cx.listener(|this, _: &Parent, window, cx| this.navigate(Panel::up, window, cx)),
+                cx.listener(|this, _: &Parent, window, cx| {
+                    // Backspace's binding comes before the key reaches the quick search.
+                    if this.typed(this.active).is_some() {
+                        return this.quick_back(cx);
+                    }
+                    this.navigate(Panel::up, window, cx)
+                }),
             )
             .on_action(
                 cx.listener(|this, Run(command): &Run, window, cx| match command {
@@ -2008,7 +2120,18 @@ fn palette(settings: &Settings, window: &Window) -> theme::Palette {
     let palette = theme::system(dark);
     #[cfg(target_os = "macos")]
     let palette = theme::Palette { selection: appearance::mac_selection(dark).unwrap_or(palette.selection), ..palette };
-    palette
+    // The main window's font, chosen in Settings > Font.
+    match &settings.font {
+        Some(font) => theme::Palette { font: Some(font.family.clone()), font_size: Some(theme::font_pixels(font.size)), ..palette },
+        None => palette,
+    }
+}
+
+/// The Date column's least width, for the date format's longest text: an
+/// estimate, digits being about 0.58 of the text's size.
+fn date_fits(cx: &App) -> Pixels {
+    let text = f32::from(cx.theme().font_size) * 0.875;
+    px(pc_core::dates::widest().chars().count() as f32 * text * 0.58 + 10.)
 }
 
 /// Finder's tag dots: overlapping, the first on the right, three at most.

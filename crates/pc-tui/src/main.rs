@@ -98,6 +98,7 @@ fn main() -> io::Result<()> {
         problems.push(format!("Could not read the settings: {err}"));
         Settings::default()
     });
+    settings.apply_globally();
     let session = Session::load_from(session::TERMINAL).unwrap_or_else(|err| {
         problems.push(format!("Could not read the open tabs: {err}"));
         Session::default()

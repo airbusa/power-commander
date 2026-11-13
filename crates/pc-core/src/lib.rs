@@ -15,6 +15,7 @@ pub mod convert;
 pub mod desktop;
 pub mod devices;
 pub mod ebook;
+pub mod dates;
 pub mod edit;
 #[cfg(target_os = "macos")]
 pub mod finder;
@@ -138,13 +139,18 @@ impl Sort {
         }
     }
 
-    /// `..` first, then folders by name (as Total Commander by default), then
-    /// files; macOS's applications among the files, as Finder has them.
+    /// `..` first, then folders by name (as Total Commander by default) or
+    /// as the files are (`set_folders_like_files`), then files; macOS's
+    /// applications among the files, as Finder has them.
     fn compare(self, a: &Entry, b: &Entry) -> Ordering {
+        self.compare_folders(a, b, FOLDERS_LIKE_FILES.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    fn compare_folders(self, a: &Entry, b: &Entry, like_files: bool) -> Ordering {
         let folder = |entry: &Entry| entry.is_dir && !entry.is_app();
         let parent = b.is_parent().cmp(&a.is_parent());
         let dirs = parent.then(folder(b).cmp(&folder(a)));
-        if folder(a) || folder(b) {
+        if (folder(a) || folder(b)) && !like_files {
             return dirs.then_with(|| by_name(a, b));
         }
         let files = match self.key {
@@ -161,6 +167,14 @@ impl Sort {
             files
         })
     }
+}
+
+static FOLDERS_LIKE_FILES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Folders sorted by the files' column, also by time (Settings > Display);
+/// else always by name. Tabs' `resort` puts the lists in the new order.
+pub fn set_folders_like_files(on: bool) {
+    FOLDERS_LIKE_FILES.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn extension(entry: &Entry) -> String {
@@ -207,9 +221,7 @@ impl Entry {
     }
 
     pub fn modified_text(&self) -> String {
-        self.modified
-            .map(|time| local_time(time, "%Y-%m-%d %H:%M"))
-            .unwrap_or_default()
+        self.modified.map(dates::date_time).unwrap_or_default()
     }
 }
 
@@ -454,6 +466,17 @@ impl Panel {
 
     pub fn move_cursor(&mut self, rows: isize) {
         self.set_cursor(self.cursor.saturating_add_signed(rows));
+    }
+
+    /// Quick search, as typing in a panel: the first entry from `from`, round
+    /// to the top, whose name starts with `typed`, any case; never `..`.
+    pub fn quick_find(&self, typed: &str, from: usize) -> Option<usize> {
+        let typed = typed.to_lowercase();
+        let count = self.entries.len();
+        (from.min(count)..count).chain(0..from.min(count)).find(|&ix| {
+            let entry = &self.entries[ix];
+            !entry.is_parent() && entry.display_name().to_lowercase().starts_with(&typed)
+        })
     }
 
     pub fn set_cursor(&mut self, ix: usize) {
@@ -1244,6 +1267,13 @@ impl Tabs {
     }
 
     /// Every tab, closed ones too, lists again by `filter`.
+    /// Every tab in the sort order of now, as after `set_folders_like_files`.
+    pub fn resort(&mut self) {
+        for panel in self.panels.iter_mut().chain(&mut self.closed) {
+            panel.set_sort(panel.sort);
+        }
+    }
+
     pub fn set_filter(&mut self, filter: Filter) {
         for panel in self.panels.iter_mut().chain(&mut self.closed) {
             panel.filter = filter;
@@ -1841,6 +1871,49 @@ mod tests {
         panel.open().unwrap();
         assert!(chosen(&panel).is_empty(), "a new folder, no marks");
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn finds_what_is_typed() {
+        let root = std::env::temp_dir().join(format!("pc-quick-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Bundles")).unwrap();
+        for name in ["base.txt", "base.history", "Stored.md"] {
+            fs::write(root.join(name), "").unwrap();
+        }
+        let panel = Panel::new(&root, Filter::default()).unwrap();
+        let name = |ix: Option<usize>| ix.map(|ix| panel.entries()[ix].display_name());
+        // `..`, Bundles, base.history, base.txt, Stored.md
+        assert_eq!(name(panel.quick_find("b", 0)), Some("Bundles".into()));
+        assert_eq!(name(panel.quick_find("b", 2)), Some("base.history".into()), "from the cursor on");
+        assert_eq!(name(panel.quick_find("BASE.T", 2)), Some("base.txt".into()), "any case");
+        assert_eq!(name(panel.quick_find("s", 4)), Some("Stored.md".into()));
+        assert_eq!(name(panel.quick_find("bu", 3)), Some("Bundles".into()), "round to the top");
+        assert_eq!(panel.quick_find(".", 0), None, "never ..");
+        assert_eq!(panel.quick_find("x", 0), None);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn sorts_folders_by_name_or_as_files() {
+        let entry = |name: &str, is_dir, age: u64| Entry {
+            name: name.into(),
+            is_dir,
+            size: 0,
+            modified: Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(age)),
+            hidden: false,
+            system: false,
+            attributes: String::new(),
+            tags: Vec::new(),
+            online: false,
+        };
+        let mut entries = vec![entry("old.txt", false, 1), entry("b", true, 9), entry("a", true, 1), entry("new.txt", false, 9)];
+        let order = |entries: &mut Vec<Entry>, like_files| {
+            entries.sort_by(|a, b| Sort::by(SortKey::Modified).compare_folders(a, b, like_files));
+            entries.iter().map(Entry::display_name).collect::<Vec<_>>()
+        };
+        assert_eq!(order(&mut entries, false), ["a", "b", "new.txt", "old.txt"]);
+        assert_eq!(order(&mut entries, true), ["b", "a", "new.txt", "old.txt"], "newest first, folders still first");
     }
 
     #[test]

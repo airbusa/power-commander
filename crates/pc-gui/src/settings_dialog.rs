@@ -8,7 +8,12 @@ use gpui_kit::component::{ActiveTheme, Disableable, MacControls, StyledExt, Wind
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::addons::{Addon, Builtin, Presence};
-use pc_core::settings::{AddonUpdates, MenuStyle, PAGES, Settings, SidebarBlur, SidebarOpacity, StartFont, StartMode};
+use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectState};
+use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::{Icon, IndexPath};
+use pc_core::dates::{self, Clock};
+use pc_core::settings::{AddonUpdates, FontChoice, MenuStyle, PAGES, Settings, SidebarBlur, SidebarOpacity, StartFont, StartMode};
+use pc_core::theme::Appearance;
 
 use crate::Commander;
 
@@ -31,6 +36,23 @@ const START_FONTS: [StartFont; 4] = [
 fn fluent() -> bool {
     pc_core::theme::control_style() == Some(pc_core::theme::ControlStyle::Fluent)
 }
+
+/// The main window's font's sample, as Total Commander's.
+const SAMPLE: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz äöüéèêàñç 0123456789";
+const SIZES: [&str; 15] = ["7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "18", "20", "22", "24", "28"];
+/// Each page's icon in the rail, as `PAGES`.
+const ICONS: [Lucide; 7] = [
+    Lucide::PanelsTopLeft,
+    Lucide::Eye,
+    Lucide::Type,
+    Lucide::CalendarClock,
+    Lucide::Languages,
+    Lucide::FilePen,
+    Lucide::Puzzle,
+];
+
+type Fonts = SelectState<SearchableVec<SharedString>>;
+type Sizes = SelectState<Vec<SharedString>>;
 
 /// Opens on `PAGES[page]`.
 pub fn open(
@@ -55,10 +77,29 @@ pub fn open(
     let binary_width = input(settings.viewer.binary_width.to_string(), true, cx);
     let limit = input(settings.editor.limit_mb.to_string(), true, cx);
     let external = input(settings.editor.external.clone(), false, cx);
+    let pattern = input(settings.date.custom.clone().unwrap_or_else(|| "yyyy-MM-dd".into()), false, cx);
     let opacity = cx.new(|_| {
         let value = f32::from(settings.sidebar_opacity.0);
         SliderState::new().min(0.).max(100.).step(5.).default_value(value)
     });
+    // The desktop's font, which "As the system" puts back.
+    let system_font = system_font(&settings, cx);
+    let shown = settings.font.clone().unwrap_or_else(|| system_font.clone());
+    let mut families: Vec<SharedString> = cx
+        .text_system()
+        .all_font_names()
+        .into_iter()
+        .filter(|name| !name.starts_with('.'))
+        .map(SharedString::from)
+        .collect();
+    families.sort_by_key(|name| name.to_lowercase());
+    families.dedup();
+    let family_at = families.iter().position(|name| name.as_ref() == shown.family);
+    let fonts = cx.new(|cx| SelectState::new(SearchableVec::new(families), family_at.map(IndexPath::new), window, cx).searchable(true));
+    let size_text: SharedString = format!("{}", shown.size.round()).into();
+    let sizes_list: Vec<SharedString> = SIZES.iter().map(|&size| size.into()).collect();
+    let size_at = sizes_list.iter().position(|size| *size == size_text);
+    let sizes = cx.new(|cx| SelectState::new(sizes_list, size_at.map(IndexPath::new), window, cx));
     let view = cx.new(|cx| {
         // Tried on the sidebar as it moves; closed, the dialog puts back what was applied.
         let trying = cx.subscribe_in(&opacity, window, |this: &mut SettingsDialog, _, event: &SliderEvent, window, cx| {
@@ -80,6 +121,19 @@ pub fn open(
                 }
             })
         };
+        let family = cx.subscribe(&fonts, |this: &mut SettingsDialog, _, event: &SelectEvent<SearchableVec<SharedString>>, cx| {
+            let SelectEvent::Confirm(Some(family)) = event else { return };
+            let size = this.draft.font.as_ref().map_or(this.system_font.size, |font| font.size);
+            this.draft.font = Some(FontChoice { family: family.to_string(), size });
+            cx.notify();
+        });
+        let size = cx.subscribe(&sizes, |this: &mut SettingsDialog, _, event: &SelectEvent<Vec<SharedString>>, cx| {
+            let SelectEvent::Confirm(Some(size)) = event else { return };
+            let Ok(size) = size.parse() else { return };
+            let family = this.draft.font.as_ref().map_or_else(|| this.system_font.family.clone(), |font| font.family.clone());
+            this.draft.font = Some(FontChoice { family, size });
+            cx.notify();
+        });
         SettingsDialog {
             _inputs: [
                 bind(cx, &text_width, |s, text| {
@@ -100,11 +154,22 @@ pub fn open(
                 bind(cx, &external, |s, text| {
                     s.editor.external = text.trim().to_owned()
                 }),
+                // Typed into while "Custom" is chosen.
+                bind(cx, &pattern, |s, text| {
+                    if s.date.custom.is_some() {
+                        s.date.custom = Some(text.to_owned());
+                    }
+                }),
             ],
+            _fonts: [family, size],
             text_width,
             binary_width,
             limit,
             external,
+            pattern,
+            fonts,
+            sizes,
+            system_font,
             opacity,
             _opacity: trying,
             _addons: cx.observe(&crate::addons::entity(cx), |_, _, cx| cx.notify()),
@@ -114,7 +179,7 @@ pub fn open(
             page,
         }
     });
-    if PAGES[page].1 == "Add-ons" {
+    if PAGES[page] == "Add-ons" {
         crate::addons::shown(cx);
     }
     window.open_dialog(cx, move |dialog, _, _| {
@@ -128,6 +193,21 @@ pub fn open(
     });
 }
 
+/// The desktop's UI font and size in points; GPUI Kit's where it names none.
+fn system_font(settings: &Settings, cx: &App) -> FontChoice {
+    let theme = cx.theme();
+    let palette = pc_core::theme::system(theme.mode.is_dark());
+    // The theme has the system's font while no other is chosen.
+    let (family, pixels) = match &settings.font {
+        None => (theme.font_family.to_string(), f32::from(theme.font_size) * 0.875),
+        Some(_) => (palette.font.clone().unwrap_or_else(|| ".SystemUIFont".into()), 14.),
+    };
+    FontChoice {
+        family: palette.font.unwrap_or(family),
+        size: pc_core::theme::font_points(palette.font_size.unwrap_or(pixels)).round(),
+    }
+}
+
 struct SettingsDialog {
     commander: WeakEntity<Commander>,
     /// As last applied.
@@ -138,8 +218,13 @@ struct SettingsDialog {
     binary_width: Entity<InputState>,
     limit: Entity<InputState>,
     external: Entity<InputState>,
+    pattern: Entity<InputState>,
+    fonts: Entity<Fonts>,
+    sizes: Entity<Sizes>,
+    system_font: FontChoice,
     opacity: Entity<SliderState>,
-    _inputs: [Subscription; 4],
+    _inputs: [Subscription; 5],
+    _fonts: [Subscription; 2],
     _opacity: Subscription,
     _addons: Subscription,
 }
@@ -170,48 +255,47 @@ impl SettingsDialog {
         cx.notify();
     }
 
-    fn render_pages(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The pages, a row each with its icon: a rail down the left.
+    fn render_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         // macOS: a sidebar, its selection a rounded row of the accent.
         let mac = cx.try_global::<MacControls>().copied();
         // Windows 11: a navigation pane, unframed; the selection a faint row with the accent's pill.
         let fluent = fluent();
-        let subtle = if theme.mode.is_dark() { hsla(0., 0., 1., 0.06) } else { hsla(0., 0., 0., 0.04) };
-        let pill = theme.primary;
+        let subtle = if theme.mode.is_dark() { hsla(0., 0., 1., 0.06) } else { hsla(0., 0., 0., 0.05) };
+        let (pill, rail) = (theme.primary, theme.muted);
         v_flex()
-            .id("settings-pages")
-            .w(px(190.))
+            .id("settings-rail")
+            .w(px(172.))
+            .flex_none()
             .h_full()
-            .p_1()
+            .gap(px(2.))
+            .p(px(6.))
             .map(|el| match mac {
-                Some(mac) => el.p(px(6.)).bg(mac.group).rounded(px(10.)),
-                None if fluent => el.p_0().gap(px(2.)),
-                None => el.border_1().border_color(theme.border),
+                Some(mac) => el.bg(mac.group).rounded(px(10.)),
+                None if fluent => el.p_0(),
+                None => el.bg(rail).rounded(px(8.)),
             })
-            .overflow_y_scroll()
-            .children(PAGES.iter().enumerate().map(|(ix, &(depth, label))| {
+            .children(PAGES.iter().enumerate().map(|(ix, &label)| {
                 let selected = ix == self.page;
-                div()
+                h_flex()
                     .id(("settings-page", ix))
-                    .pl(px(6. + 14. * depth as f32))
-                    .pr_2()
-                    .when(mac.is_some(), |el| el.flex_none().h(px(22.)).flex().items_center().rounded(px(5.)))
-                    .when(fluent, |el| {
-                        el.relative()
-                            .flex_none()
-                            .h(px(32.))
-                            .pl(px(14. + 16. * depth as f32))
-                            .flex()
-                            .items_center()
-                            .rounded(px(4.))
-                            .hover(|el| el.bg(subtle))
-                            .when(selected, |el| {
-                                el.bg(subtle).child(div().absolute().left_0().top(px(8.)).w(px(3.)).h(px(16.)).rounded(px(2.)).bg(pill))
-                            })
-                    })
-                    .when(selected && !fluent, |el| match mac {
+                    .relative()
+                    .flex_none()
+                    .h(px(if mac.is_some() { 28. } else { 34. }))
+                    .px_2()
+                    .gap_2()
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .child(Icon::new(ICONS[ix].clone()).size_4())
+                    .child(label)
+                    .when(!selected, |el| el.hover(|el| el.bg(subtle)))
+                    .when(selected, |el| match mac {
                         Some(mac) => el.bg(mac.accent).text_color(mac.on_accent),
-                        None => el.bg(theme.accent).text_color(theme.accent_foreground),
+                        None if fluent => el
+                            .bg(subtle)
+                            .child(div().absolute().left_0().top(px(9.)).w(px(3.)).h(px(16.)).rounded(px(2.)).bg(pill)),
+                        None => el.bg(theme.primary).text_color(theme.primary_foreground),
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.page = ix;
@@ -220,8 +304,174 @@ impl SettingsDialog {
                         }
                         cx.notify();
                     }))
-                    .child(label)
             }))
+    }
+
+    /// Light or dark, where the desktop does not decide it alone.
+    fn render_appearance(&self, cx: &mut Context<Self>) -> Option<GroupBox> {
+        if pc_core::theme::desktop_dark().is_some() {
+            return None;
+        }
+        let looks = [(Appearance::System, "As the system"), (Appearance::Light, "Light"), (Appearance::Dark, "Dark")];
+        Some(GroupBox::new().outline().title("Appearance").child(
+            RadioGroup::horizontal("appearance")
+                .children(looks.map(|(_, label)| label))
+                .selected_index(looks.iter().position(|(look, _)| *look == self.draft.appearance))
+                .on_click(cx.listener(move |this, at: &usize, _, cx| {
+                    this.draft.appearance = looks[*at].0;
+                    cx.notify();
+                })),
+        ))
+    }
+
+    fn render_tabs(&self, cx: &mut Context<Self>) -> GroupBox {
+        GroupBox::new().outline().title("Folder tabs").child(
+            Checkbox::new("tab-header-always")
+                .label("Show the tab header also when there is only one tab")
+                .checked(self.draft.tab_header_always)
+                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                    this.draft.tab_header_always = *checked;
+                    cx.notify();
+                })),
+        )
+    }
+
+    fn render_files(&self, cx: &mut Context<Self>) -> Vec<GroupBox> {
+        let folders = ["Always by name", "Like files (also by time)"];
+        vec![
+            GroupBox::new().outline().title("Files shown").child(
+                h_flex()
+                    .gap_6()
+                    .child(
+                        Checkbox::new("show-hidden")
+                            .label("Hidden files")
+                            .checked(self.draft.show_hidden)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.draft.show_hidden = *checked;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        // Linux and macOS have no system attribute.
+                        Checkbox::new("show-system")
+                            .label("System files")
+                            .checked(self.draft.show_system)
+                            .disabled(!cfg!(windows))
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.draft.show_system = *checked;
+                                cx.notify();
+                            })),
+                    ),
+            ),
+            GroupBox::new().outline().title("Sorting folders").child(
+                RadioGroup::horizontal("folders-sort")
+                    .children(folders)
+                    .selected_index(Some(usize::from(self.draft.folders_like_files)))
+                    .on_click(cx.listener(|this, at: &usize, _, cx| {
+                        this.draft.folders_like_files = *at == 1;
+                        cx.notify();
+                    })),
+            ),
+        ]
+    }
+
+    /// The main window's font: chosen, or the desktop's.
+    fn render_font(&self, cx: &mut Context<Self>) -> GroupBox {
+        let font = self.draft.font.clone().unwrap_or_else(|| self.system_font.clone());
+        let dim = cx.theme().muted_foreground;
+        let (fonts, sizes, system) = (self.fonts.clone(), self.sizes.clone(), self.system_font.clone());
+        let state = match &self.draft.font {
+            None => "The system's font".to_owned(),
+            Some(_) => format!("Chosen; the system's is {}, {}", system.family, system.size),
+        };
+        GroupBox::new().outline().title("Main window font").child(
+            v_flex()
+                .gap_3()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(div().flex_1().min_w_0().child(Select::new(&self.fonts).menu_max_h(px(320.))))
+                        .child(div().w(px(84.)).flex_none().child(Select::new(&self.sizes)))
+                        .child(
+                            Button::new("font-system")
+                                .outline()
+                                .label("As the system")
+                                .disabled(self.draft.font.is_none())
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.draft.font = None;
+                                    let family: SharedString = system.family.clone().into();
+                                    let size: SharedString = format!("{}", system.size).into();
+                                    fonts.update(cx, |select, cx| select.set_selected_value(&family, window, cx));
+                                    sizes.update(cx, |select, cx| select.set_selected_value(&size, window, cx));
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .child(div().text_color(dim).child(state))
+                .child(
+                    div()
+                        .p_3()
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().background)
+                        .font_family(font.family.clone())
+                        .text_size(px(pc_core::theme::font_pixels(font.size)))
+                        .child(SAMPLE),
+                ),
+        )
+    }
+
+    /// Dates and times as the system shows them, or a pattern and clock of one's own.
+    fn render_date(&self, cx: &mut Context<Self>) -> Vec<GroupBox> {
+        let now = std::time::SystemTime::now();
+        let dim = cx.theme().muted_foreground;
+        let custom = self.draft.date.custom.is_some();
+        let pattern = self.pattern.clone();
+        let clocks = [Clock::System, Clock::H24, Clock::H12];
+        vec![
+            GroupBox::new().outline().title("Date").child(
+                v_flex()
+                    .gap_2()
+                    .child(
+                        RadioGroup::vertical("date-kind")
+                            .children([format!("As the system: {}", dates::system_date(now)), "Custom:".to_owned()])
+                            .selected_index(Some(usize::from(custom)))
+                            .on_click(cx.listener(move |this, at: &usize, _, cx| {
+                                this.draft.date.custom = (*at == 1).then(|| pattern.read(cx).value().to_string());
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        v_flex()
+                            .pl_6()
+                            .gap_1()
+                            .child(div().w(px(240.)).child(Input::new(&self.pattern).disabled(!custom)))
+                            .child(div().text_color(dim).child("yyyy year, MM month (MMM its name), dd day (ddd the weekday)")),
+                    ),
+            ),
+            GroupBox::new().outline().title("Time").child(
+                RadioGroup::horizontal("clock")
+                    .children(["As the system", "24 hours (14:05)", "12 hours (2:05 PM)"])
+                    .selected_index(clocks.iter().position(|clock| *clock == self.draft.date.clock))
+                    .on_click(cx.listener(move |this, at: &usize, _, cx| {
+                        this.draft.date.clock = clocks[*at];
+                        cx.notify();
+                    })),
+            ),
+            GroupBox::new().outline().title("Shown as").child(
+                h_flex()
+                    .gap_2()
+                    .child(dates::preview(&self.draft.date, now))
+                    .child(div().text_color(dim).child("in the file lists; dialogs add the seconds")),
+            ),
+        ]
+    }
+
+    fn render_language(&self) -> GroupBox {
+        GroupBox::new().outline().title("Language").child(
+            RadioGroup::vertical("language").children(["English"]).selected_index(Some(0)),
+        )
     }
 
     fn render_viewer(&self, cx: &mut Context<Self>) -> GroupBox {
@@ -549,10 +799,10 @@ impl SettingsDialog {
     }
 
     fn render_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (_, title) = PAGES[self.page];
+        let title = PAGES[self.page];
         let content = match title {
-            "Layout" if cfg!(any(target_os = "linux", target_os = "freebsd")) || pc_core::theme::sidebar_see_through() => {
-                let mut groups = Vec::new();
+            "Layout" => {
+                let mut groups: Vec<GroupBox> = self.render_appearance(cx).into_iter().collect();
                 // GNOME's apps have their menus behind a ☰ button in the title bar.
                 if cfg!(any(target_os = "linux", target_os = "freebsd")) {
                     groups.push(self.render_menus(cx));
@@ -561,51 +811,18 @@ impl SettingsDialog {
                 if pc_core::theme::sidebar_see_through() {
                     groups.push(self.render_sidebar(cx));
                 }
+                groups.push(self.render_tabs(cx));
                 groups
             }
-            "Display" => vec![
-                GroupBox::new().outline().title("File display").child(
-                    h_flex()
-                        .gap_6()
-                        .child(
-                            Checkbox::new("show-hidden")
-                                .label("Show hidden files")
-                                .checked(self.draft.show_hidden)
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    this.draft.show_hidden = *checked;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            // Linux and macOS have no system attribute.
-                            Checkbox::new("show-system")
-                                .label("Show system files")
-                                .checked(self.draft.show_system)
-                                .disabled(!cfg!(windows))
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    this.draft.show_system = *checked;
-                                    cx.notify();
-                                })),
-                        ),
-                ),
-            ],
+            "Display" => self.render_files(cx),
+            "Font" => vec![self.render_font(cx)],
+            "Date" => self.render_date(cx),
+            "Language" => vec![self.render_language()],
             "Edit/View" => vec![self.render_viewer(cx), self.render_editor(cx)],
             "Add-ons" => self.render_addons(cx),
-            "Folder Tabs" => vec![
-                GroupBox::new().outline().title("Folder tab headers").child(
-                    Checkbox::new("tab-header-always")
-                        .label("Show tab header also when there is only one tab")
-                        .checked(self.draft.tab_header_always)
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            this.draft.tab_header_always = *checked;
-                            cx.notify();
-                        })),
-                ),
-            ],
             _ => Vec::new(),
         };
-        let theme = cx.theme();
-        // macOS and Windows 11: the page's name as a pane's title, bold, unboxed.
+        // The page's name as a pane's title, bold, unboxed; macOS's smaller.
         let mac = cx.has_global::<MacControls>();
         let fluent = fluent();
         v_flex()
@@ -619,7 +836,7 @@ impl SettingsDialog {
                     .map(|el| match () {
                         _ if mac => el.text_base().font_semibold(),
                         _ if fluent => el.text_xl().font_semibold(),
-                        _ => el.text_center().bg(theme.muted).border_1().border_color(theme.border),
+                        _ => el.text_lg().font_semibold(),
                     })
                     .child(title),
             )
@@ -649,7 +866,7 @@ impl Render for SettingsDialog {
                     .min_h_0()
                     .items_start()
                     .gap_3()
-                    .child(self.render_pages(cx))
+                    .child(self.render_rail(cx))
                     .child(self.render_page(cx)),
             )
             .child(
