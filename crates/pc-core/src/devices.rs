@@ -351,6 +351,11 @@ pub fn mount(id: &str) -> io::Result<Vec<(PathBuf, String)>> {
     }
 }
 
+/// Unmounts the device's files; it stays paired, and the next open mounts them again.
+pub fn unmount(id: &str) -> io::Result<()> {
+    kde_connect::unmount(id)
+}
+
 /// Waits up to 5 s for a fresh mount to serve: KDE Connect answers before
 /// sshfs does. False at once where reads fail as a stale mount's do.
 fn serves(folder: &Path) -> bool {

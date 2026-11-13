@@ -63,6 +63,17 @@ pub(crate) struct Sidebar {
     device_folders: HashMap<String, Vec<(PathBuf, String)>>,
 }
 
+/// Where a mounted device's files are: KDE Connect mounts it at
+/// `$XDG_RUNTIME_DIR/<id>`, its folders below; none while not mounted.
+fn device_roots(sidebar: &Sidebar, id: &str) -> Vec<PathBuf> {
+    let Some(folders) = sidebar.device_folders.get(id) else {
+        return Vec::new();
+    };
+    let id = std::ffi::OsStr::new(id);
+    let root = |path: &PathBuf| path.ancestors().find(|at| at.file_name() == Some(id)).unwrap_or(path).to_owned();
+    folders.iter().map(|(path, _)| root(path)).collect()
+}
+
 /// The "Opening…" note of a device being mounted.
 struct Mounting;
 
@@ -608,6 +619,45 @@ impl Commander {
                         window.push_notification(note, cx);
                     }
                 }
+            });
+        })
+        .detach();
+    }
+
+    /// The mounted device whose files `path` is in.
+    pub(crate) fn device_of(&self, path: &Path) -> Option<Device> {
+        let holds = |device: &&Device| device_roots(&self.sidebar, &device.id).iter().any(|root| path.starts_with(root));
+        self.sidebar.devices.iter().find(holds).cloned()
+    }
+
+    /// The path bar's ×, or Disconnect, on a device: panels in its files go
+    /// home first, so nothing holds them; it stays paired.
+    pub(crate) fn unmount_device(&mut self, device: &Device, window: &mut Window, cx: &mut Context<Self>) {
+        let roots = device_roots(&self.sidebar, &device.id);
+        if roots.is_empty() {
+            return;
+        }
+        let home = std::env::home_dir().unwrap_or_else(|| "/".into());
+        for ix in 0..2 {
+            let panel = self.panels[ix].tabs.current();
+            if panel.remote().is_none() && roots.iter().any(|root| panel.folder().starts_with(root)) {
+                let home = home.clone();
+                self.navigate_on(ix, false, move |panel| panel.go_to_folder(home), window, cx);
+            }
+        }
+        let (id, name) = (device.id.clone(), device.name.clone());
+        let unmount = cx.background_executor().spawn({
+            let id = id.clone();
+            async move { devices::unmount(&id) }
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let unmounted = unmount.await;
+            let _ = this.update_in(cx, |this, window, cx| match unmounted {
+                Ok(()) => {
+                    this.sidebar.device_folders.remove(&id);
+                    cx.notify();
+                }
+                Err(err) => window.push_notification(Notification::error(format!("{name}: could not unmount: {err}")), cx),
             });
         })
         .detach();

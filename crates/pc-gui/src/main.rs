@@ -1643,7 +1643,8 @@ impl Commander {
                     .child(div().flex_1().min_w_0().truncate().child(panel.location()))
                     // The filter stays in sight however long the path.
                     .children(filter_suffix(panel).map(|filter| div().flex_none().child(filter)))
-                    .when(panel.remote().is_some(), |el| {
+                    // A server's, or a phone's KDE Connect mounted.
+                    .when(panel.remote().is_some() || self.device_of(panel.folder()).is_some(), |el| {
                         el.child(
                             Button::new(("disconnect", ix))
                                 .ghost()

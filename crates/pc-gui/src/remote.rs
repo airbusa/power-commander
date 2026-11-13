@@ -153,8 +153,13 @@ impl Commander {
     }
 
     /// Disconnect: the active panel goes home.
+    /// Leaves the server, or unmounts the phone, the active panel is on.
     pub(crate) fn disconnect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.panels[self.active].tabs.current().remote().is_none() {
+        let panel = self.panels[self.active].tabs.current();
+        if panel.remote().is_none() {
+            if let Some(device) = self.device_of(panel.folder()) {
+                self.unmount_device(&device, window, cx);
+            }
             return;
         }
         let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("/"));
