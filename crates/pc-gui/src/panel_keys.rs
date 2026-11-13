@@ -5,10 +5,9 @@
 use std::ffi::OsString;
 use std::path::Path;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::{IconName, Sizable, WindowExt, h_flex};
+use gpui_kit::component::{Sizable, WindowExt, h_flex};
 use gpui_kit::*;
 use pc_core::menu::Command;
 use pc_core::{FileFilter, Panel, View};
@@ -194,7 +193,7 @@ impl Commander {
     }
 
     /// The row's name and extension cells while it is renamed: the name in a
-    /// field `width` wide, and a check mark that renames.
+    /// field `width` wide; Enter renames, Escape does not.
     pub(crate) fn rename_cell(&self, ix: usize, row: usize, width: Pixels, icon: AnyElement, cx: &mut Context<Self>) -> Result<AnyElement, AnyElement> {
         let renaming = self.renaming.as_ref().filter(|renaming| {
             let entry = self.panels[ix].tabs.current().entries().get(row);
@@ -220,13 +219,6 @@ impl Commander {
                     // Not the row's: a click here neither moves the cursor nor ends the edit.
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(Input::new(&renaming.input).xsmall().text_sm()),
-            )
-            .child(
-                Button::new("rename-ok")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Check)
-                    .on_click(cx.listener(|this, _, window, cx| this.finish_rename(true, window, cx))),
             );
         Ok(cell.into_any_element())
     }
