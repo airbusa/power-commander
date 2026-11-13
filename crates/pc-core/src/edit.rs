@@ -51,9 +51,12 @@ pub fn as_text_anyway(bytes: &[u8]) -> String {
 }
 
 /// Written beside the file and renamed over it, with its permissions; a
-/// link's target is what gets saved.
+/// link's target is what gets saved; a new file is written as it is.
 pub fn save_text(path: &Path, text: &str) -> io::Result<()> {
-    let target = fs::canonicalize(path)?;
+    let target = match fs::canonicalize(path) {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return fs::write(path, text),
+        found => found?,
+    };
     let permissions = fs::metadata(&target)?.permissions();
     let name = target.file_name().unwrap_or_default().to_string_lossy();
     let temp = target.with_file_name(format!(".{name}.pc-save"));
@@ -204,6 +207,10 @@ mod tests {
         save_text(&file, "three\r\n").unwrap();
         assert_eq!(fs::read_to_string(&file).unwrap(), "three\r\n");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1, "no temporary left");
+        // Save As: a new file.
+        let new = file.with_file_name("new.txt");
+        save_text(&new, "four").unwrap();
+        assert_eq!(fs::read_to_string(&new).unwrap(), "four");
 
         fs::write(dir.join("bin"), b"a\0b\x7f\tc").unwrap();
         let binary = Loaded::Unfit {

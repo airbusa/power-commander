@@ -77,6 +77,15 @@ pub struct EditorSettings {
     pub limit_mb: u64,
     /// Ctrl+Shift+F4's command line: `%1` is the file, else the file goes last.
     pub external: String,
+    /// The View menu's, kept for the next file.
+    pub wrap: bool,
+    pub line_numbers: bool,
+    pub whitespace: bool,
+    pub indent_guides: bool,
+    pub folding: bool,
+    /// Where the file shows none of its own (`text_edit::detect_indent`).
+    pub tab_size: usize,
+    pub hard_tabs: bool,
 }
 
 impl Default for EditorSettings {
@@ -89,6 +98,13 @@ impl Default for EditorSettings {
         Self {
             limit_mb: 32,
             external: external.into(),
+            wrap: false,
+            line_numbers: true,
+            whitespace: false,
+            indent_guides: true,
+            folding: true,
+            tab_size: 4,
+            hard_tabs: false,
         }
     }
 }

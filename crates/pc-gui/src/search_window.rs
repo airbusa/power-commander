@@ -492,7 +492,7 @@ impl FindFiles {
             let taken = taken.await;
             let _ = cx.update(|window, cx| {
                 let opened = taken.and_then(|(file, upload)| match edit {
-                    true => editor::open(file, settings.editor.limit_mb, upload, bounds, cx),
+                    true => editor::open(file, settings.editor.clone(), upload, bounds, cx),
                     false => view(vec![file], 0, settings.viewer, bounds, cx),
                 });
                 if let Err(err) = opened {

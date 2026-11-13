@@ -15,6 +15,7 @@ mod editor;
 #[cfg(target_os = "macos")]
 mod file_menu;
 mod file_tools;
+mod find_bar;
 mod find_dialog;
 mod header;
 mod keys_dialog;
@@ -89,7 +90,7 @@ actions!(
 include!(concat!(env!("OUT_DIR"), "/material_icons.rs"));
 
 // Lucide icons beyond GPUI Kit's own set.
-gpui_kit::assets::icon_assets!(ExtraIcons, [Server, Smartphone, Tablet, Laptop, Monitor, Tv, Usb, Menu, Cloud]);
+gpui_kit::assets::icon_assets!(ExtraIcons, [Server, Smartphone, Tablet, Laptop, Monitor, Tv, Usb, Menu, Cloud, CaseSensitive, WholeWord, Regex, Replace, ReplaceAll, CaseUpper, SquareDashedText, X]);
 
 /// GPUI Kit's icons, the file icons as `material/<name>.svg`, the player's as `media/`.
 struct AppAssets;
@@ -331,13 +332,18 @@ fn minimap_shown(cx: &App) -> bool {
 
 /// Shows or hides the minimap, and saves the setting.
 fn toggle_minimap(cx: &mut App) {
+    change_settings(cx, |settings| settings.viewer.minimap = !settings.viewer.minimap);
+}
+
+/// Changes the main window's settings, as other windows' menus do, and saves them.
+fn change_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
     let Some(MainWindow(main, commander)) = cx.try_global::<MainWindow>().cloned() else {
         return;
     };
     let _ = main.update(cx, |_, window, cx| {
         let _ = commander.update(cx, |this, cx| {
             let mut settings = this.settings.clone();
-            settings.viewer.minimap = !settings.viewer.minimap;
+            change(&mut settings);
             this.apply_settings(settings, window, cx);
         });
     });
@@ -615,7 +621,7 @@ impl Commander {
                     viewer::open(files, at, settings.viewer, bounds, cx)
                 }
                 (remote::Open::Edit | remote::Open::External, upload) => {
-                    editor::open(file, settings.editor.limit_mb, upload, bounds, cx)
+                    editor::open(file, settings.editor.clone(), upload, bounds, cx)
                 }
             });
             if let Err(err) = opened {

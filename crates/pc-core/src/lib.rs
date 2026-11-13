@@ -44,6 +44,8 @@ pub mod sidebar;
 pub mod sftp;
 pub mod space;
 pub mod tags;
+pub mod text_edit;
+pub mod text_find;
 pub mod split;
 pub mod theme;
 pub mod vfs;
