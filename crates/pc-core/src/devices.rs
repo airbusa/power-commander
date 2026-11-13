@@ -116,8 +116,12 @@ fn cloud_folders(home: &Path) -> Vec<Volume> {
     let moved = ["OneDriveConsumer", "OneDriveCommercial"].into_iter().filter(|_| cfg!(windows)).filter_map(std::env::var_os);
     let moved = moved.map(PathBuf::from).filter(|path| path.is_dir());
     let moved = moved.map(|path| cloud(path.file_name().unwrap_or_default().to_string_lossy().into_owned(), path));
+    // The providers' folders, not Finder's .DS_Store beside them.
     let storage = std::fs::read_dir(home.join("Library/CloudStorage")).into_iter().flatten().flatten();
-    let storage = storage.map(|entry| cloud(provider_name(&entry.file_name().to_string_lossy()), entry.path()));
+    let storage = storage.filter_map(|entry| {
+        let folder = entry.file_name().to_string_lossy().into_owned();
+        (!folder.starts_with('.') && entry.path().is_dir()).then(|| cloud(provider_name(&folder), entry.path()))
+    });
     let icloud = home.join("Library/Mobile Documents/com~apple~CloudDocs");
     let icloud = icloud.is_dir().then(|| cloud("iCloud Drive".to_owned(), icloud));
     in_home.chain(moved).chain(storage).chain(icloud).collect()
@@ -502,6 +506,8 @@ mod tests {
         for folder in folders.iter().chain(&["Library/CloudStorage/Box-Box", "Library/Mobile Documents/com~apple~CloudDocs"]) {
             std::fs::create_dir_all(home.join(folder)).unwrap();
         }
+        std::fs::write(home.join("Library/CloudStorage/.DS_Store"), b"").unwrap();
+        std::fs::create_dir_all(home.join("Library/CloudStorage/.hidden")).unwrap();
         let mut names: Vec<String> = cloud_folders(&home).into_iter().map(|volume| volume.name).collect();
         names.sort();
         let wanted = ["Box", "Dropbox", "Google Drive (me@gmail.com)", "OneDrive - Contoso", "iCloud Drive", "iCloud Drive"];
