@@ -1939,6 +1939,8 @@ pub(crate) fn window_icon() -> Option<std::sync::Arc<image::RgbaImage>> {
 /// The system's look, light or dark as chosen; on Xfce, MATE and Cinnamon
 /// always their theme's, which GTK draws only as it is.
 fn palette(settings: &Settings, window: &Window) -> theme::Palette {
+    #[cfg(target_os = "macos")]
+    appearance::mac_force(settings.appearance);
     let dark = theme::desktop_dark().unwrap_or_else(|| match settings.appearance {
         Appearance::System => matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark),
         Appearance::Light => false,

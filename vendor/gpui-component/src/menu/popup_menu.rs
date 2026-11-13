@@ -903,6 +903,94 @@ impl PopupMenu {
         window.dispatch_action(action.boxed_clone(), cx);
     }
 
+    /// PowerCommander patch: on macOS, shows the built menu as an `NSMenu` at
+    /// `position`, see `MacControls`, unless an item draws itself; whether it did.
+    /// The item picked runs as a click on it would.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn show_native(
+        menu: &Entity<PopupMenu>,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        if !cx.has_global::<crate::MacControls>() {
+            return false;
+        }
+        let Some(entries) = Self::native_entries(menu, window, cx) else {
+            return false;
+        };
+        let menu = menu.clone();
+        crate::native_menu::pop_up_entries(entries, position, window, cx, move |path, window, cx| {
+            Self::activate_path(&menu, &path, window, cx)
+        });
+        true
+    }
+
+    #[cfg(target_os = "macos")]
+    fn native_entries(
+        menu: &Entity<PopupMenu>,
+        window: &Window,
+        cx: &App,
+    ) -> Option<Vec<crate::native_menu::NativeEntry>> {
+        use crate::native_menu::NativeEntry;
+        let this = menu.read(cx);
+        this.menu_items
+            .iter()
+            .map(|item| {
+                Some(match item {
+                    PopupMenuItem::Separator => NativeEntry::Separator,
+                    PopupMenuItem::Label(label) => NativeEntry::Header(label.clone()),
+                    PopupMenuItem::Item { icon, label, disabled, checked, action, .. } => NativeEntry::Item {
+                        label: label.clone(),
+                        disabled: *disabled,
+                        checked: *checked,
+                        icon: icon.clone(),
+                        key: action.as_ref().and_then(|action| this.native_key(action.as_ref(), window, cx)),
+                    },
+                    PopupMenuItem::ElementItem { .. } => return None,
+                    PopupMenuItem::Submenu { label, disabled, menu, .. } => NativeEntry::Submenu {
+                        label: label.clone(),
+                        disabled: *disabled,
+                        items: Self::native_entries(menu, window, cx)?,
+                    },
+                })
+            })
+            .collect()
+    }
+
+    /// An action's shortcut, looked up as the drawn menu's hint is; one keystroke only.
+    #[cfg(target_os = "macos")]
+    fn native_key(&self, action: &dyn Action, window: &Window, cx: &App) -> Option<gpui::Keystroke> {
+        let action_context = self.resolved_action_context(cx);
+        let binding = [action_context.as_ref(), self.trigger_focus_handle.as_ref(), self.previous_focus_handle.as_ref()]
+            .into_iter()
+            .flatten()
+            .find_map(|handle| window.highest_precedence_binding_for_action_in(action, handle))
+            .or_else(|| window.highest_precedence_binding_for_action_in_context(action, gpui::KeyContext::default()))?;
+        match binding.keystrokes() {
+            [stroke] => Some(stroke.inner().clone()),
+            _ => None,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn activate_path(menu: &Entity<PopupMenu>, path: &[usize], window: &mut Window, cx: &mut App) {
+        let Some((&ix, rest)) = path.split_first() else {
+            return;
+        };
+        let submenu = match menu.read(cx).menu_items.get(ix) {
+            Some(PopupMenuItem::Submenu { menu, .. }) => Some(menu.clone()),
+            _ => None,
+        };
+        match submenu {
+            Some(submenu) => Self::activate_path(&submenu, rest, window, cx),
+            None => menu.update(cx, |this, cx| {
+                this.selected_index = Some(ix);
+                this.confirm(&Confirm { secondary: false }, window, cx);
+            }),
+        }
+    }
+
     fn resolved_action_context(&self, cx: &App) -> Option<FocusHandle> {
         self.action_context.clone().or_else(|| {
             let parent = self.parent_menu.as_ref()?.upgrade()?;

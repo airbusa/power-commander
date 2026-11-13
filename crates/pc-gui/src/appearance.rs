@@ -215,6 +215,24 @@ pub fn mac_selection(dark: bool) -> Option<u32> {
     mac_color(dark, objc2_app_kit::NSColor::selectedContentBackgroundColor)
 }
 
+/// macOS: AppKit's own parts (menus, pop-ups, the window's buttons) in the
+/// app's light or dark when Settings fixes one, else the system's.
+#[cfg(target_os = "macos")]
+pub fn mac_force(choice: pc_core::theme::Appearance) {
+    use objc2_app_kit::{NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication};
+    use pc_core::theme::Appearance;
+    let Some(mtm) = objc2::MainThreadMarker::new() else {
+        return;
+    };
+    let name = match choice {
+        Appearance::System => None,
+        Appearance::Light => Some(unsafe { NSAppearanceNameAqua }),
+        Appearance::Dark => Some(unsafe { NSAppearanceNameDarkAqua }),
+    };
+    let appearance = name.and_then(NSAppearance::appearanceNamed);
+    NSApplication::sharedApplication(mtm).setAppearance(appearance.as_deref());
+}
+
 /// A system colour in light or dark mode.
 #[cfg(target_os = "macos")]
 fn mac_color(dark: bool, color: fn() -> objc2::rc::Retained<objc2_app_kit::NSColor>) -> Option<u32> {

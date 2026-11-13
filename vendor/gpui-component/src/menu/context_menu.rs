@@ -481,6 +481,14 @@ fn open_menu(
                 menu.set_previous_focus(previous_focus_handle, cx);
             });
 
+            // PowerCommander patch: on macOS, AppKit's own menu, see `MacControls`.
+            #[cfg(target_os = "macos")]
+            if PopupMenu::show_native(&menu, position, window, cx) {
+                shared_state.borrow_mut().open = false;
+                window.refresh();
+                return;
+            }
+
             // A menu on another element must not keep the last
             // focused input highlighted. An explicit action target
             // takes precedence over where the press landed.

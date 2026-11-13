@@ -1,9 +1,9 @@
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    Anchor, AnyElement, App, Context, DismissEvent, Element, ElementId, Entity, FocusHandle,
+    Anchor, AnyElement, App, Bounds, Context, DismissEvent, Element, ElementId, Entity, FocusHandle,
     Focusable, GlobalElementId, InspectorElementId, InteractiveElement, IntoElement, LayoutId,
-    RenderOnce, SharedString, Styled, Window, prelude::FluentBuilder,
+    Pixels, RenderOnce, SharedString, Styled, Window, prelude::FluentBuilder,
 };
 
 use crate::{Selectable, button::Button, menu::PopupMenu, popover::Popover};
@@ -88,8 +88,8 @@ where
     T: Selectable + IntoElement + 'static,
 {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        TriggerFocus::new(self.id.clone(), move |trigger_focus, window, cx| {
-            self.render_popover(trigger_focus, window, cx)
+        TriggerFocus::new(self.id.clone(), move |trigger_focus, trigger_bounds, window, cx| {
+            self.render_popover(trigger_focus, trigger_bounds, window, cx)
                 .into_any_element()
         })
     }
@@ -102,6 +102,7 @@ where
     fn render_popover(
         self,
         trigger_focus: FocusHandle,
+        trigger_bounds: Rc<Cell<Bounds<Pixels>>>,
         window: &mut Window,
         cx: &mut App,
     ) -> Popover {
@@ -117,7 +118,7 @@ where
             .when_some(self.on_open_change, |this, callback| {
                 this.on_open_change(move |open, window, cx| callback(open, window, cx))
             })
-            .content(move |_, window, cx| {
+            .content(move |_, window, cx| -> AnyElement {
                 // Here is special logic to only create the PopupMenu once and reuse it.
                 // Because this `content` will called in every time render, so we need to store the menu
                 // in state to avoid recreating at every render.
@@ -134,6 +135,18 @@ where
                         menu.update(cx, |menu, cx| {
                             menu.set_trigger_focus(Some(trigger_focus.clone()), cx)
                         });
+                        // PowerCommander patch: on macOS, AppKit's own menu below the
+                        // button, see `MacControls`; the popover closes at once.
+                        #[cfg(target_os = "macos")]
+                        {
+                            let below = trigger_bounds.get().bottom_left() + gpui::point(gpui::px(0.), gpui::px(4.));
+                            if PopupMenu::show_native(&menu, below, window, cx) {
+                                cx.defer_in(window, |state, window, cx| state.dismiss(window, cx));
+                                return gpui::Empty.into_any_element();
+                            }
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        let _ = &trigger_bounds;
                         menu_state.update(cx, |state, _| {
                             state.menu = Some(menu.clone());
                         });
@@ -168,12 +181,13 @@ where
                     }
                 };
 
-                menu.clone()
+                menu.clone().into_any_element()
             })
     }
 }
 
-type TriggerFocusBuild = Box<dyn FnOnce(FocusHandle, &mut Window, &mut App) -> AnyElement>;
+type TriggerFocusBuild =
+    Box<dyn FnOnce(FocusHandle, Rc<Cell<Bounds<Pixels>>>, &mut Window, &mut App) -> AnyElement>;
 
 /// Registers a focus handle on the trigger's dispatch node without ever
 /// focusing it, so the menu opened from the trigger can resolve its shortcut
@@ -188,17 +202,20 @@ struct TriggerFocus {
 #[derive(Default)]
 struct TriggerFocusState {
     focus_handle: Option<FocusHandle>,
+    /// PowerCommander patch: where the trigger was last drawn, for a native menu.
+    bounds: Rc<Cell<Bounds<Pixels>>>,
 }
 
 struct TriggerFocusFrame {
     focus_handle: FocusHandle,
+    bounds: Rc<Cell<Bounds<Pixels>>>,
     child: AnyElement,
 }
 
 impl TriggerFocus {
     fn new(
         id: ElementId,
-        build: impl FnOnce(FocusHandle, &mut Window, &mut App) -> AnyElement + 'static,
+        build: impl FnOnce(FocusHandle, Rc<Cell<Bounds<Pixels>>>, &mut Window, &mut App) -> AnyElement + 'static,
     ) -> Self {
         Self {
             id,
@@ -234,23 +251,24 @@ impl Element for TriggerFocus {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let focus_handle =
+        let (focus_handle, bounds) =
             window.with_optional_element_state::<TriggerFocusState, _>(id, |state, _| {
                 let mut state = state.flatten().unwrap_or_default();
                 let focus_handle = state
                     .focus_handle
                     .get_or_insert_with(|| cx.focus_handle())
                     .clone();
-                (focus_handle, Some(state))
+                ((focus_handle, state.bounds.clone()), Some(state))
             });
         let build = self.build.take().expect("TriggerFocus is laid out once");
-        let mut child = build(focus_handle.clone(), window, cx);
+        let mut child = build(focus_handle.clone(), bounds.clone(), window, cx);
         let layout_id = child.request_layout(window, cx);
 
         (
             layout_id,
             TriggerFocusFrame {
                 focus_handle,
+                bounds,
                 child,
             },
         )
@@ -260,11 +278,12 @@ impl Element for TriggerFocus {
         &mut self,
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
-        _: gpui::Bounds<gpui::Pixels>,
+        bounds: gpui::Bounds<gpui::Pixels>,
         frame: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
     ) {
+        frame.bounds.set(bounds);
         window.set_focus_handle(&frame.focus_handle, cx);
         frame.child.prepaint(window, cx);
     }

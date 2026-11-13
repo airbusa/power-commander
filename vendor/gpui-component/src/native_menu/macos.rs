@@ -200,6 +200,169 @@ fn ns_image_for_icon(
     NSImage::initWithData(NSImage::alloc(), &data)
 }
 
+/// PowerCommander patch: an entry of a drawn menu shown by AppKit, see
+/// `PopupMenu::show_native`.
+pub(crate) enum NativeEntry {
+    Separator,
+    Header(gpui::SharedString),
+    Item {
+        label: gpui::SharedString,
+        disabled: bool,
+        checked: bool,
+        icon: Option<crate::Icon>,
+        /// Its single-keystroke shortcut, shown as AppKit's key equivalent.
+        key: Option<gpui::Keystroke>,
+    },
+    Submenu {
+        label: gpui::SharedString,
+        disabled: bool,
+        items: Vec<NativeEntry>,
+    },
+}
+
+/// PowerCommander patch: shows `entries` as an `NSMenu` at `position`; `picked`
+/// gets the path to the item chosen, its index in each menu down to it.
+pub(crate) fn pop_up_entries(
+    entries: Vec<NativeEntry>,
+    position: Point<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+    picked: impl FnOnce(Vec<usize>, &mut Window, &mut App) + 'static,
+) {
+    let Some(view_ptr) = ns_view_ptr(window) else {
+        return;
+    };
+    let handle = Window::window_handle(window);
+    let asset_source = cx.asset_source().clone();
+    cx.spawn(async move |cx| {
+        let path = run_entries(view_ptr, &entries, asset_source.as_ref(), position);
+        let _ = cx.update(move |app| {
+            let _ = handle.update(app, move |_, window, app| {
+                if let Some(path) = path {
+                    picked(path, window, app);
+                }
+                window.refresh();
+            });
+        });
+    })
+    .detach();
+}
+
+fn run_entries(
+    view_ptr: usize,
+    entries: &[NativeEntry],
+    asset_source: &dyn AssetSource,
+    position: Point<Pixels>,
+) -> Option<Vec<usize>> {
+    let mtm = MainThreadMarker::new()?;
+    // SAFETY: as in `run_menu`.
+    let view: &NSView = unsafe { &*(view_ptr as *const NSView) };
+    let target = MenuTarget::new();
+    let mut paths = Vec::new();
+    let menu = build_entries(entries, &mut Vec::new(), asset_source, &target, mtm, &mut paths);
+    let height = view.bounds().size.height;
+    let location = NSPoint::new(f32::from(position.x) as f64, height - f32::from(position.y) as f64);
+    menu.popUpMenuPositioningItem_atLocation_inView(None, location, Some(view));
+    let tag = target.ivars().selected.get();
+    (tag >= 0).then(|| paths.get(tag as usize).cloned()).flatten()
+}
+
+fn build_entries(
+    entries: &[NativeEntry],
+    at: &mut Vec<usize>,
+    asset_source: &dyn AssetSource,
+    target: &MenuTarget,
+    mtm: MainThreadMarker,
+    paths: &mut Vec<Vec<usize>>,
+) -> Retained<NSMenu> {
+    let menu = NSMenu::new(mtm);
+    menu.setAutoenablesItems(false);
+    for (ix, entry) in entries.iter().enumerate() {
+        at.push(ix);
+        match entry {
+            NativeEntry::Separator => menu.addItem(&NSMenuItem::separatorItem(mtm)),
+            NativeEntry::Header(label) => {
+                menu.addItem(&NSMenuItem::sectionHeaderWithTitle(&NSString::from_str(label), mtm))
+            }
+            NativeEntry::Item { label, disabled, checked, icon, key } => {
+                let item = NSMenuItem::new(mtm);
+                item.setTitle(&NSString::from_str(label));
+                item.setEnabled(!*disabled);
+                if *checked {
+                    item.setState(1);
+                }
+                if let Some(image) = icon.as_ref().and_then(|icon| ns_image_for_icon(icon, asset_source)) {
+                    image.setSize(NSSize::new(MENU_IMAGE_SIZE, MENU_IMAGE_SIZE));
+                    image.setTemplate(true);
+                    item.setImage(Some(&image));
+                }
+                if let Some((key, modifiers)) = key.as_ref().and_then(key_equivalent) {
+                    item.setKeyEquivalent(&NSString::from_str(&key));
+                    item.setKeyEquivalentModifierMask(modifiers);
+                }
+                if !*disabled {
+                    unsafe {
+                        item.setTag(paths.len() as isize);
+                        item.setTarget(Some(target as &AnyObject));
+                        item.setAction(Some(sel!(menuItemClicked:)));
+                    }
+                    paths.push(at.clone());
+                }
+                menu.addItem(&item);
+            }
+            NativeEntry::Submenu { label, disabled, items } => {
+                let item = NSMenuItem::new(mtm);
+                let submenu = build_entries(items, at, asset_source, target, mtm, paths);
+                item.setTitle(&NSString::from_str(label));
+                item.setEnabled(!*disabled);
+                item.setSubmenu(Some(&submenu));
+                menu.addItem(&item);
+            }
+        }
+        at.pop();
+    }
+    menu
+}
+
+/// A keystroke as AppKit's key equivalent: its key, then its modifiers.
+fn key_equivalent(stroke: &gpui::Keystroke) -> Option<(String, objc2_app_kit::NSEventModifierFlags)> {
+    use objc2_app_kit::NSEventModifierFlags as Flags;
+    let function = |offset: u32| char::from_u32(0xF700 + offset).map(String::from);
+    let key = match stroke.key.as_str() {
+        "up" => function(0x00)?,
+        "down" => function(0x01)?,
+        "left" => function(0x02)?,
+        "right" => function(0x03)?,
+        "insert" => function(0x27)?,
+        "delete" => function(0x28)?,
+        "home" => function(0x29)?,
+        "end" => function(0x2B)?,
+        "pageup" => function(0x2C)?,
+        "pagedown" => function(0x2D)?,
+        "enter" => "\r".into(),
+        "tab" => "\t".into(),
+        "space" => " ".into(),
+        "escape" => "\u{1b}".into(),
+        "backspace" => "\u{8}".into(),
+        key if key.len() > 1 && key.starts_with('f') => function(0x04 + key[1..].parse::<u32>().ok()?.checked_sub(1)?)?,
+        key if key.chars().count() == 1 => key.to_lowercase(),
+        _ => return None,
+    };
+    let modifiers = &stroke.modifiers;
+    let mut flags = Flags::empty();
+    for (on, flag) in [
+        (modifiers.platform, Flags::Command),
+        (modifiers.shift, Flags::Shift),
+        (modifiers.alt, Flags::Option),
+        (modifiers.control, Flags::Control),
+    ] {
+        if on {
+            flags |= flag;
+        }
+    }
+    Some((key, flags))
+}
+
 /// PowerCommander patch: a pop-up button's menu as AppKit shows it, the chosen
 /// row over the button and the menu at least as wide; `chosen` gets the row picked.
 pub(crate) fn pop_up_list(
