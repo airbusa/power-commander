@@ -577,7 +577,7 @@ fn failure(code: Option<i32>, stderr: &[u8]) -> String {
 }
 
 /// The last `NN%` 7-Zip wrote in `bytes`.
-fn last_percent(bytes: &[u8]) -> Option<u64> {
+pub(crate) fn last_percent(bytes: &[u8]) -> Option<u64> {
     let text = String::from_utf8_lossy(bytes);
     text.split(['\u{8}', '\r', '\n'])
         .filter_map(|part| {

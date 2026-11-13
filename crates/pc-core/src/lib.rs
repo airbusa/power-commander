@@ -312,7 +312,7 @@ impl Panel {
         let exact = match &state.archive_dir {
             Some(dir) => Self::new(state.path.parent().unwrap_or(&state.path), filter).and_then(
                 |mut panel| {
-                    panel.enter_archive(state.path.clone(), None)?;
+                    panel.enter_archive(state.path.clone(), None, &archive::Watch::default())?;
                     panel.show_archive_dir(dir.clone(), None);
                     Ok(panel)
                 },
@@ -462,6 +462,11 @@ impl Panel {
 
     /// False on a file that is no archive.
     pub fn open(&mut self) -> io::Result<bool> {
+        self.open_watched(&archive::Watch::default())
+    }
+
+    /// As `open`; an archive's listing reports to `watch` and stops by it.
+    pub fn open_watched(&mut self, watch: &archive::Watch) -> io::Result<bool> {
         let Some(entry) = self.entries.get(self.cursor) else {
             return Ok(false);
         };
@@ -479,8 +484,8 @@ impl Panel {
             let path = self.path.join(name);
             match &self.remote {
                 // shortcut: no progress while it downloads; show one if big archives make it feel stuck.
-                Some(remote) => self.enter_archive(vfs::fetch(&**remote, &path)?, Some(path))?,
-                None => self.enter_archive(path, None)?,
+                Some(remote) => self.enter_archive(vfs::fetch(&**remote, &path)?, Some(path), watch)?,
+                None => self.enter_archive(path, None, watch)?,
             }
         } else {
             return Ok(false);
@@ -531,9 +536,8 @@ impl Panel {
         Ok(())
     }
 
-    fn enter_archive(&mut self, path: PathBuf, origin: Option<PathBuf>) -> io::Result<()> {
-        // shortcut: lists on the UI thread; move to the background if big archives freeze it.
-        let items = archive::list(&path)?;
+    fn enter_archive(&mut self, path: PathBuf, origin: Option<PathBuf>, watch: &archive::Watch) -> io::Result<()> {
+        let items = archive::list_watched(&path, watch)?;
         self.marked.clear();
         self.measured.clear();
         self.found = None;
@@ -980,7 +984,7 @@ impl Panel {
             return self.go_to(parent, path.file_name().map(OsString::from));
         };
         self.go_to(parent, None)?;
-        self.enter_archive(path.to_owned(), None)?;
+        self.enter_archive(path.to_owned(), None, &archive::Watch::default())?;
         let dir = member.parent().unwrap_or(Path::new("")).to_owned();
         self.show_archive_dir(dir, member.file_name().map(OsString::from));
         Ok(())

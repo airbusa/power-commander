@@ -3,11 +3,11 @@
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, SystemTime};
 
 use chrono::{Local, NaiveDateTime, TimeZone};
@@ -233,33 +233,86 @@ pub(crate) fn is_compressed_tar(path: &Path) -> bool {
 }
 
 pub(crate) fn list(archive: &Path) -> io::Result<Vec<Item>> {
+    list_watched(archive, &Watch::default())
+}
+
+/// A listing that can take a while (a compressed tar is unpacked whole):
+/// how far it is, and a request to stop it, shared with the front end.
+#[derive(Clone, Default)]
+pub struct Watch {
+    /// 0 to 100; 0 while 7-Zip tells none.
+    pub percent: Arc<AtomicU64>,
+    pub stop: Arc<AtomicBool>,
+}
+
+/// Stopped, it fails as `Interrupted`.
+pub(crate) fn list_watched(archive: &Path, watch: &Watch) -> io::Result<Vec<Item>> {
     let name = archive.file_name().unwrap_or_default().to_string_lossy();
     let fail = |err: String| io::Error::other(format!("{name}: {err}"));
-    let output = if is_compressed_tar(archive) {
-        let mut unpack = seven_zip(&["x", "-so"], Some(archive))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(missing)?;
-        let stdout = unpack.stdout.take().expect("piped");
-        let listing = seven_zip(&["l", "-slt", "-ba", "-si", "-ttar"], None)
-            .stdin(stdout)
-            .output()
-            .map_err(missing)?;
+    let mut unpack = match is_compressed_tar(archive) {
+        true => Some(
+            seven_zip(&["x", "-so", "-bsp2", "-bso0"], Some(archive))
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(missing)?,
+        ),
+        false => None,
+    };
+    let mut command = match &mut unpack {
+        Some(unpack) => {
+            let mut command = seven_zip(&["l", "-slt", "-ba", "-si", "-ttar"], None);
+            command.stdin(unpack.stdout.take().expect("piped"));
+            command
+        }
+        None => seven_zip(&["l", "-slt", "-ba"], Some(archive)),
+    };
+    let mut listing = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(missing)?;
+    // The unpacking one's percentages, as they come.
+    let reading = unpack.as_mut().map(|unpack| {
+        let (mut progress, percent) = (unpack.stderr.take().expect("piped"), watch.percent.clone());
+        std::thread::spawn(move || {
+            let mut chunk = [0; 4096];
+            while let Ok(read @ 1..) = progress.read(&mut chunk) {
+                if let Some(at) = crate::packing::last_percent(&chunk[..read]) {
+                    percent.store(at, Ordering::Relaxed);
+                }
+            }
+        })
+    });
+    let (mut stdout, mut stderr) = (listing.stdout.take().expect("piped"), listing.stderr.take().expect("piped"));
+    let (done, read) = mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let _ = stdout.read_to_end(&mut out);
+        let _ = stderr.read_to_end(&mut err);
+        let _ = done.send((out, err));
+    });
+    let (stdout, stderr) = loop {
+        match read.recv_timeout(Duration::from_millis(50)) {
+            Ok(output) => break output,
+            Err(mpsc::RecvTimeoutError::Timeout) if !watch.stop.load(Ordering::Relaxed) => {}
+            Err(_) => {
+                for child in [Some(&mut listing), unpack.as_mut()].into_iter().flatten() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
+            }
+        }
+    };
+    let status = listing.wait()?;
+    if let Some(mut unpack) = unpack {
         let unpacked = unpack.wait()?;
-        if listing.status.success() && !unpacked.success() {
+        reading.map(std::thread::JoinHandle::join);
+        if status.success() && !unpacked.success() {
             return Err(fail(failure(unpacked, b"")));
         }
-        listing
-    } else {
-        seven_zip(&["l", "-slt", "-ba"], Some(archive))
-            .output()
-            .map_err(missing)?
-    };
-    if !output.status.success() {
-        return Err(fail(failure(output.status, &output.stderr)));
     }
-    Ok(parse(&String::from_utf8_lossy(&output.stdout)))
+    if !status.success() {
+        return Err(fail(failure(status, &stderr)));
+    }
+    Ok(parse(&String::from_utf8_lossy(&stdout)))
 }
 
 /// The entries of `dir` inside the archive, `..` first.
@@ -424,6 +477,28 @@ fn parse_time(text: &str) -> Option<SystemTime> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A listing waiting for its archive (a pipe nobody writes) stops when asked.
+    #[cfg(unix)]
+    #[test]
+    fn stops_a_listing() {
+        if !executable().exists() {
+            return eprintln!("no 7-Zip here: vendor/7zip/fetch.sh");
+        }
+        let dir = std::env::temp_dir().join(format!("pc-archive-stop-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let never = dir.join("never.tar.gz");
+        assert!(Command::new("mkfifo").arg(&never).status().unwrap().success());
+        let watch = Watch::default();
+        let stop = watch.stop.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            stop.store(true, Ordering::Relaxed);
+        });
+        let err = list_watched(&never, &watch).err().expect("stopped");
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     pub(crate) fn attributes_of(text: &str) -> String {
         attributes(text)

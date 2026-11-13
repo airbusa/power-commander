@@ -26,6 +26,7 @@ mod menus;
 mod minimap;
 mod name_dialog;
 mod occupied;
+mod opening;
 mod pack_dialog;
 mod pdf_view;
 mod properties_dialog;
@@ -46,6 +47,9 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -1131,10 +1135,40 @@ impl Commander {
         let file = panel.current_entry().is_some_and(|e| {
             (!e.is_dir || e.is_app() && local) && (panel.in_archive() || !archive::is_archive(&e.name))
         });
+        let archive = !file && panel.current_entry().is_some_and(|e| !e.is_dir && archive::is_archive(&e.name));
         match file {
             true => self.launch(window, cx),
+            false if archive => self.open_archive(window, cx),
             false => self.navigate(|panel| panel.open().map(drop), window, cx),
         }
+    }
+
+    /// An archive lists in the background: a big compressed tar is unpacked
+    /// whole for it. One that takes a while shows its progress, to cancel.
+    fn open_archive(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.panels[self.active].tabs.current();
+        let name = panel.current_entry().map(|e| e.name.to_string_lossy().into_owned()).unwrap_or_default();
+        let watch = archive::Watch::default();
+        let done = Arc::new(AtomicBool::new(false));
+        let (listing, finished) = (watch.clone(), done.clone());
+        self.navigate_on(
+            self.active,
+            true,
+            move |panel| {
+                let opened = panel.open_watched(&listing).map(drop);
+                finished.store(true, Ordering::Relaxed);
+                opened
+            },
+            window,
+            cx,
+        );
+        cx.spawn_in(window, async move |_, cx| {
+            cx.background_executor().timer(Duration::from_millis(400)).await;
+            if !done.load(Ordering::Relaxed) {
+                let _ = cx.update(|window, cx| opening::show(name, watch, done, window, cx));
+            }
+        })
+        .detach();
     }
 
     /// A server's or an archive's file opens from a copy, and is never run.
@@ -1213,6 +1247,8 @@ impl Commander {
                 let side = &mut this.panels[ix];
                 match went {
                     Ok(moved) => side.tabs.navigated(tab, moved),
+                    // Cancelled: as it was.
+                    Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
                     Err(err) => {
                         let text = format!("{}: {err}", side.tabs.current().location());
                         window.push_notification(Notification::error(text), cx);
