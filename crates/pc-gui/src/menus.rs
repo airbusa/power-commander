@@ -159,6 +159,19 @@ fn on_active_window(cx: &mut App, act: fn(&Window)) {
     }
 }
 
+/// The Show menu's last custom filter, the name of the filter item after
+/// Programs, as Total Commander's; "*.*" before one.
+static LAST_FILTER: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+pub fn set_last_filter(masks: &str) {
+    *LAST_FILTER.lock().unwrap_or_else(|err| err.into_inner()) = masks.to_owned();
+}
+
+pub fn last_filter() -> String {
+    let masks = LAST_FILTER.lock().unwrap_or_else(|err| err.into_inner()).clone();
+    if masks.is_empty() { "*.*".to_owned() } else { masks }
+}
+
 /// Call `AppMenuBar::reload` after.
 /// The menu bar; `checked` commands show a check mark.
 pub fn set(chosen: Appearance, checked: &dyn Fn(Command) -> bool, cx: &mut App) {
@@ -181,6 +194,9 @@ fn items(list: &[Item], chosen: Appearance, checked: &dyn Fn(Command) -> bool) -
         )),
         #[cfg(target_os = "macos")]
         Item::Command { command, .. } if IN_APP_MENU.contains(&command) => None,
+        Item::Command { command: Command::AllWithExtension, .. } => {
+            Some(item(last_filter().into(), checked(Command::AllWithExtension), Box::new(Run(Command::AllWithExtension)), false))
+        }
         Item::Command { label, command, .. } => {
             Some(item(label.into(), checked(command), Box::new(Run(command)), false))
         }

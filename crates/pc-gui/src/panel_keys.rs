@@ -10,7 +10,8 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{IconName, Sizable, WindowExt, h_flex};
 use gpui_kit::*;
-use pc_core::{Panel, View};
+use pc_core::menu::Command;
+use pc_core::{FileFilter, Panel, View};
 
 use crate::{CancelRename, Commander, name_dialog, remote};
 
@@ -222,6 +223,44 @@ impl Commander {
                     .on_click(cx.listener(|this, _, window, cx| this.finish_rename(true, window, cx))),
             );
         Ok(cell.into_any_element())
+    }
+
+    /// The Show menu's filters: the active panel lists only these files.
+    pub(crate) fn show_files(&mut self, filter: FileFilter, window: &mut Window, cx: &mut Context<Self>) {
+        let remote = self.panels[self.active].tabs.current().remote().is_some();
+        self.navigate_on(self.active, remote, move |panel| panel.set_file_filter(filter), window, cx);
+        self.reload_menus(cx);
+    }
+
+    /// Custom...: file types typed, kept as the menu's next filter item.
+    pub(crate) fn custom_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let commander = cx.entity().downgrade();
+        let label = "File types, e.g. *.txt *.md (after |, those left out):";
+        name_dialog::open("Show files", label, crate::menus::last_filter(), window, cx, move |masks, window, cx| {
+            let masks = masks.trim().to_owned();
+            if masks.is_empty() {
+                return;
+            }
+            let _ = commander.update(cx, |this, cx| {
+                crate::menus::set_last_filter(&masks);
+                this.settings.last_filter = masks.clone();
+                this.save_settings(window, cx);
+                this.show_files(FileFilter::Masks(masks), window, cx);
+            });
+        });
+    }
+
+    /// The Show menu's check mark: the active panel's filter.
+    pub(crate) fn filter_checked(&self, command: Command) -> bool {
+        let filter = self.panels[self.active].tabs.current().file_filter();
+        match (command, filter) {
+            (Command::AllFiles, FileFilter::All) => true,
+            (Command::Programs, FileFilter::Programs) => true,
+            (Command::AllWithExtension, FileFilter::Masks(masks)) => *masks == crate::menus::last_filter(),
+            (Command::CustomFilter, FileFilter::Masks(masks)) => *masks != crate::menus::last_filter(),
+            (Command::OnlySelectedFiles, FileFilter::Selected(_)) => true,
+            _ => false,
+        }
     }
 
     /// Shift+F4: a text file, new or there already, in the editor.

@@ -100,6 +100,56 @@ impl Filter {
     }
 }
 
+/// The Show menu's file filter, as Total Commander's: the files a panel
+/// lists, its folders always (but with Only Selected Files); it stays as the
+/// panel moves, Only Selected Files to the next folder.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum FileFilter {
+    #[default]
+    All,
+    /// Windows' by their extension; elsewhere those that may run.
+    Programs,
+    /// Masks as Select Group's ("*.txt *.md", or with ';'); after '|', those left out.
+    Masks(String),
+    /// The names marked when chosen.
+    Selected(HashSet<OsString>),
+}
+
+/// Programs' extensions on Windows.
+const PROGRAMS: [&str; 6] = ["exe", "com", "bat", "cmd", "pif", "msi"];
+
+impl FileFilter {
+    fn shows(&self, entry: &Entry) -> bool {
+        if entry.is_parent() {
+            return true;
+        }
+        match self {
+            FileFilter::All => true,
+            FileFilter::Selected(names) => names.contains(&entry.name),
+            _ if entry.is_dir && !entry.is_app() => true,
+            FileFilter::Programs if cfg!(windows) => PROGRAMS.contains(&extension(entry).as_str()),
+            FileFilter::Programs => entry.is_app() || entry.attributes.contains(['x', 's']),
+            FileFilter::Masks(masks) => {
+                let (shown, left_out) = masks.split_once('|').unwrap_or((masks, ""));
+                let name = entry.name.to_string_lossy();
+                let shown = shown.trim();
+                (shown.is_empty() || associations::matches(shown, &name)) && !associations::matches(left_out, &name)
+            }
+        }
+    }
+
+    /// After the path, as Total Commander's `c:\docs\*.txt`.
+    pub fn label(&self) -> Option<String> {
+        match self {
+            FileFilter::All => None,
+            FileFilter::Programs if cfg!(windows) => Some(PROGRAMS.map(|ext| format!("*.{ext}")).join(" ")),
+            FileFilter::Programs => Some("programs".into()),
+            FileFilter::Masks(masks) => Some(masks.clone()),
+            FileFilter::Selected(_) => Some("selected files".into()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SortKey {
     #[default]
@@ -278,6 +328,7 @@ pub struct Panel {
     /// The tab's own name.
     name: Option<String>,
     filter: Filter,
+    file_filter: FileFilter,
     sort: Sort,
     view: View,
     /// Search results fed to the panel, listed by their path from `path`.
@@ -305,12 +356,26 @@ impl Panel {
             locked: false,
             name: None,
             filter,
+            file_filter: FileFilter::All,
             sort: Sort::default(),
             view: View::Full,
             found: None,
         };
         panel.reload()?;
         Ok(panel)
+    }
+
+    pub fn file_filter(&self) -> &FileFilter {
+        &self.file_filter
+    }
+
+    /// Lists the folder again by `filter`; Only Selected Files takes the marked names.
+    pub fn set_file_filter(&mut self, filter: FileFilter) -> io::Result<()> {
+        self.file_filter = match filter {
+            FileFilter::Selected(_) => FileFilter::Selected(self.marked.clone()),
+            filter => filter,
+        };
+        self.reload()
     }
 
     /// Where `state` was, or the nearest folder above it that still exists.
@@ -561,8 +626,7 @@ impl Panel {
 
     fn enter_archive(&mut self, path: PathBuf, origin: Option<PathBuf>, watch: &archive::Watch) -> io::Result<()> {
         let items = archive::list_watched(&path, watch)?;
-        self.marked.clear();
-        self.measured.clear();
+        self.moved();
         self.found = None;
         self.path = path;
         self.archive = Some(Archive {
@@ -1109,8 +1173,7 @@ impl Panel {
             None => read_dir(&path)?,
         };
         if path != self.path || self.archive.is_some() || self.found.is_some() {
-            self.marked.clear();
-            self.measured.clear();
+            self.moved();
         }
         self.archive = None;
         self.found = None;
@@ -1123,17 +1186,25 @@ impl Panel {
         let archive = self.archive.as_mut().expect("in an archive");
         let entries = archive::entries(&archive.items, &dir);
         if archive.dir != dir {
-            self.marked.clear();
-            self.measured.clear();
+            self.moved();
         }
         let archive = self.archive.as_mut().expect("in an archive");
         archive.dir = dir;
         self.show(entries, select);
     }
 
+    /// Another folder: no marks, no sizes measured, Only Selected Files over.
+    fn moved(&mut self) {
+        self.marked.clear();
+        self.measured.clear();
+        if matches!(self.file_filter, FileFilter::Selected(_)) {
+            self.file_filter = FileFilter::All;
+        }
+    }
+
     fn show(&mut self, mut entries: Vec<Entry>, select: Option<OsString>) {
         // What a search found shows, hidden or not.
-        entries.retain(|entry| self.found.is_some() || self.filter.shows(entry));
+        entries.retain(|entry| self.found.is_some() || (self.filter.shows(entry) && self.file_filter.shows(entry)));
         // Marks stay on what is still there.
         let names: HashSet<&OsString> = entries.iter().map(|e| &e.name).collect();
         self.marked.retain(|name| names.contains(name));
@@ -1887,6 +1958,40 @@ mod tests {
         panel.set_cursor(1);
         panel.open().unwrap();
         assert!(chosen(&panel).is_empty(), "a new folder, no marks");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn filters_files_as_the_show_menu() {
+        let root = std::env::temp_dir().join(format!("pc-show-filter-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("docs")).unwrap();
+        for name in ["a.txt", "b.md", "c.txt.bak", "run.exe", "run.sh"] {
+            fs::write(root.join(name), "").unwrap();
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(root.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut panel = Panel::new(&root, Filter::default()).unwrap();
+        let mut shown = |panel: &mut Panel, filter: FileFilter| {
+            panel.set_file_filter(filter).unwrap();
+            panel.entries().iter().map(Entry::display_name).collect::<Vec<_>>()
+        };
+        assert_eq!(shown(&mut panel, FileFilter::Masks("*.txt *.md".into())), ["..", "docs", "a.txt", "b.md"], "folders stay");
+        assert_eq!(shown(&mut panel, FileFilter::Masks("*.txt* | *.bak".into())), ["..", "docs", "a.txt"]);
+        let programs = shown(&mut panel, FileFilter::Programs);
+        assert_eq!(programs[2..], [if cfg!(windows) { "run.exe" } else { "run.sh" }]);
+        panel.go_to_folder(root.join("docs")).unwrap();
+        panel.up().unwrap();
+        assert_eq!(panel.entries().len(), 3, "the filter stays as the panel moves");
+        let all = shown(&mut panel, FileFilter::All);
+        assert_eq!(all.len(), 7);
+        panel.mark_group("a.txt docs/", true);
+        assert_eq!(shown(&mut panel, FileFilter::Selected(HashSet::new())), ["..", "docs", "a.txt"]);
+        panel.go_to_folder(root.join("docs")).unwrap();
+        assert_eq!(panel.file_filter(), &FileFilter::All, "only selected ends in another folder");
         fs::remove_dir_all(&root).unwrap();
     }
 

@@ -472,6 +472,7 @@ impl Commander {
         let opacity = settings.sidebar_opacity.0;
         let blur = settings.sidebar_blur.0;
         let sidebar = sidebar::Sidebar::new(session.sidebar, session.sidebar_width, settings.show_hidden, opacity, blur);
+        menus::set_last_filter(&settings.last_filter);
         menus::set(settings.appearance, &|command| sidebar.shows(command), cx);
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             if this.settings.appearance == Appearance::System {
@@ -635,7 +636,7 @@ impl Commander {
 
     /// The menus show these commands checked.
     fn checked(&self, command: Command) -> bool {
-        self.sidebar.shows(command) || (command == Command::QuickViewPanel && self.quick.is_some())
+        self.sidebar.shows(command) || (command == Command::QuickViewPanel && self.quick.is_some()) || self.filter_checked(command)
     }
 
     /// What is typed in panel `ix`, while its cursor stays on the row it found.
@@ -1620,6 +1621,8 @@ impl Commander {
                     // Search results say so, as Total Commander's listbox.
                     .when(panel.is_found(), |el| el.child(div().flex_none().pr_2().font_weight(FontWeight::BOLD).child("Search results:")))
                     .child(div().flex_1().min_w_0().truncate().child(panel.location()))
+                    // The filter stays in sight however long the path.
+                    .children(filter_suffix(panel).map(|filter| div().flex_none().child(filter)))
                     .when(panel.remote().is_some(), |el| {
                         el.child(
                             Button::new(("disconnect", ix))
@@ -1972,6 +1975,15 @@ impl Render for Commander {
                     Command::PathAndNameToCommandLine => this.to_command_line(true, true, window, cx),
                     Command::RenameInPlace => this.rename_in_place(window, cx),
                     Command::NewTextFile => this.new_text_file(window, cx),
+                    Command::AllFiles => this.show_files(pc_core::FileFilter::All, window, cx),
+                    Command::Programs => this.show_files(pc_core::FileFilter::Programs, window, cx),
+                    Command::AllWithExtension => {
+                        this.show_files(pc_core::FileFilter::Masks(menus::last_filter()), window, cx)
+                    }
+                    Command::CustomFilter => this.custom_filter(window, cx),
+                    Command::OnlySelectedFiles => {
+                        this.show_files(pc_core::FileFilter::Selected(Default::default()), window, cx)
+                    }
                     Command::Shortcuts => {
                         let commander = cx.entity().downgrade();
                         keys_dialog::open(commander, this.settings.keys.clone(), window, cx)
@@ -2156,6 +2168,19 @@ fn palette(settings: &Settings, window: &Window) -> theme::Palette {
     match &settings.font {
         Some(font) => theme::Palette { font: Some(font.family.clone()), font_size: Some(theme::font_pixels(font.size)), ..palette },
         None => palette,
+    }
+}
+
+/// The path line's end: the panel's filter, as Total Commander's
+/// `c:\docs\*.txt`; one in words in brackets.
+fn filter_suffix(panel: &Panel) -> Option<String> {
+    let filter = panel.file_filter().label()?;
+    if !filter.contains(['*', '?']) {
+        return Some(format!("  ({filter})"));
+    }
+    match panel.location().ends_with(['/', '\\']) {
+        true => Some(filter),
+        false => Some(format!("{}{filter}", std::path::MAIN_SEPARATOR)),
     }
 }
 

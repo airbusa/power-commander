@@ -65,6 +65,8 @@ pub struct Settings {
     pub font: Option<FontChoice>,
     /// The viewer's, the editor's and comparison's fixed-width font; the desktop's when none.
     pub fixed_font: Option<FontChoice>,
+    /// The Show menu's last custom filter, which it offers again ("*.*" before one).
+    pub last_filter: String,
 }
 
 /// A font family and its size in points.
