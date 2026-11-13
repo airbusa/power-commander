@@ -78,7 +78,11 @@ impl QuickView {
 impl Commander {
     pub(crate) fn toggle_quick_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.quick = match self.quick.take() {
-            Some(_) => {
+            Some(quick) => {
+                // Its picture leaves the window's memory with it.
+                if let Some(viewer) = &quick.viewer {
+                    viewer.release(window, cx);
+                }
                 window.focus(&self.focus, cx);
                 None
             }

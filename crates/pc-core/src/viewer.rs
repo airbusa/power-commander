@@ -952,7 +952,9 @@ impl Shown {
         let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
         let extension = extension.as_deref().unwrap_or_default();
         let media = self.plays && crate::media::is_media(path) && crate::media::available();
-        let picture = self.pictures.contains(&extension) || media;
+        // HEIC and AVIF by libmpv too, as pictures.
+        let still = crate::media::is_still(path) && crate::media::available();
+        let picture = self.pictures.contains(&extension) || media || still;
         let html = matches!(extension, "htm" | "html" | "xhtml");
         let markdown = self.markdown
             && matches!(extension, "md" | "markdown")

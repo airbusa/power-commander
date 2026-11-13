@@ -46,7 +46,7 @@ impl Addon {
     pub fn purpose(self) -> &'static str {
         match self {
             Addon::Office => "Office documents: the viewer shows Word, Excel and PowerPoint files as PDF.",
-            Addon::Media => "Video and sound: the viewer and Quick View play them.",
+            Addon::Media => "Video and sound, and HEIC and AVIF photos: the viewer and Quick View show them.",
             Addon::Cloud => "Online storage: S3, Google Drive, OneDrive, Dropbox and other services.",
         }
     }
@@ -83,9 +83,10 @@ impl Addon {
     }
 }
 
-/// The missing add-on that would show this file: libmpv a video or sound, the Craft tools an office document.
+/// The missing add-on that would show this file: libmpv a video, sound, or
+/// HEIC or AVIF picture; the Craft tools an office document.
 pub fn wanted_for(path: &Path) -> Option<Addon> {
-    if crate::media::is_media(path) {
+    if crate::media::is_media(path) || crate::media::is_still(path) {
         return (!crate::media::available()).then_some(Addon::Media);
     }
     let office = crate::convert::is_office(path) && crate::pdf::available();

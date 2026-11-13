@@ -20,6 +20,7 @@ pub mod edit;
 #[cfg(target_os = "macos")]
 pub mod finder;
 pub mod ftp;
+pub mod heif;
 pub mod html;
 pub mod icons;
 pub mod keymap;
@@ -1975,7 +1976,7 @@ mod tests {
             fs::set_permissions(root.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
         }
         let mut panel = Panel::new(&root, Filter::default()).unwrap();
-        let mut shown = |panel: &mut Panel, filter: FileFilter| {
+        let shown = |panel: &mut Panel, filter: FileFilter| {
             panel.set_file_filter(filter).unwrap();
             panel.entries().iter().map(Entry::display_name).collect::<Vec<_>>()
         };

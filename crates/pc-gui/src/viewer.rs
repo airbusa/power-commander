@@ -234,6 +234,16 @@ impl Quick {
         Quick(viewer)
     }
 
+    /// Frees what it drew into the main window, before it goes.
+    pub fn release(&self, window: &mut Window, cx: &mut App) {
+        self.0.update(cx, |viewer, _| {
+            let still = viewer.still.take().and_then(|(_, image)| image.ok());
+            for image in viewer.stale.drain(..).chain(still) {
+                let _ = window.drop_image(image);
+            }
+        });
+    }
+
     /// Shows `path` instead, as the viewer starts on a file.
     pub fn show(&self, path: PathBuf, window: &mut Window, cx: &mut App) {
         self.0.update(cx, |viewer, cx| {
@@ -316,6 +326,11 @@ struct Viewer {
     /// An office document being converted for them: the tool, or why it failed.
     converting: Option<Result<&'static str, String>>,
     _converting: Option<Task<()>>,
+    /// A HEIC's or AVIF's picture, drawn by libmpv in the background, or why not.
+    still: Option<(PathBuf, Result<Arc<RenderImage>, String>)>,
+    _still: Option<Task<()>>,
+    /// Pictures no longer shown, freed at the next frame.
+    stale: Vec<Arc<RenderImage>>,
     fit: bool,
     only_larger: bool,
     /// Anchor and head, as file offsets: what Copy copies.
@@ -591,6 +606,9 @@ impl Viewer {
             pdf: pdf_view(&shown, cx),
             converting: None,
             _converting: None,
+            still: None,
+            _still: None,
+            stale: Vec::new(),
             shown,
             text: Arc::new(text),
             fit: true,
@@ -616,6 +634,7 @@ impl Viewer {
         };
         viewer.colours = viewer.shown.settings.syntax;
         viewer.convert(cx);
+        viewer.decode_still(cx);
         viewer.open_book();
         viewer.parse(cx);
         viewer
@@ -693,6 +712,7 @@ impl Viewer {
         self.pdf = pdf_view(&self.shown, cx);
         self.zoom_pdf(cx);
         self.convert(cx);
+        self.decode_still(cx);
         self.media = media_view(&self.shown, self.media.take(), self.quick, cx);
         self.text = Arc::new(text);
         self.parse(cx);
@@ -1141,6 +1161,35 @@ impl Viewer {
                 cx.notify();
             });
         }));
+    }
+
+    /// The Image mode of a picture only libmpv reads: drawn once, at its own size.
+    fn decode_still(&mut self, cx: &mut Context<Self>) {
+        let path = self.shown.path().to_owned();
+        let wanted = self.shown.mode == Mode::Picture && pc_core::media::is_still(&path);
+        if self.still.as_ref().is_some_and(|(shown, _)| *shown == path && wanted) {
+            return;
+        }
+        if let Some((_, Ok(image))) = self.still.take() {
+            self.stale.push(image);
+        }
+        self._still = wanted.then(|| {
+            cx.spawn(async move |this, cx| {
+                let file = path.clone();
+                let drawn = cx.background_executor().spawn(async move { pc_core::media::still(&file, 16384) }).await;
+                let image = drawn.and_then(|frame| {
+                    let buffer = image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra);
+                    buffer.map(|buffer| Arc::new(RenderImage::new([image::Frame::new(buffer)]))).ok_or_else(|| "no picture".into())
+                });
+                let _ = this.update(cx, |this, cx| {
+                    // Another file since: not for it.
+                    if this.shown.path() == path {
+                        this.still = Some((path, image));
+                        cx.notify();
+                    }
+                });
+            })
+        });
     }
 
     /// The player, when video or sound is shown.
@@ -1598,7 +1647,16 @@ impl Viewer {
             (false, _) => ObjectFit::None,
         };
         let zoomed = self.fit && self.zoom != 1.;
-        let picture = img(self.shown.path().to_owned())
+        let source = match &self.still {
+            _ if !pc_core::media::is_still(self.shown.path()) => ImageSource::from(self.shown.path().to_owned()),
+            Some((path, Ok(image))) if path == self.shown.path() => ImageSource::Render(image.clone()),
+            Some((path, Err(err))) if path == self.shown.path() => {
+                let text = format!("{err}. 1 shows the file as text.");
+                return div().p_4().child(text).into_any_element();
+            }
+            _ => return div().p_4().child("Loading…").into_any_element(),
+        };
+        let picture = img(source)
             .size_full()
             // Else the picture's aspect ratio makes it as tall as wide allows.
             .min_w_0()
@@ -1637,6 +1695,9 @@ impl Viewer {
 
 impl Render for Viewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        for image in self.stale.drain(..) {
+            let _ = window.drop_image(image);
+        }
         #[cfg(target_os = "macos")]
         if !self.quick {
             let menus = MENUS.map(|name| Menu::new(name).items(self.menu(name, Vec::new(), cx)));

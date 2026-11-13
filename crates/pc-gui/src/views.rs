@@ -21,9 +21,13 @@ const THUMB_PIXELS: u32 = 192;
 /// Thumbnails kept; then they are made again as they show.
 const THUMBS_KEPT: usize = 3000;
 
-/// Pictures' thumbnails by path: none while being made, or where it failed.
+/// Pictures' thumbnails by path: none while being made, or where it failed;
+/// and how many HEIC or AVIF ones libmpv is drawing.
 #[derive(Default)]
-pub(crate) struct Thumbnails(HashMap<PathBuf, Option<Arc<RenderImage>>>);
+pub(crate) struct Thumbnails(HashMap<PathBuf, Option<Arc<RenderImage>>>, usize);
+
+/// Each holds its full picture in memory while drawn: the rest wait.
+const STILLS_AT_ONCE: usize = 2;
 
 impl Side {
     /// The rows a Brief column has, as the panel is high.
@@ -212,20 +216,24 @@ impl Commander {
         if let Some(made) = self.thumbnails.0.get(path) {
             return made.clone();
         }
+        let still = pc_core::media::is_still(path) && pc_core::media::available();
         let readable = image::ImageFormat::from_path(path).is_ok_and(|format| format.reading_enabled());
-        if !readable {
+        if !readable && !still || still && self.thumbnails.1 >= STILLS_AT_ONCE {
             return None;
         }
+        self.thumbnails.1 += usize::from(still);
         self.thumbnails.0.insert(path.to_owned(), None);
         let (path, read) = (path.to_owned(), path.to_owned());
         let making = cx.background_executor().spawn(async move { make_thumbnail(&read) });
         cx.spawn(async move |this, cx| {
             let made = making.await;
             let _ = this.update(cx, |this, cx| {
+                this.thumbnails.1 -= usize::from(still);
                 if made.is_some() {
                     this.thumbnails.0.insert(path, made);
-                    cx.notify();
                 }
+                // Also for the stills waiting.
+                cx.notify();
             });
         })
         .detach();
@@ -244,6 +252,11 @@ impl Commander {
 
 /// GPUI takes images as BGRA.
 fn make_thumbnail(path: &Path) -> Option<Arc<RenderImage>> {
+    if pc_core::media::is_still(path) {
+        let frame = pc_core::media::still(path, THUMB_PIXELS).ok()?;
+        let pixels = image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra)?;
+        return Some(Arc::new(RenderImage::new([image::Frame::new(pixels)])));
+    }
     let picture = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?.decode().ok()?;
     let mut pixels = picture.thumbnail(THUMB_PIXELS, THUMB_PIXELS).into_rgba8();
     for pixel in pixels.pixels_mut() {

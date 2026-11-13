@@ -1,6 +1,7 @@
 //! Video and sound by libmpv, loaded when there as PDFium is: mpv draws each
 //! frame with OpenGL into a hidden framebuffer at the viewer's size, read
-//! back for the front end to show, and plays the sound itself.
+//! back for the front end to show, and plays the sound itself. Also the
+//! pictures only FFmpeg reads here (HEIC, AVIF), drawn once on the CPU.
 
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::path::Path;
@@ -8,6 +9,7 @@ use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 /// Video, and sound alone.
 pub const EXTENSIONS: &[&str] = &[
@@ -15,6 +17,89 @@ pub const EXTENSIONS: &[&str] = &[
     "vob", "webm", "wmv", "aac", "aiff", "ape", "flac", "m4a", "mka", "mp3", "oga", "ogg",
     "opus", "wav", "wma",
 ];
+
+/// Pictures FFmpeg reads and the image crate does not: iPhones' HEIC, and AVIF.
+pub const STILLS: &[&str] = &["heic", "heif", "hif", "avif"];
+
+pub fn is_still(path: &Path) -> bool {
+    let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+    extension.is_some_and(|extension| STILLS.contains(&extension.as_str()))
+}
+
+/// Such a picture, drawn by libmpv at its own size, or smaller to fit a
+/// square `within` pixels a side; turned as the file says (`heif`), which
+/// mpv does not do for tiled pictures, so it turns none. Blocks.
+pub fn still(path: &Path, within: u32) -> Result<Frame, String> {
+    // glibc served the decoder's tiles and frames, after the first big one,
+    // from pools that fragmented: memory grew with each picture. Past 1 MB
+    // they are the system's, given back when freed.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        static FIXED: std::sync::Once = std::sync::Once::new();
+        // SAFETY: a malloc setting, safe at any time.
+        FIXED.call_once(|| unsafe {
+            libc::mallopt(libc::M_MMAP_THRESHOLD, 1 << 20);
+        });
+    }
+    let drawn = draw_still(path, within);
+    // And what the player's threads freed, back now that it is gone.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: gives unused memory back to the system, nothing else.
+    unsafe {
+        libc::malloc_trim(0);
+    }
+    let frame = drawn?;
+    let (bgra, width, height) = crate::heif::apply(&crate::heif::turns(path), frame.bgra, frame.width, frame.height);
+    Ok(Frame { width, height, bgra })
+}
+
+/// `still`'s picture as mpv draws it.
+fn draw_still(path: &Path, within: u32) -> Result<Frame, String> {
+    let (changed, wait) = mpsc::channel();
+    let player = Player::start(path, true, true, move || {
+        let _ = changed.send(());
+    })?;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let tick = || match Instant::now() > deadline {
+        true => Err(format!("{}: mpv took too long", path.display())),
+        false => {
+            let _ = wait.recv_timeout(Duration::from_millis(20));
+            Ok(())
+        }
+    };
+    let failed = || player.shared.error.lock().unwrap().clone();
+    // Its size, once mpv has read it.
+    let (width, height) = loop {
+        if let Some(err) = failed() {
+            return Err(err);
+        }
+        if let (Some(width), Some(height)) = (player.double("dwidth"), player.double("dheight"))
+            && width >= 1.
+            && height >= 1.
+        {
+            break (width, height);
+        }
+        tick()?;
+    };
+    let scale = (f64::from(within) / width.max(height)).min(1.);
+    let size = ((width * scale).round().max(1.) as u32, (height * scale).round().max(1.) as u32);
+    player.set_size(size.0, size.1);
+    // The last frame at that size, once no newer one comes: the first may be drawn before the picture.
+    let (mut last, mut since) = (None, Instant::now());
+    while last.is_none() || since.elapsed() < Duration::from_millis(150) {
+        if let Some(frame) = player.take_frame().filter(|frame| (frame.width, frame.height) == size) {
+            (last, since) = (Some(frame), Instant::now());
+        }
+        if let Some(err) = failed() {
+            return Err(err);
+        }
+        tick()?;
+    }
+    let mut frame = last.expect("waited for one");
+    // bgr0's fourth byte is no alpha.
+    frame.bgra.chunks_exact_mut(4).for_each(|pixel| pixel[3] = 255);
+    Ok(frame)
+}
 
 pub fn is_media(path: &Path) -> bool {
     let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
@@ -68,6 +153,11 @@ pub struct Player {
 impl Player {
     /// Starts playing, or `paused`; `notify`, called on other threads, says a frame or the state changed.
     pub fn open(path: &Path, paused: bool, notify: impl Fn() + Send + Sync + 'static) -> Result<Player, String> {
+        Self::start(path, paused, false, notify)
+    }
+
+    /// `still`: one picture, drawn on the CPU (no GPU needed, no size limit), no sound.
+    fn start(path: &Path, paused: bool, still: bool, notify: impl Fn() + Send + Sync + 'static) -> Result<Player, String> {
         let mpv = library()?;
         // SAFETY: a plain constructor; null when it fails.
         let handle = Raw(unsafe { (mpv.create)() });
@@ -92,7 +182,9 @@ impl Player {
         for (name, value) in [
             ("vo", "libmpv"),
             ("keep-open", "yes"),
-            ("hwdec", "auto-safe"),
+            ("hwdec", if still { "no" } else { "auto-safe" }),
+            ("aid", if still { "no" } else { "auto" }),
+            ("video-rotate", if still { "no" } else { "0" }),
             // mpv's probe of NVIDIA's prints "Cannot load libcuda.so.1" where it is missing.
             ("gpu-hwdec-interop", if cfg!(target_os = "linux") && !nvidia() { "vaapi" } else { "auto" }),
             ("input-default-bindings", "no"),
@@ -120,7 +212,7 @@ impl Player {
         let shared = player.shared.clone();
         player
             .threads
-            .push(std::thread::spawn(move || render(mpv, handle, shared, ready)));
+            .push(std::thread::spawn(move || render(mpv, handle, shared, ready, still)));
         started
             .recv()
             .map_err(|_| "the video thread ended".to_string())??;
@@ -284,9 +376,13 @@ unsafe extern "C" fn on_update(shared: *mut c_void) {
 
 /// Draws frames on a thread of its own, where its OpenGL context is current;
 /// on the CPU where OpenGL is too old for mpv (Windows' own 1.1, in Remote Desktop).
-fn render(mpv: &'static Mpv, handle: Raw, shared: Arc<Shared>, ready: mpsc::Sender<Result<(), String>>) {
+fn render(mpv: &'static Mpv, handle: Raw, shared: Arc<Shared>, ready: mpsc::Sender<Result<(), String>>, software: bool) {
     let mut context = null_mut();
-    let opengl = gl::Context::new().ok().filter(|opengl| {
+    let opengl = match software {
+        true => None,
+        false => gl::Context::new().ok(),
+    };
+    let opengl = opengl.filter(|opengl| {
         let mut init = GlInit {
             get_proc_address: gl::proc_address,
             context: &**opengl as *const gl::Context as *mut c_void,

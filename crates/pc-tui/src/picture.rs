@@ -127,9 +127,20 @@ struct Loaded {
 fn load(key: &Key) -> Result<Loaded, String> {
     let (width, height) = (key.room.0.max(1), key.room.1.max(1));
     let Some(page) = key.page else {
-        let reader = ImageReader::open(&key.path).and_then(|reader| reader.with_guessed_format());
-        let image = reader.map_err(|err| err.to_string())?;
-        let image = image.decode().map_err(|err| err.to_string())?;
+        let image = match pc_core::media::is_still(&key.path) {
+            // HEIC and AVIF by libmpv, in BGRA.
+            true => {
+                let frame = pc_core::media::still(&key.path, 16384)?;
+                let mut rgba = frame.bgra;
+                rgba.chunks_exact_mut(4).for_each(|pixel| pixel.swap(0, 2));
+                DynamicImage::ImageRgba8(RgbaImage::from_raw(frame.width, frame.height, rgba).ok_or("a broken picture")?)
+            }
+            false => {
+                let reader = ImageReader::open(&key.path).and_then(|reader| reader.with_guessed_format());
+                let image = reader.map_err(|err| err.to_string())?;
+                image.decode().map_err(|err| err.to_string())?
+            }
+        };
         let about = format!("{} × {}", image.width(), image.height());
         // Fitted here, off the drawing thread.
         let image = match image.width() > width || image.height() > height {
