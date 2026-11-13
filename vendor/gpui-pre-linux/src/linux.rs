@@ -13,6 +13,9 @@ mod system_notifications;
 mod text_system;
 #[cfg(feature = "wayland")]
 mod wayland;
+// PowerCommander patch: a window's icon in several sizes.
+#[cfg(any(feature = "wayland", feature = "x11"))]
+mod window_icon;
 #[cfg(feature = "x11")]
 mod x11;
 

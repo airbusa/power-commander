@@ -88,6 +88,7 @@ actions!(
         Parent,
         FocusPanels,
         CancelPathEdit,
+        CancelRename,
         Left,
         Right
     ]
@@ -170,6 +171,7 @@ fn main() {
             // Bound after the input's own keys, so it comes first.
             KeyBinding::new("escape", FocusPanels, Some("CommandLine > Input")),
             KeyBinding::new("escape", CancelPathEdit, Some("PathEdit > Input")),
+            KeyBinding::new("escape", CancelRename, Some("RenameInPlace > Input")),
         ]);
         menus::init(cx);
         // Settings and Shortcuts where the panels do not take them, as from
@@ -403,6 +405,7 @@ struct Commander {
     tab_list: Option<(usize, Entity<PopupMenu>, Subscription)>,
     /// A side whose path is being typed.
     path_edit: Option<(usize, Entity<InputState>, Subscription)>,
+    renaming: Option<panel_keys::Renaming>,
     _appearance: Subscription,
     command: Entity<InputState>,
     /// Widths of Name, Ext, Size, Date and Attr, both panels'.
@@ -545,6 +548,7 @@ impl Commander {
             colors,
             tab_list: None,
             path_edit: None,
+            renaming: None,
             _appearance: appearance,
             command,
             _quit: quit,
@@ -644,7 +648,11 @@ impl Commander {
     /// a panel move the cursor to it (Total Commander's, WDS's tree).
     /// Backspace takes a letter back (`quick_back`, by Parent's binding), Escape
     /// or another key ends it; a key with a command of its own keeps it.
-    fn quick_search(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn quick_search(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Not while a field in the panels takes the keys: the path's, a name's.
+        if !self.focus.is_focused(window) {
+            return;
+        }
         let keystroke = &event.keystroke;
         let modifiers = keystroke.modifiers;
         let side = self.active;
@@ -1665,14 +1673,10 @@ impl Commander {
         let (name, extension) = entry.name_and_extension();
         let [name_width, ext, size, date, attr] = self.columns.map(px);
         let date = date.max(date_fits(cx));
-        self.entry_base(ix, row, true, cx)
-            .flex()
-            .flex_row()
-            .items_center()
-            .w_full()
-            .h(ROW)
-            .px_1()
-            .child(
+        // Shift+F6 edits the name in the row, over the Ext column too.
+        let cells = match self.rename_cell(ix, row, name_width + ext, icon, cx) {
+            Ok(field) => vec![field],
+            Err(icon) => vec![
                 h_flex()
                     .w(name_width)
                     .flex_none()
@@ -1684,9 +1688,19 @@ impl Commander {
                     .when(entry.online, |el| {
                         let cloud = Icon::new(gpui_kit::assets::IconName::Cloud).xsmall();
                         el.child(cloud.text_color(cx.theme().muted_foreground))
-                    }),
-            )
-            .child(div().w(ext).flex_none().px_1().truncate().child(extension))
+                    })
+                    .into_any_element(),
+                div().w(ext).flex_none().px_1().truncate().child(extension).into_any_element(),
+            ],
+        };
+        self.entry_base(ix, row, true, cx)
+            .flex()
+            .flex_row()
+            .items_center()
+            .w_full()
+            .h(ROW)
+            .px_1()
+            .children(cells)
             .child(
                 div()
                     .w(size)
@@ -1956,7 +1970,7 @@ impl Render for Commander {
                     Command::PathToCommandLine => this.to_command_line(true, false, window, cx),
                     Command::NameToCommandLine => this.to_command_line(false, true, window, cx),
                     Command::PathAndNameToCommandLine => this.to_command_line(true, true, window, cx),
-                    Command::RenameInPlace => this.rename_file(window, cx),
+                    Command::RenameInPlace => this.rename_in_place(window, cx),
                     Command::NewTextFile => this.new_text_file(window, cx),
                     Command::Shortcuts => {
                         let commander = cx.entity().downgrade();

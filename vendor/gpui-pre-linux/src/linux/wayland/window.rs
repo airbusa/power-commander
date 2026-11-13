@@ -2469,36 +2469,42 @@ fn set_toplevel_icon(globals: &Globals, toplevel: &xdg_toplevel::XdgToplevel, wi
     let Some(manager) = &globals.toplevel_icon else {
         return;
     };
-    let side = width;
-    if side == 0 || side != height || rgba.len() != (side * side * 4) as usize {
-        return;
-    }
-    // wl_shm's ARGB8888: premultiplied, in memory B, G, R, A.
-    let pixels: Vec<u8> = rgba
-        .chunks_exact(4)
-        .flat_map(|px| {
-            let [r, g, b, a] = [px[0], px[1], px[2], px[3]];
-            let times = |c: u8| (c as u32 * a as u32 / 255) as u8;
-            [times(b), times(g), times(r), a]
-        })
-        .collect();
-    let fd = unsafe { libc::memfd_create(c"gpui-icon".as_ptr(), libc::MFD_CLOEXEC) };
-    if fd < 0 {
-        return;
-    }
-    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-    if file.write_all(&pixels).is_err() {
+    if width == 0 || width != height || rgba.len() != (width * width * 4) as usize {
         return;
     }
     let qh = &globals.qh;
-    let pool = globals.shm.create_pool(file.as_fd(), pixels.len() as i32, qh, ());
-    let side = side as i32;
-    let buffer = pool.create_buffer(0, side, side, side * 4, wl_shm::Format::Argb8888, qh, ());
     let icon = manager.create_icon(qh, ());
-    icon.add_buffer(&buffer, 1);
+    let mut made = Vec::new();
+    // Every size, so the compositor picks one near what it shows.
+    for (side, rgba) in crate::linux::window_icon::sizes(rgba, width) {
+        // wl_shm's ARGB8888: premultiplied, in memory B, G, R, A.
+        let pixels: Vec<u8> = rgba
+            .chunks_exact(4)
+            .flat_map(|px| {
+                let [r, g, b, a] = [px[0], px[1], px[2], px[3]];
+                let times = |c: u8| (c as u32 * a as u32 / 255) as u8;
+                [times(b), times(g), times(r), a]
+            })
+            .collect();
+        let fd = unsafe { libc::memfd_create(c"gpui-icon".as_ptr(), libc::MFD_CLOEXEC) };
+        if fd < 0 {
+            continue;
+        }
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+        if file.write_all(&pixels).is_err() {
+            continue;
+        }
+        let pool = globals.shm.create_pool(file.as_fd(), pixels.len() as i32, qh, ());
+        let side = side as i32;
+        let buffer = pool.create_buffer(0, side, side, side * 4, wl_shm::Format::Argb8888, qh, ());
+        icon.add_buffer(&buffer, 1);
+        made.push((buffer, pool));
+    }
     manager.set_icon(toplevel, Some(&icon));
-    // The toplevel keeps its icon; the buffer goes after the icon.
+    // The toplevel keeps its icon; the buffers go after the icon.
     icon.destroy();
-    buffer.destroy();
-    pool.destroy();
+    for (buffer, pool) in made {
+        buffer.destroy();
+        pool.destroy();
+    }
 }

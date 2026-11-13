@@ -802,14 +802,18 @@ impl X11WindowState {
 
             if let Some(image) = params.icon {
                 // https://specifications.freedesktop.org/wm-spec/1.4/ar01s05.html#id-1.6.13
-                let property_size = 2 + (image.width() * image.height()) as usize;
-                let mut property_data: Vec<u32> = Vec::with_capacity(property_size);
-                property_data.push(image.width());
-                property_data.push(image.height());
-                property_data.extend(image.pixels().map(|px| {
-                    let [r, g, b, a]: [u8; 4] = px.0;
-                    u32::from_le_bytes([b, g, r, a])
-                }));
+                let mut property_data: Vec<u32> = Vec::new();
+                // PowerCommander patch: every size, so the window manager picks one near what it shows.
+                let sizes = match image.width() == image.height() {
+                    true => crate::linux::window_icon::sizes(image.as_raw(), image.width()),
+                    false => vec![(image.width(), image.as_raw().to_vec())],
+                };
+                for (side, rgba) in sizes {
+                    let height = rgba.len() as u32 / 4 / side.max(1);
+                    property_data.push(side);
+                    property_data.push(height);
+                    property_data.extend(rgba.chunks_exact(4).map(|px| u32::from_le_bytes([px[2], px[1], px[0], px[3]])));
+                }
 
                 check_reply(
                     || "X11 ChangeProperty32 for _NET_ICON_NAME failed.",

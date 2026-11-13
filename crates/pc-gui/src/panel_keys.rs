@@ -2,12 +2,26 @@
 //! the other (Ctrl+Left and Right), the root, a folder in a new tab, names
 //! onto the command line, a new text file in the editor.
 
-use gpui_kit::component::WindowExt;
-use gpui_kit::component::notification::Notification;
-use gpui_kit::*;
-use pc_core::Panel;
+use std::ffi::OsString;
+use std::path::Path;
 
-use crate::{Commander, name_dialog, remote};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::{IconName, Sizable, WindowExt, h_flex};
+use gpui_kit::*;
+use pc_core::{Panel, View};
+
+use crate::{CancelRename, Commander, name_dialog, remote};
+
+/// Shift+F6: a name being changed in its row, as Total Commander's.
+pub(crate) struct Renaming {
+    side: usize,
+    /// The entry's, which finds its row however the list changes meanwhile.
+    name: OsString,
+    input: Entity<InputState>,
+    _events: Subscription,
+}
 
 /// A folder at the cursor to open, not `..` nor a macOS application.
 fn at_folder(panel: &Panel) -> bool {
@@ -115,6 +129,99 @@ impl Commander {
             input.focus(window, cx);
         });
         cx.notify();
+    }
+
+    /// Shift+F6: the name at the cursor edited in its row, the file's name
+    /// without its extension chosen; the Brief and Thumbnails views ask in a dialog.
+    pub(crate) fn rename_in_place(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let side = self.active;
+        let panel = self.panels[side].tabs.current();
+        if panel.view() != View::Full {
+            return self.rename_file(window, cx);
+        }
+        let Some(entry) = panel.current_entry().filter(|entry| !entry.is_parent()) else {
+            return;
+        };
+        let name = entry.name.clone();
+        // A search result's path keeps its folder.
+        let shown = Path::new(&name).file_name().unwrap_or(&name).to_string_lossy().into_owned();
+        let stem = match entry.is_dir {
+            true => shown.len(),
+            false => shown.rfind('.').filter(|&dot| dot > 0).unwrap_or(shown.len()),
+        };
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(shown));
+        // Enter, or clicking elsewhere, renames; Escape (`CancelRename`) does not.
+        let events = cx.subscribe_in(&input, window, |this, _, event, window, cx| {
+            if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                this.finish_rename(true, window, cx);
+            }
+        });
+        input.update(cx, |input, cx| {
+            input.focus(window, cx);
+            input.set_selected_range(0..stem, cx);
+        });
+        self.renaming = Some(Renaming { side, name, input, _events: events });
+        cx.notify();
+    }
+
+    pub(crate) fn finish_rename(&mut self, apply: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(renaming) = self.renaming.take() else {
+            return;
+        };
+        window.focus(&self.focus, cx);
+        cx.notify();
+        let to = renaming.input.read(cx).value().trim().to_owned();
+        let shown = Path::new(&renaming.name).file_name().map(|name| name.to_string_lossy().into_owned());
+        if !apply || to.is_empty() || shown.as_deref() == Some(to.as_str()) {
+            return;
+        }
+        let (side, name) = (renaming.side, renaming.name);
+        let panel = self.panels[side].tabs.current_mut();
+        if panel.remote().is_some() {
+            let renamed = move |panel: &mut Panel| panel.rename_entry(&name, &to);
+            return self.navigate_on(side, true, renamed, window, cx);
+        }
+        let folder = panel.folder().to_owned();
+        if let Err(err) = panel.rename_entry(&name, &to) {
+            window.push_notification(Notification::error(format!("Could not rename: {err}")), cx);
+        }
+        self.refresh_folder(&folder, cx);
+    }
+
+    /// The row's name and extension cells while it is renamed: the name in a
+    /// field `width` wide, and a check mark that renames.
+    pub(crate) fn rename_cell(&self, ix: usize, row: usize, width: Pixels, icon: AnyElement, cx: &mut Context<Self>) -> Result<AnyElement, AnyElement> {
+        let renaming = self.renaming.as_ref().filter(|renaming| {
+            let entry = self.panels[ix].tabs.current().entries().get(row);
+            renaming.side == ix && entry.is_some_and(|entry| entry.name == renaming.name)
+        });
+        let Some(renaming) = renaming else {
+            return Err(icon);
+        };
+        let cell = h_flex()
+            .w(width)
+            .flex_none()
+            .px_1()
+            .gap_1()
+            .child(icon)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .key_context("RenameInPlace")
+                    .on_action(cx.listener(|this, _: &CancelRename, window, cx| this.finish_rename(false, window, cx)))
+                    // Not the row's: a click here neither moves the cursor nor ends the edit.
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(Input::new(&renaming.input).xsmall()),
+            )
+            .child(
+                Button::new("rename-ok")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Check)
+                    .on_click(cx.listener(|this, _, window, cx| this.finish_rename(true, window, cx))),
+            );
+        Ok(cell.into_any_element())
     }
 
     /// Shift+F4: a text file, new or there already, in the editor.
