@@ -9,6 +9,16 @@ vendor\7zip\fetch.bat && vendor\pdfium\fetch.bat && vendor\mpv\fetch.bat
 powershell -ExecutionPolicy Bypass -File packaging\windows\package.ps1
 ```
 
+ARM64 on an x64 PC: Visual Studio's "MSVC ARM64 build tools" and LLVM
+(`winget install LLVM.LLVM`); clang finds the C headers only in a developer
+prompt for ARM64:
+
+```bat
+"%ProgramFiles(x86)%\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64_arm64
+set "PATH=%ProgramFiles%\LLVM\bin;%PATH%"
+powershell -ExecutionPolicy Bypass -File packaging\windows\package.ps1 -Arch aarch64
+```
+
 | In the folder | From |
 |---|---|
 | `powercommander.exe`, `pc-tui.exe` | `cargo build --release`; the C runtime is linked in |
