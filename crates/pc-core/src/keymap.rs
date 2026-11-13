@@ -92,6 +92,8 @@ const POWER_COMMANDER: Table = &[
     (EditExternally, "ctrl-shift-f4", ""),
     (CalculateOccupiedSpace, "ctrl-l", ""),
     (AllFolderSizes, "alt-shift-enter", ""),
+    // Total Commander's.
+    (CreateLink, "ctrl-shift-f5", ""),
     (MultiRenameTool, "ctrl-m", ""),
     (SelectGroup, "alt-shift-s", "add"),
     (UnselectGroup, "alt-shift-r", "subtract"),
@@ -171,6 +173,8 @@ const TOTAL_COMMANDER: Table = &[
     (EditExternally, "ctrl-shift-f4", ""),
     (CalculateOccupiedSpace, "ctrl-l", ""),
     (AllFolderSizes, "alt-shift-enter", ""),
+    // Total Commander's.
+    (CreateLink, "ctrl-shift-f5", ""),
     (MultiRenameTool, "ctrl-m", ""),
     (SelectGroup, "add", ""),
     (UnselectGroup, "subtract", ""),
@@ -243,6 +247,8 @@ const KRUSADER: Table = &[
     (Quit, "ctrl-q", "f10"),
     (ToggleMark, "insert", "space"),
     (MultiRenameTool, "shift-f2", ""),
+    // Its New Symlink.
+    (CreateLink, "ctrl-alt-s", ""),
     (Pack, "alt-shift-p", ""),
     (UnpackSpecificFiles, "alt-shift-u", ""),
     (TestArchives, "alt-shift-e", ""),

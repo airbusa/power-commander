@@ -18,6 +18,8 @@ pub enum Command {
     CalculateOccupiedSpace,
     /// Every folder shown gets its size in the Size column.
     AllFolderSizes,
+    /// Links to the chosen in the other panel's folder (`links`).
+    CreateLink,
     MultiRenameTool,
     SplitFile,
     CombineFiles,
@@ -197,6 +199,7 @@ pub const MENUS: &[Menu] = &[
             cmd("Copy...", Copy),
             cmd("Move...", Move),
             cmd("Rename", RenameInPlace),
+            cmd("Create Link...", CreateLink),
             cmd("Delete", Delete),
             cmd("Delete Permanently", DeletePermanently),
             SEP,

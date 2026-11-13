@@ -1,5 +1,5 @@
-//! Create Checksum Files, Verify Checksums, Split File and Combine Files:
-//! their dialogs; the work runs in the queue.
+//! Create Checksum Files, Verify Checksums, Split File, Combine Files and
+//! Create Link: their dialogs; the work runs in the queue, links here.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -7,11 +7,12 @@ use std::path::{Path, PathBuf};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::radio::RadioGroup;
+use gpui_kit::component::radio::{Radio, RadioGroup};
 use gpui_kit::component::{Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::*;
 use pc_core::checksum::{self, Create, Method};
 use pc_core::ops::Queue;
+use pc_core::links::{self, Kind};
 use pc_core::{command, split};
 
 use crate::Commander;
@@ -57,6 +58,40 @@ impl Commander {
             ChecksumDialog::finish,
         );
         focus_all(&file, window, cx);
+    }
+
+    /// Ctrl+Shift+F5: links to the chosen in the other panel's folder.
+    pub(crate) fn create_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (panel, names) = match self.local_chosen("Making links") {
+            Ok(found) => found,
+            Err(err) => return window.push_notification(Notification::warning(err), cx),
+        };
+        if names.is_empty() {
+            return;
+        }
+        let chosen = panel.chosen();
+        let (folders, files) = (chosen.iter().any(|e| e.is_dir), chosen.iter().any(|e| !e.is_dir));
+        let folder = panel.folder().to_owned();
+        let into = self.local_target();
+        let (label, at) = match names.as_slice() {
+            [one] => (format!("Link to \"{}\" as:", one.to_string_lossy()), into.join(one)),
+            many => (format!("Links to the {} items, in the folder:", many.len()), into),
+        };
+        let at = cx.new(|cx| InputState::new(window, cx).default_value(at.display().to_string()));
+        let (commander, side) = (cx.entity().downgrade(), self.active);
+        let view = cx.new(|_| LinkDialog {
+            label,
+            at: at.clone(),
+            kind: Kind::Symbolic,
+            folders,
+            files,
+            folder,
+            names,
+            commander,
+            side,
+        });
+        open(view, "Create link", window, cx, LinkDialog::finish);
+        focus_all(&at, window, cx);
     }
 
     pub(crate) fn verify_checksums(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -136,6 +171,73 @@ impl Commander {
                 }
             },
         );
+    }
+}
+
+struct LinkDialog {
+    label: String,
+    at: Entity<InputState>,
+    kind: Kind,
+    folders: bool,
+    files: bool,
+    folder: PathBuf,
+    names: Vec<OsString>,
+    commander: WeakEntity<Commander>,
+    side: usize,
+}
+
+impl LinkDialog {
+    fn finish(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.kind.fits(self.folders, self.files) {
+            return false;
+        }
+        let at = command::resolve(self.at.read(cx).value().trim(), &self.folder);
+        let items: Vec<(PathBuf, PathBuf)> = match self.names.as_slice() {
+            // Into a folder named, as ln's.
+            [one] if at.is_dir() && at != self.folder.join(one) => vec![(self.folder.join(one), at.join(one))],
+            [one] => vec![(self.folder.join(one), at.clone())],
+            many => many.iter().map(|name| (self.folder.join(name), at.join(name))).collect(),
+        };
+        let kind = self.kind;
+        let made = links::create(kind, &items);
+        let _ = self.commander.update(cx, |this, cx| {
+            let into = match items.as_slice() {
+                [(_, link)] => link.parent().unwrap_or(&at).to_owned(),
+                _ => at,
+            };
+            match made {
+                Err((err, rest)) if crate::denied(&err) && kind != Kind::Shortcut => {
+                    let action = pc_core::elevate::Action::Link { kind, items: rest };
+                    this.offer_admin(format!("Making the {}", kind.label().to_lowercase()), action, window, cx);
+                }
+                Err((err, _)) => window.push_notification(Notification::error(format!("Could not make the link: {err}")), cx),
+                // The marks have done their work.
+                Ok(()) => this.panels[self.side].tabs.current_mut().mark_all(false),
+            }
+            this.refresh_folder(&into, cx);
+        });
+        true
+    }
+}
+
+impl Render for LinkDialog {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let kinds = Kind::ALL.iter().map(|kind| Radio::new(kind.label()).label(kind.label()).disabled(!kind.fits(self.folders, self.files)));
+        v_flex()
+            .w_full()
+            .gap_3()
+            .text_sm()
+            .child(v_flex().gap_1().child(self.label.clone()).child(Input::new(&self.at)))
+            .child(
+                RadioGroup::horizontal("link-kind")
+                    .children(kinds)
+                    .selected_index(Kind::ALL.iter().position(|kind| *kind == self.kind))
+                    .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                        this.kind = Kind::ALL[*ix];
+                        cx.notify();
+                    })),
+            )
+            .child(buttons("link", cx, LinkDialog::finish))
     }
 }
 

@@ -13,6 +13,8 @@ pub enum Action {
     Delete(Vec<PathBuf>),
     MakeFolder(PathBuf),
     Rename(PathBuf, PathBuf),
+    /// Each `(target, link)`.
+    Link { kind: crate::links::Kind, items: Vec<(PathBuf, PathBuf)> },
 }
 
 /// Runs `action` as administrator, the system asking for the password;
@@ -48,6 +50,13 @@ pub(crate) fn script(action: &Action) -> String {
         Action::Delete(paths) => vec![format!("rm -rf -- {}", paths.iter().map(|p| quote(p)).collect::<Vec<_>>().join(" "))],
         Action::MakeFolder(path) => vec![format!("mkdir -p -- {}", quote(path))],
         Action::Rename(from, to) => vec![format!("mv -- {} {}", quote(from), quote(to))],
+        Action::Link { kind, items } => items
+            .iter()
+            .map(|(target, link)| match kind {
+                crate::links::Kind::Hard => format!("ln -- {} {}", quote(target), quote(link)),
+                _ => format!("ln -s -- {} {}", quote(target), quote(link)),
+            })
+            .collect(),
     };
     format!("set -e\n{}\n", lines.join("\n"))
 }
@@ -128,6 +137,21 @@ mod platform {
             Action::Delete(paths) => paths.iter().map(|path| remove(path)).collect(),
             Action::MakeFolder(path) => vec![format!("mkdir {}", quote(path))],
             Action::Rename(from, to) => vec![format!("move /Y {} {}", quote(from), quote(to))],
+            Action::Link { kind, items } => items
+                .iter()
+                .map(|(target, link)| {
+                    use crate::links::Kind;
+                    let switch = match kind {
+                        Kind::Symbolic if target.is_dir() => "/D ",
+                        Kind::Symbolic => "",
+                        Kind::Hard => "/H ",
+                        Kind::Junction => "/J ",
+                        // A shortcut is a file the shell writes: not offered.
+                        Kind::Shortcut => return "exit /b 1".to_owned(),
+                    };
+                    format!("mklink {switch}{} {}", quote(link), quote(target))
+                })
+                .collect(),
         };
         lines.join(" && ")
     }
@@ -196,6 +220,12 @@ mod tests {
         assert!(dir.join("dst/new folder/deep").is_dir() && dir.join("dst/two.txt").exists());
         run_here(&Action::Delete(vec![dir.join("dst/new folder"), dir.join("dst/two.txt")]));
         assert!(!dir.join("dst/new folder").exists() && !dir.join("dst/two.txt").exists());
+        let kind = crate::links::Kind::Symbolic;
+        run_here(&Action::Link { kind, items: vec![(dir.join("dst/folder"), dir.join("it's a link"))] });
+        assert!(dir.join("it's a link/it's.txt").exists() && dir.join("it's a link").is_symlink());
+        let kind = crate::links::Kind::Hard;
+        run_here(&Action::Link { kind, items: vec![(dir.join("dst/folder/old.txt"), dir.join("hard.txt"))] });
+        assert_eq!(fs::read_to_string(dir.join("hard.txt")).unwrap(), "old");
         fs::remove_dir_all(&dir).unwrap();
     }
 }
