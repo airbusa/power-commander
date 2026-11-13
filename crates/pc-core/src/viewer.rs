@@ -166,7 +166,7 @@ pub enum Layout {
 /// What Lister's Autodetect finds at a file's start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Detected {
-    /// No byte order mark nor UTF-8 beyond ASCII: a code page's text.
+    /// Not UTF-8, and no byte order mark: a code page's text.
     Plain,
     Utf8,
     Utf16 {
@@ -182,7 +182,8 @@ pub fn detect(path: &Path) -> io::Result<Detected> {
         [0xFF, 0xFE, ..] => Detected::Utf16 { big_endian: false },
         [0xFE, 0xFF, ..] => Detected::Utf16 { big_endian: true },
         [0xEF, 0xBB, 0xBF, ..] => Detected::Utf8,
-        _ if !head.is_ascii() && is_utf8(head, read == 64 << 10) => Detected::Utf8,
+        // ASCII alone too, as the editor says: the same bytes in UTF-8 and any code page.
+        _ if is_utf8(head, read == 64 << 10) => Detected::Utf8,
         _ => Detected::Plain,
     })
 }
@@ -1257,6 +1258,9 @@ mod tests {
 
         let path = temp("utf8", "Árvíztűrő\n".as_bytes());
         assert_eq!(detect(&path).unwrap(), Detected::Utf8);
+        std::fs::remove_file(&path).unwrap();
+        let path = temp("ascii", b"{ \"strict\": true }\n");
+        assert_eq!(detect(&path).unwrap(), Detected::Utf8, "ASCII is UTF-8");
         std::fs::remove_file(&path).unwrap();
         let path = temp("cp1250", b"\xc1rv\xedzt\xfbr\xf5\r\n");
         assert_eq!(detect(&path).unwrap(), Detected::Plain);

@@ -117,7 +117,7 @@ pub fn open(
 
 fn title(path: &std::path::Path, edited: bool) -> String {
     let mark = if edited { "*" } else { "" };
-    format!("{mark}{} — Power Commander", path.display())
+    format!("{mark}{} — Editor", path.display())
 }
 
 struct TextEditor {

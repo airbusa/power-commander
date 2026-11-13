@@ -208,7 +208,7 @@ fn open_with(
 }
 
 fn title(path: &Path) -> String {
-    format!("{} — Power Commander", path.display())
+    format!("{} — Viewer", path.display())
 }
 
 /// Quick View: the viewer in a panel, showing what the other panel's cursor
