@@ -30,6 +30,7 @@ pub fn converter_for(path: &Path) -> Option<Converter> {
     let (name, program, _) = TOOLS
         .iter()
         .find(|(_, _, extensions)| extensions.contains(&extension.as_str()))?;
+    let program = &format!("{program}{}", std::env::consts::EXE_SUFFIX);
     Some(Converter {
         name,
         program: on_path(program)
