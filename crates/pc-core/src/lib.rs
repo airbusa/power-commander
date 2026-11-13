@@ -114,6 +114,8 @@ pub enum FileFilter {
     Masks(String),
     /// The names marked when chosen.
     Selected(HashSet<OsString>),
+    /// Quick filter: the names with this in them, any case; folders too.
+    Quick(String),
 }
 
 /// Programs' extensions on Windows.
@@ -127,6 +129,7 @@ impl FileFilter {
         match self {
             FileFilter::All => true,
             FileFilter::Selected(names) => names.contains(&entry.name),
+            FileFilter::Quick(text) => entry.name.to_string_lossy().to_lowercase().contains(&text.to_lowercase()),
             _ if entry.is_dir && !entry.is_app() => true,
             FileFilter::Programs if cfg!(windows) => PROGRAMS.contains(&extension(entry).as_str()),
             FileFilter::Programs => entry.is_app() || entry.attributes.contains(['x', 's']),
@@ -147,6 +150,7 @@ impl FileFilter {
             FileFilter::Programs => Some("programs".into()),
             FileFilter::Masks(masks) => Some(masks.clone()),
             FileFilter::Selected(_) => Some("selected files".into()),
+            FileFilter::Quick(text) => Some(format!("*{text}*")),
         }
     }
 }
@@ -1255,7 +1259,7 @@ impl Panel {
     fn moved(&mut self) {
         self.marked.clear();
         self.measured.clear();
-        if matches!(self.file_filter, FileFilter::Selected(_)) {
+        if matches!(self.file_filter, FileFilter::Selected(_) | FileFilter::Quick(_)) {
             self.file_filter = FileFilter::All;
         }
     }

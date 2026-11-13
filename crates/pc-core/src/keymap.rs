@@ -60,6 +60,11 @@ const fn not_mac(key: &'static str) -> &'static str {
     if cfg!(target_os = "macos") { "" } else { key }
 }
 
+/// macOS's own key (Get Info's Cmd+I), elsewhere another command's.
+const fn mac(key: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") { key } else { "" }
+}
+
 /// Total Commander's key on Windows only: KDE, GNOME and macOS take it.
 const fn windows(key: &'static str) -> &'static str {
     if cfg!(windows) { key } else { "" }
@@ -78,7 +83,9 @@ const POWER_COMMANDER: Table = &[
     (Pack, "alt-shift-p", windows("alt-f5")),
     (UnpackSpecificFiles, "alt-f9", "alt-shift-u"),
     (TestArchives, "alt-shift-f9", "alt-shift-e"),
-    (Properties, "alt-enter", "secondary-i"),
+    (Properties, "alt-enter", mac("cmd-i")),
+    // Krusader's and Dolphin's filter bar.
+    (QuickFilter, "ctrl-i", ""),
     (EditExternally, "ctrl-shift-f4", ""),
     (CalculateOccupiedSpace, "ctrl-l", ""),
     (MultiRenameTool, "ctrl-m", ""),
@@ -185,6 +192,7 @@ const TOTAL_COMMANDER: Table = &[
     (AllFiles, "ctrl-f10", ""),
     (Programs, "ctrl-f11", ""),
     (CustomFilter, "ctrl-f12", ""),
+    (QuickFilter, "ctrl-s", ""),
     (SortByName, "ctrl-f3", ""),
     (SortByExtension, "ctrl-f4", ""),
     (SortByTime, "ctrl-f5", ""),
@@ -230,6 +238,7 @@ const KRUSADER: Table = &[
     (CompareDirectories, "alt-shift-c", ""),
     (SplitFile, "ctrl-p", ""),
     (Search, "ctrl-s", ""),
+    (QuickFilter, "ctrl-i", ""),
     (SynchronizeDirs, "ctrl-y", ""),
     (SwapPanels, "ctrl-u", ""),
     (Bookmarks, "ctrl-d", ""),

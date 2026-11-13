@@ -68,7 +68,7 @@ use pc_core::session::Session;
 use pc_core::settings::{self, Settings};
 use pc_core::sidebar::SidebarTab;
 use pc_core::theme::{self, Appearance};
-use pc_core::{Panel, Sort, SortKey, Tabs, Typed, View, archive, edit, mounts, ops, origin};
+use pc_core::{FileFilter, Panel, Sort, SortKey, Tabs, Typed, View, archive, edit, mounts, ops, origin};
 
 use crate::appearance::PanelColors;
 use crate::drag_drop::{DragLabel, Dragged};
@@ -97,7 +97,7 @@ actions!(
 include!(concat!(env!("OUT_DIR"), "/material_icons.rs"));
 
 // Lucide icons beyond GPUI Kit's own set.
-gpui_kit::assets::icon_assets!(ExtraIcons, [PanelsTopLeft, Type, CalendarClock, Languages, FilePen, Puzzle, Server, Smartphone, Tablet, Laptop, Monitor, Tv, Usb, Menu, Cloud, CaseSensitive, WholeWord, Regex, Replace, ReplaceAll, CaseUpper, SquareDashedText, X]);
+gpui_kit::assets::icon_assets!(ExtraIcons, [PanelsTopLeft, Type, CalendarClock, Languages, FilePen, Puzzle, Server, Smartphone, Tablet, Laptop, Monitor, Tv, Usb, Menu, Cloud, CaseSensitive, WholeWord, Regex, Replace, ReplaceAll, CaseUpper, SquareDashedText, X, Funnel]);
 
 /// GPUI Kit's icons, the file icons as `material/<name>.svg`, the player's as `media/`.
 struct AppAssets;
@@ -391,6 +391,9 @@ struct Typing {
     side: usize,
     typed: String,
     row: usize,
+    /// The quick filter's (Ctrl+I), open while the panel stays here: what is
+    /// typed hides the names without it, arrows move among the rest.
+    filter: Option<String>,
 }
 
 struct Commander {
@@ -642,7 +645,38 @@ impl Commander {
     /// What is typed in panel `ix`, while its cursor stays on the row it found.
     fn typed(&self, ix: usize) -> Option<&str> {
         let typing = self.typing.as_ref().filter(|t| t.side == ix && ix == self.active)?;
-        (self.panels[ix].tabs.current().cursor() == typing.row).then_some(typing.typed.as_str())
+        let panel = self.panels[ix].tabs.current();
+        let here = match &typing.filter {
+            Some(place) => panel.location() == *place,
+            None => panel.cursor() == typing.row,
+        };
+        here.then_some(typing.typed.as_str())
+    }
+
+    /// The quick filter is open in panel `ix`.
+    fn filtering(&self, ix: usize) -> bool {
+        self.typed(ix).is_some() && self.typing.as_ref().is_some_and(|typing| typing.filter.is_some())
+    }
+
+    /// Ctrl+I: the quick filter, on what it had if it is on.
+    fn quick_filter(&mut self, cx: &mut Context<Self>) {
+        let side = self.active;
+        let panel = self.panels[side].tabs.current();
+        let typed = match panel.file_filter() {
+            FileFilter::Quick(text) => text.clone(),
+            _ => String::new(),
+        };
+        self.typing = Some(Typing { side, typed, row: panel.cursor(), filter: Some(panel.location()) });
+        cx.notify();
+    }
+
+    /// The panel lists the names with `text` in them; all for none.
+    fn filter_by(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        let filter = match text.is_empty() {
+            true => FileFilter::All,
+            false => FileFilter::Quick(text),
+        };
+        self.show_files(filter, window, cx);
     }
 
     /// Quick search, with no key to start it: a name's first letters typed in
@@ -658,23 +692,42 @@ impl Commander {
         let modifiers = keystroke.modifiers;
         let side = self.active;
         let typed = self.typed(side).unwrap_or_default().to_owned();
+        let filtering = self.filtering(side);
         let key = keystroke.key.as_str();
+        // A key with a command ends a search; the filter stays open.
         if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
-            self.typing = None;
+            if !filtering {
+                self.typing = None;
+            }
             return;
         }
-        if key == "escape" && !typed.is_empty() {
+        // Escape ends either; the filter's, left on or open, shows all again.
+        let filtered = matches!(self.panels[side].tabs.current().file_filter(), FileFilter::Quick(_));
+        if key == "escape" && (filtering || filtered || !typed.is_empty()) {
             self.typing = None;
+            if filtering || filtered {
+                self.filter_by(String::new(), window, cx);
+            }
             cx.stop_propagation();
             return cx.notify();
         }
         let bound = self.settings.keys.bindings().iter().any(|(bound, _)| bound == key);
         let text = keystroke.key_char.as_deref().filter(|text| !text.is_empty() && !text.chars().any(char::is_control));
         let Some(text) = text.filter(|_| !bound && key != "backspace") else {
-            self.typing = None;
+            if !filtering {
+                self.typing = None;
+            }
             return;
         };
         let wanted = format!("{typed}{text}");
+        if filtering {
+            if let Some(typing) = self.typing.as_mut() {
+                typing.typed = wanted.clone();
+            }
+            self.filter_by(wanted, window, cx);
+            cx.stop_propagation();
+            return cx.notify();
+        }
         let panel = self.panels[side].tabs.current();
         // A new search starts below the cursor; typing on may stay on its row.
         let from = panel.cursor() + usize::from(typed.is_empty());
@@ -682,16 +735,20 @@ impl Commander {
             let found = &mut self.panels[side];
             found.tabs.current_mut().set_cursor(row);
             found.scroll_to_cursor();
-            self.typing = Some(Typing { side, typed: wanted, row });
+            self.typing = Some(Typing { side, typed: wanted, row, filter: None });
         }
         cx.stop_propagation();
         cx.notify();
     }
 
     /// Backspace in a quick search: its last letter back, the cursor where it is.
-    fn quick_back(&mut self, cx: &mut Context<Self>) {
+    fn quick_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(typing) = self.typing.as_mut() {
             typing.typed.pop();
+            if typing.filter.is_some() {
+                let text = typing.typed.clone();
+                return self.filter_by(text, window, cx);
+            }
             if typing.typed.is_empty() {
                 self.typing = None;
             }
@@ -1702,12 +1759,18 @@ impl Commander {
                     .text_color(theme.muted_foreground)
                     .truncate()
                     .child(match self.typed(ix) {
-                        // Quick search: what is typed, where the status was.
+                        // Quick search, or the quick filter: what is typed, where the status was.
                         Some(typed) => h_flex()
                             .gap_1p5()
                             .text_color(theme.foreground)
-                            .child(Icon::new(IconName::Search).small().text_color(theme.muted_foreground))
+                            .child(match self.filtering(ix) {
+                                true => Icon::new(gpui_kit::assets::IconName::Funnel),
+                                false => Icon::new(IconName::Search),
+                            }.small().text_color(theme.muted_foreground))
                             .child(typed.to_owned())
+                            .when(self.filtering(ix) && typed.is_empty(), |el| {
+                                el.child(div().text_color(theme.muted_foreground).child("Type to filter; Escape shows all"))
+                            })
                             .into_any_element(),
                         None => div().truncate().child(match panel.view() {
                         // Names only: the line tells the rest, as Total Commander's.
@@ -1917,7 +1980,7 @@ impl Render for Commander {
                 cx.listener(|this, _: &Parent, window, cx| {
                     // Backspace's binding comes before the key reaches the quick search.
                     if this.typed(this.active).is_some() {
-                        return this.quick_back(cx);
+                        return this.quick_back(window, cx);
                     }
                     this.navigate(Panel::up, window, cx)
                 }),
@@ -2036,6 +2099,7 @@ impl Render for Commander {
                         this.show_files(pc_core::FileFilter::Masks(menus::last_filter()), window, cx)
                     }
                     Command::CustomFilter => this.custom_filter(window, cx),
+                    Command::QuickFilter => this.quick_filter(cx),
                     Command::OnlySelectedFiles => {
                         this.show_files(pc_core::FileFilter::Selected(Default::default()), window, cx)
                     }

@@ -78,6 +78,8 @@ pub enum Command {
     Programs,
     AllWithExtension,
     CustomFilter,
+    /// Ctrl+I: what is typed hides the names without it, until Escape or another folder.
+    QuickFilter,
     OnlySelectedFiles,
     SortByName,
     SortByExtension,
@@ -310,6 +312,8 @@ pub const MENUS: &[Menu] = &[
             Item::Submenu {
                 label: "Filter",
                 items: &[
+                    cmd("Quick Filter", QuickFilter),
+                    SEP,
                     cmd("All Files", AllFiles),
                     cmd("Programs", Programs),
                     cmd("*.*", AllWithExtension),
@@ -407,6 +411,7 @@ const FULL_NAMES: &[(Command, &str)] = &[
     (Programs, "Show Programs"),
     (AllWithExtension, "Show *.*"),
     (CustomFilter, "Custom Filter"),
+    (QuickFilter, "Quick Filter"),
     (OnlySelectedFiles, "Show Only Selected Files"),
     (SortByName, "Sort by Name"),
     (SortByExtension, "Sort by Extension"),
