@@ -381,6 +381,17 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The published list, over the network; run by hand with `--ignored`.
+    #[test]
+    #[ignore]
+    fn fetches_the_published_list() {
+        let manifest = fetch().unwrap();
+        for release in &manifest.addons {
+            println!("{} {}: {:?}", release.id, release.version, release.downloads.keys().collect::<Vec<_>>());
+        }
+        assert!(!manifest.addons.is_empty());
+    }
+
     #[test]
     fn checks_the_download() {
         let dir = std::env::temp_dir().join(format!("pc-addon-{}", std::process::id()));
