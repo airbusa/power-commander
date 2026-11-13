@@ -69,6 +69,21 @@ pub fn save_text(path: &Path, text: &str) -> io::Result<()> {
     written
 }
 
+/// `text` in a new file only the user may read, to be written into `path`
+/// as administrator (`elevate::Action::Write`).
+pub fn stage_text(path: &Path, text: &str) -> io::Result<std::path::PathBuf> {
+    use std::io::Write as _;
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let staged = std::env::temp_dir().join(format!("pc-save-{}-{name}", std::process::id()));
+    let _ = fs::remove_file(&staged);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(&staged)?.write_all(text.as_bytes())?;
+    Ok(staged)
+}
+
 /// Starts the external editor on `file`, as Ctrl+Shift+F4 does.
 pub fn edit_externally(line: &str, file: &Path) -> io::Result<()> {
     let mut child = start_editor(line, file)?;

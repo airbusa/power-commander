@@ -15,6 +15,9 @@ pub enum Action {
     Rename(PathBuf, PathBuf),
     /// Each `(target, link)`.
     Link { kind: crate::links::Kind, items: Vec<(PathBuf, PathBuf)> },
+    /// `from`'s bytes into `to`, which keeps its owner, permissions and ACL:
+    /// the editor saving a file the user may not write (the hosts file).
+    Write { from: PathBuf, to: PathBuf },
 }
 
 /// Runs `action` as administrator, the system asking for the password;
@@ -57,6 +60,7 @@ pub(crate) fn script(action: &Action) -> String {
                 _ => format!("ln -s -- {} {}", quote(target), quote(link)),
             })
             .collect(),
+        Action::Write { from, to } => vec![format!("cat -- {} > {}", quote(from), quote(to))],
     };
     format!("set -e\n{}\n", lines.join("\n"))
 }
@@ -152,6 +156,12 @@ mod platform {
                     format!("mklink {switch}{} {}", quote(link), quote(target))
                 })
                 .collect(),
+            // Truncated and written, not replaced: the file keeps its ACL.
+            Action::Write { from, to } => {
+                let single = |path: &std::path::Path| path.display().to_string().replace('\'', "''");
+                let bytes = format!("[IO.File]::WriteAllBytes('{}', [IO.File]::ReadAllBytes('{}'))", single(to), single(from));
+                vec![format!("powershell -NoProfile -NonInteractive -Command \"{bytes}\"")]
+            }
         };
         lines.join(" && ")
     }
@@ -226,6 +236,14 @@ mod tests {
         let kind = crate::links::Kind::Hard;
         run_here(&Action::Link { kind, items: vec![(dir.join("dst/folder/old.txt"), dir.join("hard.txt"))] });
         assert_eq!(fs::read_to_string(dir.join("hard.txt")).unwrap(), "old");
+        // Written into, keeping its permissions.
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(dir.join("hosts"), "old hosts").unwrap();
+        fs::set_permissions(dir.join("hosts"), fs::Permissions::from_mode(0o640)).unwrap();
+        fs::write(dir.join("staged"), "new hosts").unwrap();
+        run_here(&Action::Write { from: dir.join("staged"), to: dir.join("hosts") });
+        assert_eq!(fs::read_to_string(dir.join("hosts")).unwrap(), "new hosts");
+        assert_eq!(fs::metadata(dir.join("hosts")).unwrap().permissions().mode() & 0o777, 0o640);
         fs::remove_dir_all(&dir).unwrap();
     }
 }

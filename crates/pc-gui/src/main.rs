@@ -51,7 +51,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -129,6 +129,56 @@ impl AssetSource for AppAssets {
 const CONTEXT: &str = "Commander";
 const ROW: Pixels = px(22.);
 /// Refused for want of rights, as the system says it (the trash's errors keep only the text).
+/// What permission refused, offered as administrator over `window`: the
+/// system asks for the password (polkit, UAC, macOS's). `done` hears whether
+/// it was done; declined at the system's prompt, nothing is said.
+pub(crate) fn offer_admin_in(
+    what: String,
+    action: pc_core::elevate::Action,
+    window: &mut Window,
+    cx: &mut App,
+    done: impl FnOnce(bool, &mut Window, &mut App) + 'static,
+) {
+    let gone = match action {
+        pc_core::elevate::Action::Delete(_) => " What is deleted so is gone for good.",
+        _ => "",
+    };
+    let text = format!("{what}: permission denied. As administrator, the system asks for the password.{gone}");
+    type Done = Box<dyn FnOnce(bool, &mut Window, &mut App)>;
+    let pending = Rc::new(std::cell::RefCell::new(Some((action, Box::new(done) as Done))));
+    // After the dialog that asked for this closes: closing takes the topmost.
+    window.defer(cx, move |window, cx| {
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let (pending, what) = (pending.clone(), what.clone());
+            alert.title("Permission denied").description(text.clone()).ok_text("As administrator").show_cancel(true).on_ok(move |_, window, cx| {
+                let Some((action, done)) = pending.borrow_mut().take() else {
+                    return true;
+                };
+                let what = what.clone();
+                let ran = cx.background_executor().spawn(async move {
+                    let ran = pc_core::elevate::run(&action);
+                    pc_core::activity::note(format!("{what}, as administrator"), &ran);
+                    ran
+                });
+                window
+                    .spawn(cx, async move |cx| {
+                        let ran = ran.await;
+                        let _ = cx.update(|window, cx| {
+                            if let Err(err) = &ran
+                                && err.kind() != io::ErrorKind::Interrupted
+                            {
+                                window.push_notification(Notification::error(format!("As administrator: {err}")), cx);
+                            }
+                            done(ran.is_ok(), window, cx);
+                        });
+                    })
+                    .detach();
+                true
+            })
+        })
+    });
+}
+
 pub(crate) fn denied(err: &io::Error) -> bool {
     let text = err.to_string();
     err.kind() == io::ErrorKind::PermissionDenied || text.contains("ermission denied") || text.contains("Access is denied")
@@ -1040,43 +1090,15 @@ impl Commander {
     /// Permission refused `what`: asked whether as administrator, the system
     /// asking for the password, in the background; then the panels read again.
     pub(crate) fn offer_admin(&mut self, what: String, action: pc_core::elevate::Action, window: &mut Window, cx: &mut Context<Self>) {
-        let action = Arc::new(Mutex::new(Some(action)));
         let commander = cx.entity().downgrade();
-        let text = format!("{what}: permission denied. As administrator, the system asks for the password; what is deleted so is gone for good.");
-        // After the dialog that asked for this closes: closing takes the topmost.
-        cx.defer_in(window, move |_, window, cx| window.open_alert_dialog(cx, move |alert, _, _| {
-            let (action, commander, what) = (action.clone(), commander.clone(), what.clone());
-            alert.title("Permission denied").description(text.clone()).ok_text("As administrator").show_cancel(true).on_ok(move |_, window, cx| {
-                let Some(action) = action.lock().unwrap().take() else {
-                    return true;
-                };
-                let what = what.clone();
-                let _ = commander.update(cx, |_, cx| {
-                    let done = cx.background_executor().spawn(async move {
-                        let done = pc_core::elevate::run(&action);
-                        pc_core::activity::note(format!("{what}, as administrator"), &done);
-                        done
-                    });
-                    cx.spawn_in(window, async move |this, cx| {
-                        let done = done.await;
-                        let _ = this.update_in(cx, |this, window, cx| {
-                            // Declined: nothing to say.
-                            if let Err(err) = done
-                                && err.kind() != io::ErrorKind::Interrupted
-                            {
-                                window.push_notification(Notification::error(format!("As administrator: {err}")), cx);
-                            }
-                            for ix in 0..2 {
-                                let remote = this.panels[ix].tabs.current().remote().is_some();
-                                this.navigate_on(ix, remote, Panel::reload, window, cx);
-                            }
-                        });
-                    })
-                    .detach();
-                });
-                true
-            })
-        }));
+        offer_admin_in(what, action, window, cx, move |_, window, cx| {
+            let _ = commander.update(cx, |this, cx| {
+                for ix in 0..2 {
+                    let remote = this.panels[ix].tabs.current().remote().is_some();
+                    this.navigate_on(ix, remote, Panel::reload, window, cx);
+                }
+            });
+        });
     }
 
     /// Every tab on `folder`, on both sides, reads it again.

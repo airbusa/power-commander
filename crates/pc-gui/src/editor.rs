@@ -371,22 +371,29 @@ impl TextEditor {
         let text = self.editor.read(cx).value();
         match edit::save_text(&self.path, &text) {
             Ok(()) => {
-                self.edited = false;
-                window.set_window_title(&title(&self.path, false));
-                if let Some(upload) = self.upload.clone() {
-                    let local = self.path.clone();
-                    cx.spawn_in(window, async move |_, cx| {
-                        let sent = cx.background_executor().spawn(async move { upload(&local) });
-                        let note = match sent.await {
-                            Ok(text) => Notification::success(text),
-                            Err(err) => Notification::error(format!("Could not save it back: {err}")).autohide(false),
-                        };
-                        let _ = cx.update(|window, cx| window.push_notification(note, cx));
-                    })
-                    .detach();
-                }
-                cx.notify();
+                self.saved(window, cx);
                 true
+            }
+            // The hosts file: written into as administrator, from a copy of the user's own.
+            Err(err) if crate::denied(&err) && self.upload.is_none() => {
+                match edit::stage_text(&self.path, &text) {
+                    Ok(staged) => {
+                        let name = self.path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                        let action = pc_core::elevate::Action::Write { from: staged.clone(), to: self.path.clone() };
+                        let editor = cx.entity().downgrade();
+                        crate::offer_admin_in(format!("Saving \"{name}\""), action, window, cx, move |done, window, cx| {
+                            let _ = std::fs::remove_file(&staged);
+                            if done {
+                                let _ = editor.update(cx, |this, cx| this.saved(window, cx));
+                            }
+                        });
+                    }
+                    Err(err) => {
+                        let text = format!("Could not save {}: {err}", self.path.display());
+                        window.push_notification(Notification::error(text).autohide(false), cx);
+                    }
+                }
+                false
             }
             Err(err) => {
                 let text = format!("Could not save {}: {err}", self.path.display());
@@ -394,6 +401,25 @@ impl TextEditor {
                 false
             }
         }
+    }
+
+    /// The file holds the text: a server's copy goes back up.
+    fn saved(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.edited = false;
+        window.set_window_title(&title(&self.path, false));
+        if let Some(upload) = self.upload.clone() {
+            let local = self.path.clone();
+            cx.spawn_in(window, async move |_, cx| {
+                let sent = cx.background_executor().spawn(async move { upload(&local) });
+                let note = match sent.await {
+                    Ok(text) => Notification::success(text),
+                    Err(err) => Notification::error(format!("Could not save it back: {err}")).autohide(false),
+                };
+                let _ = cx.update(|window, cx| window.push_notification(note, cx));
+            })
+            .detach();
+        }
+        cx.notify();
     }
 
     /// Saves to a new file, which the editor edits from then on.
