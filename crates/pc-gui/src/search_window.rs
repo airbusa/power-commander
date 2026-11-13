@@ -945,7 +945,8 @@ impl FindFiles {
             // The end of a long path: the name.
             .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis_start().child(found.shown()))
             .child(div().w(px(110.)).flex_none().text_right().child(size))
-            .child(div().w(px(130.)).flex_none().text_color(theme.muted_foreground).child(time))
+            // As wide as the date format needs, as the panels' column.
+            .child(div().w(crate::date_fits(cx)).flex_none().whitespace_nowrap().text_color(theme.muted_foreground).child(time))
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 this.cursor = Some(at);
                 window.focus(&this.focus, cx);
