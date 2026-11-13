@@ -1924,10 +1924,9 @@ pub(crate) fn window_icon() -> Option<std::sync::Arc<image::RgbaImage>> {
 /// The system's look, light or dark as chosen.
 fn palette(settings: &Settings, window: &Window) -> theme::Palette {
     let dark = match settings.appearance {
-        Appearance::System => matches!(
-            window.appearance(),
-            WindowAppearance::Dark | WindowAppearance::VibrantDark
-        ),
+        Appearance::System => theme::desktop_dark().unwrap_or_else(|| {
+            matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark)
+        }),
         Appearance::Light => false,
         Appearance::Dark => true,
     };

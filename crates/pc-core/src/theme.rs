@@ -1,6 +1,7 @@
 //! The system's look, by platform: its light or dark colours, its accent
 //! and, where the desktop names one, its font. On KDE the user's own
-//! colour scheme (kdeglobals); elsewhere the platform's standard colours.
+//! colour scheme (kdeglobals); on Xfce, MATE and Cinnamon their GTK 3
+//! theme's; elsewhere the platform's standard colours.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -115,13 +116,53 @@ pub fn system(dark: bool) -> Palette {
             kde_or_breeze(text.as_deref(), dark)
         }
         // GTK's apps write in the desktop's font.
-        false => Palette {
-            font: desktop_font(),
-            font_size: None,
-            selection: gnome_accent(interface_setting("accent-color").as_deref()),
-            ..adwaita(dark)
-        },
+        false => {
+            let palette = match gtk_theme() {
+                Some(theme) if theme.dark == dark => theme,
+                Some(theme) => Palette { selection: theme.selection, selection_text: theme.selection_text, ..adwaita(dark) },
+                None => Palette { selection: gnome_accent(interface_setting("accent-color").as_deref()), ..adwaita(dark) },
+            };
+            Palette { font: desktop_font(), font_size: None, ..palette }
+        }
     }
+}
+
+/// Whether the desktop's own look is dark, where its apps go by their
+/// theme's colours rather than a dark mode: Xfce's, MATE's, Cinnamon's.
+pub fn desktop_dark() -> Option<bool> {
+    gtk_theme().map(|theme| theme.dark)
+}
+
+/// The GTK 3 theme's colours on Xfce, MATE and Cinnamon.
+fn gtk_theme() -> Option<Palette> {
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    return crate::toolkit_style::gtk_colors().and_then(gtk);
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    None
+}
+
+/// A GTK 3 theme's colours, as `pc-gtkstyle` reads them.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn gtk(theme: &crate::toolkit_style::Drawn) -> Option<Palette> {
+    let color = |name: &str| theme.colors.get(name).copied();
+    let window = color("theme_bg_color")?;
+    let view = color("theme_base_color").unwrap_or(window);
+    let text = color("theme_text_color").or(color("theme_fg_color"))?;
+    Some(Palette {
+        dark: theme.dark,
+        window,
+        bar: window,
+        button: color("button").unwrap_or(window),
+        view,
+        text,
+        dim: mix(view, text, 0.6),
+        border: color("borders").unwrap_or(mix(window, text, 0.2)),
+        selection: color("theme_selected_bg_color")?,
+        selection_text: color("theme_selected_fg_color").unwrap_or(0xffffff),
+        marked: color("error_color").unwrap_or(0xe01b24),
+        font: None,
+        font_size: None,
+    })
 }
 
 /// GNOME's accent (GNOME 47's accent-color) as libadwaita draws it; its blue
@@ -777,6 +818,19 @@ mod tests {
         assert_eq!((light.checked_fill, light.mark), (0x0067c0, 0xffffff));
         // ControlFillColorDefault, 6% white, over dark's #202020.
         assert_eq!(dark.button[0][0], 0x2d2d2d);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn gtk_theme_colors() {
+        let rgb = [("theme_bg_color", 0xcecece), ("theme_base_color", 0xfcfcfc), ("theme_text_color", 0x212121), ("theme_selected_bg_color", 0x398ee7)];
+        let colors: std::collections::HashMap<String, u32> = rgb.into_iter().map(|(name, rgb)| (name.to_owned(), rgb)).collect();
+        let mut theme = crate::toolkit_style::Drawn { style: "Greybird".into(), dark: false, images: Default::default(), colors };
+        let palette = gtk(&theme).unwrap();
+        assert_eq!((palette.window, palette.view, palette.text, palette.selection), (0xcecece, 0xfcfcfc, 0x212121, 0x398ee7));
+        assert_eq!((palette.button, palette.selection_text, palette.dark), (0xcecece, 0xffffff, false));
+        theme.colors.remove("theme_bg_color");
+        assert!(gtk(&theme).is_none());
     }
 
     #[test]

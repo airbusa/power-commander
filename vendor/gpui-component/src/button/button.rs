@@ -659,7 +659,6 @@ impl RenderOnce for Button {
             && matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Secondary);
         // PowerCommander patch: push buttons as the Qt style draws them, see `ToolkitControls`.
         let qt = matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Default | ButtonVariant::Secondary)
-            && !self.outline
             && !self.shows_selected_style();
         let qt = qt.then(|| cx.try_global::<crate::ToolkitControls>().cloned()).flatten();
         let qt_default = self.variant == ButtonVariant::Primary;

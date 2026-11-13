@@ -70,7 +70,7 @@ pub(crate) fn layers(
 
 /// An image filling its place.
 pub(crate) fn picture(image: Arc<RenderImage>) -> Div {
-    painted(move |bounds| vec![(image, bounds)])
+    painted(move |bounds| vec![(image, bounds, bounds)])
 }
 
 /// A button's background in `state`: its ends as drawn, the middle stretched between.
@@ -81,22 +81,24 @@ pub(crate) fn button_layer(controls: &ToolkitControls, parts: &[StateImages; 3],
     painted(move |Bounds { origin, size }| {
         let middle_width = (size.width - left_width - right_width).max(px(0.));
         let part = |x: Pixels, width: Pixels| Bounds::new(point(origin.x + x, origin.y), gpui::size(width, size.height));
-        vec![
-            (left, part(px(0.), left_width)),
-            (middle, part(left_width, middle_width)),
-            (right, part(left_width + middle_width, right_width)),
-        ]
+        let (left_part, middle_part, right_part) =
+            (part(px(0.), left_width), part(left_width, middle_width), part(left_width + middle_width, right_width));
+        // The strip's middle half stretched: its edges would blend in the atlas' next image.
+        let strip = part(left_width - middle_width / 2., middle_width * 2.);
+        vec![(left, left_part, left_part), (middle, middle_part, strip), (right, right_part, right_part)]
     })
 }
 
-/// Images painted where `place` puts them in the element's bounds: an
-/// `img` would take its height from its own shape.
-fn painted(place: impl FnOnce(Bounds<Pixels>) -> Vec<(Arc<RenderImage>, Bounds<Pixels>)> + 'static) -> Div {
+/// Images painted where `place` puts them in the element's bounds, each
+/// shown in its first bounds, laid out in its second: an `img` would take
+/// its height from its own shape.
+type Placed = (Arc<RenderImage>, Bounds<Pixels>, Bounds<Pixels>);
+fn painted(place: impl FnOnce(Bounds<Pixels>) -> Vec<Placed> + 'static) -> Div {
     let canvas = canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
-            for (image, at) in place(bounds) {
-                let _ = window.paint_image(at, at, Corners::default(), image, 0, false);
+            for (image, shown, at) in place(bounds) {
+                let _ = window.paint_image(shown, at, Corners::default(), image, 0, false);
             }
         },
     );

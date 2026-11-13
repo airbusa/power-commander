@@ -319,7 +319,9 @@ impl RenderOnce for Checkbox {
                         (Some(qt), _, _) => {
                             let images = &qt.checkbox[checked as usize];
                             let (width, height) = qt.size(&images.0[crate::toolkit::NORMAL]);
-                            this.w(width).h(height).border_0().child(crate::toolkit::layers(
+                            // A box taller than the line (Materia's, its padding a ripple's room) centred on it.
+                            let line = indicator_size.to_pixels(window.rem_size()) * 1.25;
+                            this.w(width).h(height).border_0().when(has_content && height > line, |this| this.mt((line - height) / 2.)).child(crate::toolkit::layers(
                                 crate::toolkit::CHECKBOX,
                                 self.disabled,
                                 |state| crate::toolkit::picture(images.0[state].clone()),

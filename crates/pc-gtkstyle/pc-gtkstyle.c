@@ -1,13 +1,15 @@
 // pc-gtkstyle: the desktop's GTK 3 theme (Xfce's, MATE's, Cinnamon's) draws
 // PowerCommander's controls, each in every state, into images on stdout, as
-// pc-qtstyle does with Qt's:
-//   pc-gtkstyle <scale> <button height>
-// Header lines, then per image "image <name> <width> <height>" and its
-// straight RGBA pixels; sizes in device pixels, "end" last.
+// pc-qtstyle does with Qt's, and says its colours:
+//   pc-gtkstyle <scale> <button height> | pc-gtkstyle colors
+// Header lines, "color <name> <rrggbb>" lines, then per image
+// "image <name> <width> <height>" and its straight RGBA pixels; sizes in
+// device pixels, "end" last.
 
 #include <gtk/gtk.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static double scale = 1;
 
@@ -70,28 +72,39 @@ static cairo_surface_t *canvas(int width, int height, cairo_t **cr) {
     return surface;
 }
 
-// `context`'s box drawn in `width` × `height`, inside its margins; a check
-// box's mark too.
+// `context`'s box drawn in `width` × `height`; a check box's mark too, inside
+// its border and padding, as GTK does. Its margins, the space around it, are
+// the app's to lay out.
 static void draw(GtkStyleContext *context, cairo_t *cr, double width, double height, gboolean check) {
-    GtkBorder margin;
-    gtk_style_context_get_margin(context, gtk_style_context_get_state(context), &margin);
-    double x = margin.left, y = margin.top;
-    width -= margin.left + margin.right, height -= margin.top + margin.bottom;
-    gtk_render_background(context, cr, x, y, width, height);
-    gtk_render_frame(context, cr, x, y, width, height);
-    if (check) gtk_render_check(context, cr, x, y, width, height);
+    gtk_render_background(context, cr, 0, 0, width, height);
+    gtk_render_frame(context, cr, 0, 0, width, height);
+    if (!check) return;
+    GtkStateFlags state = gtk_style_context_get_state(context);
+    GtkBorder padding, border;
+    gtk_style_context_get_padding(context, state, &padding);
+    gtk_style_context_get_border(context, state, &border);
+    double left = padding.left + border.left, top = padding.top + border.top;
+    gtk_render_check(context, cr, left, top, width - left - padding.right - border.right, height - top - padding.bottom - border.bottom);
 }
 
-// A node's size: its min-width and min-height with padding, border and margin.
+// A node's size: its min-width and min-height with padding and border.
 static void size_of(GtkStyleContext *context, int *width, int *height) {
     GtkStateFlags state = gtk_style_context_get_state(context);
-    GtkBorder padding, border, margin;
+    GtkBorder padding, border;
     gtk_style_context_get(context, state, "min-width", width, "min-height", height, NULL);
     gtk_style_context_get_padding(context, state, &padding);
     gtk_style_context_get_border(context, state, &border);
-    gtk_style_context_get_margin(context, state, &margin);
-    *width += padding.left + padding.right + border.left + border.right + margin.left + margin.right;
-    *height += padding.top + padding.bottom + border.top + border.bottom + margin.top + margin.bottom;
+    *width += padding.left + padding.right + border.left + border.right;
+    *height += padding.top + padding.bottom + border.top + border.bottom;
+}
+
+// A colour over the window's, as an opaque "rrggbb".
+static void put_color(const char *name, GdkRGBA color, GdkRGBA under) {
+    double a = color.alpha;
+    int r = (color.red * a + under.red * (1 - a)) * 255 + 0.5;
+    int g = (color.green * a + under.green * (1 - a)) * 255 + 0.5;
+    int b = (color.blue * a + under.blue * (1 - a)) * 255 + 0.5;
+    printf("color %s %02x%02x%02x\n", name, r, g, b);
 }
 
 int main(int argc, char **argv) {
@@ -99,12 +112,13 @@ int main(int argc, char **argv) {
         fprintf(stderr, "pc-gtkstyle: no display\n");
         return 1;
     }
-    if (argc < 3) {
-        fprintf(stderr, "usage: pc-gtkstyle <scale> <button height>\n");
+    gboolean colors_only = argc == 2 && !strcmp(argv[1], "colors");
+    if (argc < 3 && !colors_only) {
+        fprintf(stderr, "usage: pc-gtkstyle <scale> <button height> | pc-gtkstyle colors\n");
         return 2;
     }
-    scale = g_ascii_strtod(argv[1], NULL);
-    int button_height = atoi(argv[2]);
+    scale = colors_only ? 1 : g_ascii_strtod(argv[1], NULL);
+    int button_height = colors_only ? 24 : atoi(argv[2]);
     if (scale <= 0 || button_height <= 0) return 2;
 
     // GTK_THEME, when set, wins over the settings' theme.
@@ -116,6 +130,34 @@ int main(int argc, char **argv) {
     double lightness = 0.299 * background.red + 0.587 * background.green + 0.114 * background.blue;
     printf("pc-gtkstyle 1\nstyle %s\ndark %d\n", theme ? theme : "", lightness < 0.5);
     g_free(theme);
+
+    // The named colours GTK's apps paint with, where the theme defines them.
+    static const char *const COLORS[] = {"theme_bg_color", "theme_fg_color", "theme_base_color", "theme_text_color",
+                                         "theme_selected_bg_color", "theme_selected_fg_color", "borders", "error_color"};
+    for (size_t i = 0; i < G_N_ELEMENTS(COLORS); i++) {
+        GdkRGBA color;
+        if (gtk_style_context_lookup_color(window, COLORS[i], &color)) put_color(COLORS[i], color, background);
+    }
+    // A push button's fill, its middle as drawn: themes paint gradients and images.
+    GtkStyleContext *plain = node(window, GTK_TYPE_BUTTON, "button", "text-button");
+    cairo_t *cr;
+    cairo_surface_t *surface = canvas(button_height, button_height, &cr);
+    draw(plain, cr, button_height, button_height, FALSE);
+    cairo_destroy(cr);
+    cairo_surface_flush(surface);
+    int x = cairo_image_surface_get_width(surface) / 2, y = cairo_image_surface_get_height(surface) / 2;
+    guint32 middle = *(guint32 *)(cairo_image_surface_get_data(surface) + cairo_image_surface_get_stride(surface) * y + x * 4);
+    double alpha = (middle >> 24) / 255.;
+    if (alpha > 0) {
+        GdkRGBA fill = {(middle >> 16 & 255) / 255. / alpha, (middle >> 8 & 255) / 255. / alpha, (middle & 255) / 255. / alpha, alpha};
+        put_color("button", fill, background);
+    }
+    cairo_surface_destroy(surface);
+    g_object_unref(plain);
+    if (colors_only) {
+        printf("end\n");
+        return 0;
+    }
 
     GtkStyleContext *checkbutton = node(window, GTK_TYPE_CHECK_BUTTON, "checkbutton", NULL);
     GtkStyleContext *check = node(checkbutton, G_TYPE_NONE, "check", NULL);
