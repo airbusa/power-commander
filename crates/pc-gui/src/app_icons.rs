@@ -1,5 +1,7 @@
-//! Entries' icons: macOS's applications (`….app`) show their own, as Finder
-//! draws them, made in the background; everything else the Material theme's.
+//! Entries' icons: those with one of their own show it, as the system's
+//! file manager draws it (macOS's applications as Finder, Windows' programs
+//! and shortcuts as Explorer, Linux's launchers from the icon theme), made
+//! in the background; everything else the Material theme's.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -15,15 +17,32 @@ use crate::Commander;
 /// An application's path and an icon's size in pixels.
 type Key = (PathBuf, u32);
 
-/// Applications' icons: none while being made, or where it failed.
+/// What the background makes: pixels, or the icon theme's file.
+enum Made {
+    #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]
+    Drawn(Arc<RenderImage>),
+    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
+    File(PathBuf),
+}
+
+impl From<Made> for ImageSource {
+    fn from(made: Made) -> Self {
+        match made {
+            Made::Drawn(image) => ImageSource::Render(image),
+            Made::File(path) => ImageSource::from(path),
+        }
+    }
+}
+
+/// Their icons: none while being made, or where it failed.
 #[derive(Default)]
-pub(crate) struct AppIcons(RefCell<HashMap<Key, Option<Arc<RenderImage>>>>);
+pub(crate) struct AppIcons(RefCell<HashMap<Key, Option<ImageSource>>>);
 
 impl Commander {
     /// `entry`'s icon in panel `ix`, `size` high.
     pub(crate) fn entry_icon(&self, ix: usize, entry: &Entry, size: Pixels, cx: &mut Context<Self>) -> AnyElement {
         let panel = self.panels[ix].tabs.current();
-        if entry.is_app() && panel.remote().is_none() && !panel.in_archive() {
+        if entry.own_icon() && panel.remote().is_none() && !panel.in_archive() {
             // Twice as large: sharp on a Retina display.
             let pixels = (f32::from(size) * 2.).round() as u32;
             if let Some(icon) = self.app_icon(panel.folder().join(&entry.name), pixels, cx) {
@@ -35,8 +54,8 @@ impl Commander {
         img(format!("material/{icon}")).size(size).flex_none().into_any_element()
     }
 
-    /// The application's icon once made; the first ask starts making it.
-    fn app_icon(&self, path: PathBuf, pixels: u32, cx: &mut Context<Self>) -> Option<Arc<RenderImage>> {
+    /// The entry's own icon once made; the first ask starts making it.
+    fn app_icon(&self, path: PathBuf, pixels: u32, cx: &mut Context<Self>) -> Option<ImageSource> {
         let key = (path, pixels);
         if let Some(made) = self.app_icons.0.borrow().get(&key) {
             return made.clone();
@@ -48,7 +67,7 @@ impl Commander {
             let made = making.await;
             let _ = this.update(cx, |this, cx| {
                 if made.is_some() {
-                    this.app_icons.0.borrow_mut().insert(key, made);
+                    this.app_icons.0.borrow_mut().insert(key, made.map(ImageSource::from));
                     cx.notify();
                 }
             });
@@ -58,10 +77,29 @@ impl Commander {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn make(path: &Path, pixels: u32) -> Option<Made> {
+    finder_icon(path, pixels).map(Made::Drawn)
+}
+
+/// Explorer's, drawn by the shell.
+#[cfg(windows)]
+fn make(path: &Path, pixels: u32) -> Option<Made> {
+    let (width, height, bgra) = pc_core::shell_icon::bgra(path, pixels)?;
+    let image = image::RgbaImage::from_raw(width, height, bgra)?;
+    Some(Made::Drawn(Arc::new(RenderImage::new([image::Frame::new(image)]))))
+}
+
+/// A launcher's, from the icon theme.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn make(path: &Path, _: u32) -> Option<Made> {
+    pc_core::desktop::launcher_icon(path).map(Made::File)
+}
+
 /// The icon Finder shows for `path`, `pixels` square, in BGRA as GPUI
 /// takes images.
 #[cfg(target_os = "macos")]
-fn make(path: &Path, pixels: u32) -> Option<Arc<RenderImage>> {
+fn finder_icon(path: &Path, pixels: u32) -> Option<Arc<RenderImage>> {
     use objc2::AllocAnyThread;
     use objc2::rc::autoreleasepool;
     use objc2_app_kit::{NSBitmapImageRep, NSDeviceRGBColorSpace, NSGraphicsContext, NSWorkspace};
@@ -113,9 +151,4 @@ fn make(path: &Path, pixels: u32) -> Option<Arc<RenderImage>> {
         }
         Some(Arc::new(RenderImage::new([image::Frame::new(bgra)])))
     })
-}
-
-#[cfg(not(target_os = "macos"))]
-fn make(_: &Path, _: u32) -> Option<Arc<RenderImage>> {
-    None
 }

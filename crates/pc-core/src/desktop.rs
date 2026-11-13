@@ -463,6 +463,11 @@ fn on_path(program: &str) -> Option<PathBuf> {
 
 // --- Applications ----------------------------------------------------------
 
+/// A launcher's (a `.desktop` file's) icon file, from its Icon key.
+pub fn launcher_icon(file: &Path) -> Option<PathBuf> {
+    icon(read_desktop(file)?.get("Desktop Entry")?.get("Icon")?)
+}
+
 /// An application's entry, unless it hides, belongs to another desktop or
 /// its program is missing.
 fn app(file: &Path) -> Option<App> {

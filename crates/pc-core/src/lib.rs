@@ -47,6 +47,8 @@ pub mod secrets;
 pub mod session;
 pub mod settings;
 #[cfg(windows)]
+pub mod shell_icon;
+#[cfg(windows)]
 pub mod shell_menu;
 pub mod sidebar;
 pub mod sftp;
@@ -257,6 +259,18 @@ impl Entry {
     pub fn is_app(&self) -> bool {
         let extension = Path::new(&self.name).extension();
         cfg!(target_os = "macos") && self.is_dir && extension.is_some_and(|e| e.eq_ignore_ascii_case("app"))
+    }
+
+    /// It shows its own icon, as the system's file manager draws it: macOS's
+    /// applications, Windows' programs and shortcuts, Linux's launchers.
+    pub fn own_icon(&self) -> bool {
+        let extension = Path::new(&self.name).extension().map(|e| e.to_ascii_lowercase());
+        let one_of = |list: &[&str]| extension.as_ref().is_some_and(|e| list.iter().any(|x| e == x));
+        match () {
+            _ if cfg!(target_os = "macos") => self.is_app(),
+            _ if cfg!(windows) => !self.is_dir && one_of(&["exe", "lnk", "ico", "url", "cpl", "msc", "scr"]),
+            _ => !self.is_dir && one_of(&["desktop"]),
+        }
     }
 
     /// For the Name and Ext columns; folders keep their name whole.
