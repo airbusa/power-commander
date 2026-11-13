@@ -796,14 +796,15 @@ impl Commander {
         let home = std::env::home_dir();
         for (ix, path) in self.settings.bookmarks.iter().enumerate() {
             let theme = cx.theme();
-            let name = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
+            let folder = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
+            let name = self.settings.bookmark_names.get(path).cloned().unwrap_or_else(|| folder.clone());
             let parent = path.parent().map(|parent| match home.as_deref().and_then(|home| parent.strip_prefix(home).ok()) {
                 Some(inside) if inside.as_os_str().is_empty() => "~".to_owned(),
                 Some(inside) => format!("~/{}", inside.display()),
                 None => parent.display().to_string(),
             });
             let selected = here == Some(path.as_path());
-            let icon = icons::material().icon(&name, true, !theme.mode.is_dark());
+            let icon = icons::material().icon(&folder, true, !theme.mode.is_dark());
             let (opened, commander) = (path.clone(), cx.entity().downgrade());
             block = block.child(
                 h_flex()
@@ -820,18 +821,73 @@ impl Commander {
                     .child(div().flex_1().min_w_0().truncate().text_xs().text_color(theme.muted_foreground).children(parent))
                     .on_click(cx.listener(move |this, _, window, cx| this.open_folder(opened.clone(), window, cx)))
                     .context_menu(move |menu, _, _| {
-                        let commander = commander.clone();
-                        menu.item(PopupMenuItem::new("Remove from Bookmarks").on_click(move |_, window, cx| {
-                            let _ = commander.update(cx, |this, cx| {
-                                this.settings.bookmarks.remove(ix);
+                        let act = |label: &'static str, run: fn(&mut Commander, usize, &mut Window, &mut Context<Commander>)| {
+                            let commander = commander.clone();
+                            PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                                let _ = commander.update(cx, |this, cx| run(this, ix, window, cx));
+                            })
+                        };
+                        menu.item(act("Rename...", Commander::rename_bookmark))
+                            .item(act("Move Up", |this, ix, window, cx| this.move_bookmark(ix, -1, window, cx)))
+                            .item(act("Move Down", |this, ix, window, cx| this.move_bookmark(ix, 1, window, cx)))
+                            .separator()
+                            .item(act("Remove from Bookmarks", |this, ix, window, cx| {
+                                let gone = this.settings.bookmarks.remove(ix);
+                                this.settings.bookmark_names.remove(&gone);
                                 this.save_settings(window, cx);
                                 cx.notify();
-                            });
-                        }))
+                            }))
                     }),
             );
         }
         block
+    }
+
+    /// Go > Bookmark This Folder (Ctrl+D, as a browser's): the active panel's folder.
+    pub(crate) fn bookmark_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = self.panels[self.active].tabs.current();
+        if panel.remote().is_some() || panel.in_archive() || panel.is_found() {
+            return window.push_notification(Notification::warning("Only this computer's folders can be bookmarked."), cx);
+        }
+        let folder = panel.folder().to_owned();
+        let name = folder.file_name().map_or_else(|| folder.display().to_string(), |name| name.to_string_lossy().into_owned());
+        let note = match self.settings.bookmarks.contains(&folder) {
+            true => format!("{name} is in Bookmarks already."),
+            false => format!("Bookmarked: {name}"),
+        };
+        self.add_bookmarks(vec![folder], window, cx);
+        window.push_notification(Notification::info(note), cx);
+    }
+
+    /// A bookmark's own name; an empty one gives it its folder's again.
+    fn rename_bookmark(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.settings.bookmarks.get(ix).cloned() else {
+            return;
+        };
+        let folder = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
+        let name = self.settings.bookmark_names.get(&path).cloned().unwrap_or(folder);
+        let commander = cx.entity().downgrade();
+        crate::name_dialog::open("Rename bookmark", "Name (empty: the folder's):", name, window, cx, move |name, window, cx| {
+            let _ = commander.update(cx, |this, cx| {
+                match name.trim() {
+                    "" => this.settings.bookmark_names.remove(&path),
+                    name => this.settings.bookmark_names.insert(path.clone(), name.to_owned()),
+                };
+                this.save_settings(window, cx);
+                cx.notify();
+            });
+        });
+    }
+
+    /// One place up (-1) or down (1) the list.
+    fn move_bookmark(&mut self, ix: usize, by: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let bookmarks = &mut self.settings.bookmarks;
+        let Some(to) = ix.checked_add_signed(by).filter(|&to| to < bookmarks.len()) else {
+            return;
+        };
+        bookmarks.swap(ix, to);
+        self.save_settings(window, cx);
+        cx.notify();
     }
 
     /// A panel's dragged folders, this computer's only.

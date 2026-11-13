@@ -2204,6 +2204,7 @@ impl Render for Commander {
                     Command::GoForward => this.go_history(1, window, cx),
                     Command::GoHome => this.go_home(window, cx),
                     Command::Bookmarks => this.show_bookmarks(window, cx),
+                    Command::BookmarkFolder => this.bookmark_folder(window, cx),
                     Command::ToggleSidebar => {
                         let tab = this.sidebar.tab.unwrap_or(this.sidebar.last);
                         this.toggle_sidebar(tab, window, cx)

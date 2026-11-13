@@ -67,8 +67,10 @@ pub struct Settings {
     pub fixed_font: Option<FontChoice>,
     /// The Show menu's last custom filter, which it offers again ("*.*" before one).
     pub last_filter: String,
-    /// The sidebar's Places > Bookmarks: folders dropped there.
+    /// The sidebar's Places > Bookmarks: folders dropped there or bookmarked, in their order.
     pub bookmarks: Vec<PathBuf>,
+    /// Bookmarks' own names, where given; else their folder's.
+    pub bookmark_names: std::collections::BTreeMap<PathBuf, String>,
     /// No dialog offers a missing add-on when its kind of file is opened.
     pub never_offer_addons: bool,
 }

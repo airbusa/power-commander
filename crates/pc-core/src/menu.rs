@@ -52,6 +52,8 @@ pub enum Command {
     /// Places' bookmarks in the sidebar: Total Commander's Directory Hotlist.
     #[serde(alias = "DirectoryHotlist")]
     Bookmarks,
+    /// The folder shown, into Bookmarks.
+    BookmarkFolder,
     GoBack,
     GoForward,
     /// Alt+Down: the tab's last places, to pick one.
@@ -283,6 +285,7 @@ pub const MENUS: &[Menu] = &[
             cmd("Desktop Folder", OpenDesktopFolder),
             SEP,
             cmd("Bookmarks", Bookmarks),
+            cmd("Bookmark This Folder", BookmarkFolder),
             cmd("CD Tree...", CdTree),
         ],
     },
