@@ -1160,7 +1160,7 @@ fn icon_theme() -> String {
 }
 
 /// A key of kdeglobals' group.
-fn kde_setting(group: &str, key: &str) -> Option<String> {
+pub(crate) fn kde_setting(group: &str, key: &str) -> Option<String> {
     let path = dirs::config_dir()?.join("kdeglobals");
     read_desktop(&path)?.get(group)?.get(key).cloned().filter(|v| !v.is_empty())
 }

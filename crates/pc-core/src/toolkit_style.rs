@@ -38,7 +38,15 @@ pub fn helper() -> Option<&'static str> {
 /// The controls as the toolkit draws them, `scale` device pixels to a pixel,
 /// buttons `button_height` pixels high. Blocks, some 70 ms.
 pub fn draw(scale: f32, button_height: u32) -> io::Result<Drawn> {
-    run(&[&scale.to_string(), &button_height.to_string()])
+    let drawn = run(&[&scale.to_string(), &button_height.to_string()])?;
+    // Qt 6 without the user's style draws Fusion: Plasma 5's styles are Qt 5's.
+    if helper() == Some("pc-qtstyle") {
+        let chosen = crate::desktop::kde_setting("KDE", "widgetStyle").unwrap_or_else(|| "Breeze".into());
+        if !drawn.style.eq_ignore_ascii_case(&chosen) {
+            return Err(io::Error::other(format!("pc-qtstyle drew {}, not {chosen}", drawn.style)));
+        }
+    }
+    Ok(drawn)
 }
 
 /// The GTK 3 theme's colours, without images, on Xfce, MATE and Cinnamon;
