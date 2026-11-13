@@ -1,0 +1,7 @@
+# pc-qtstyle only: Ubuntu 20.04 has no Qt 6. It draws with the user's Qt 6
+# style, which only Plasma 6 has, on distributions with glibc 2.39 or later.
+#   docker build -t powercommander-qt -f packaging/linux/Dockerfile.qt packaging/linux
+#   docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src powercommander-qt crates/pc-qtstyle/build.sh <BIN>
+FROM ubuntu:24.04
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    g++ pkg-config qt6-base-dev

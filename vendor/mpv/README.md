@@ -9,7 +9,7 @@ once after cloning, and again after an update.
   Homebrew's `ninja` and `pkg-config`, on Intel `nasm` too; it can take most
   of an hour)
 - Linux: `vendor/mpv/build.sh`, in the oldest distribution the release is for
-  (Ubuntu 24.04: `packaging/linux/Dockerfile` has what it needs), a few
+  (Ubuntu 20.04: `packaging/linux/Dockerfile` has what it needs), a few
   minutes; for 64-bit ARM with `PLATFORM=linux-aarch64`, cross-built in
   `packaging/linux/Dockerfile.arm64`
 - Windows: `vendor\mpv\fetch.bat` (Windows 10 or later)
@@ -65,8 +65,8 @@ desktop has them), so `linux-<arch>` holds `libmpv.so.2` and the 10 libraries
 of ours it loads, 32 MB, found beside it (`$ORIGIN`), stripped. FFmpeg has
 lavfi's device (none of the system's), which the frames test plays, and no
 bzip2. No VAAPI, which would make `libva` a must: video is decoded on the
-processor, as pc-core reads each frame back anyway. Built in Ubuntu 24.04,
-it needs glibc 2.38 or later.
+processor, as pc-core reads each frame back anyway. Built in Ubuntu 20.04,
+it needs glibc 2.31 or later: Debian 11, Ubuntu 20.04, RHEL 9 and since.
 
 ## What is in it
 

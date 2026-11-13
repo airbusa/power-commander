@@ -25,10 +25,14 @@ documents need the Craft tools, the add-on or the system's.
 
 ## Building in a container
 
-`Dockerfile` is the release's build machine: Ubuntu 24.04, the oldest the
-release is for (glibc 2.38 and later run what it builds), with Rust and what
-the app and libmpv build with. Built there, the programs run on newer
-distributions too:
+`Dockerfile` is the release's build machine: Ubuntu 20.04, the oldest the
+release is for (glibc 2.31 and later run what it builds: Debian 11, Ubuntu
+20.04, RHEL 9 and every distribution since), with Rust and what the app,
+libmpv and `pc-gtkstyle` build with. Built there, the programs run on newer
+distributions too. Check a build with `objdump -T <file> | grep -o
+'GLIBC_[0-9.]*' | sort -V | tail -1` (2.31 at most). `pc-qtstyle` needs Qt
+6, which 20.04 lacks: `Dockerfile.qt` (24.04) builds it, for Plasma 6, whose
+distributions all have glibc 2.39 or later:
 
 ```sh
 docker build -t powercommander-build packaging/linux

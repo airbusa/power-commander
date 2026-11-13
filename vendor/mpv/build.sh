@@ -5,7 +5,7 @@
 # macOS: for macOS 13 or later (as PDFium); needs Xcode's command line tools
 # (their python3 too), ninja and pkg-config (Homebrew's), and on Intel nasm.
 # Linux: for the glibc it is built with, so in the oldest distribution the
-# release is for (Ubuntu 24.04); needs a C/C++ compiler, python3, ninja,
+# release is for (Ubuntu 20.04: packaging/linux/Dockerfile); needs a C/C++ compiler, python3 (3.9 on, as PYTHON), ninja,
 # pkg-config, patchelf, nasm (x86_64), and the development files of what
 # every desktop has, which it uses: PulseAudio, ALSA, FreeType, HarfBuzz,
 # FriBidi, fontconfig and zlib. PLATFORM=linux-aarch64 builds for 64-bit ARM
@@ -42,7 +42,7 @@ if [ $OS = macos ]; then
     export PKG_CONFIG_LIBDIR=$PREFIX/lib/pkgconfig
     export PKG_CONFIG_PATH=
 else
-    PYTHON=python3
+    PYTHON=${PYTHON:-python3}
     JOBS=$(nproc)
     # Ours first, then the system's.
     export PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig

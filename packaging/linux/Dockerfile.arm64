@@ -1,22 +1,26 @@
 # The build machine for 64-bit ARM Linux, cross-compiling on x86_64: the one
-# in Dockerfile, with Ubuntu's arm64 libraries and the aarch64 compilers.
+# in Dockerfile (Ubuntu 20.04, glibc 2.31), with its arm64 libraries and the
+# aarch64 compilers, gcc 10 as there.
 #   docker build -t powercommander-build-arm64 -f packaging/linux/Dockerfile.arm64 packaging/linux
 # GLib's, HarfBuzz's and PulseAudio's development packages are only unpacked:
 # installed, libglib2.0-dev:arm64 brings arm64's python3, which replaces amd64's.
 # No Qt or GTK ones (they need GLib's): pc-qtstyle and pc-gtkstyle are built on an ARM machine.
 FROM powercommander-build
-RUN sed -i '/^Types:/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources \
- && printf 'Types: deb\nURIs: http://ports.ubuntu.com/ubuntu-ports/\nSuites: noble noble-updates noble-security\nComponents: main universe\nArchitectures: arm64\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' > /etc/apt/sources.list.d/ports.sources \
+RUN sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list \
+ && for suite in focal focal-updates focal-security; do \
+        echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ $suite main universe"; \
+    done > /etc/apt/sources.list.d/ports.list \
  && dpkg --add-architecture arm64 && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+    gcc-10-aarch64-linux-gnu g++-10-aarch64-linux-gnu binutils-aarch64-linux-gnu \
     libxkbcommon-dev:arm64 libxkbcommon-x11-dev:arm64 libwayland-dev:arm64 \
     libfontconfig1-dev:arm64 libfreetype-dev:arm64 libx11-dev:arm64 libx11-xcb-dev:arm64 libxcb1-dev:arm64 \
     libxcb-xkb-dev:arm64 libxi-dev:arm64 libdbus-1-dev:arm64 libssl-dev:arm64 libzstd-dev:arm64 libasound2-dev:arm64 \
-    libfribidi-dev:arm64 zlib1g-dev:arm64 libpcre2-dev:arm64 libffi-dev:arm64 libgraphite2-dev:arm64 \
-    libpulse0:arm64 libharfbuzz0b:arm64 libglib2.0-0t64:arm64 \
+    libfribidi-dev:arm64 zlib1g-dev:arm64 libpcre2-dev:arm64 libpcre3-dev:arm64 libffi-dev:arm64 libgraphite2-dev:arm64 \
+    libpulse0:arm64 libharfbuzz0b:arm64 libglib2.0-0:arm64 \
  && cd /tmp && apt-get download libpulse-dev:arm64 libharfbuzz-dev:arm64 libglib2.0-dev:arm64 \
- && for deb in *_arm64.deb; do dpkg -x "$deb" /; done && rm *_arm64.deb
+ && for deb in *_arm64.deb; do dpkg -x "$deb" /; done && rm *_arm64.deb \
+ && for tool in gcc g++; do ln -s "/usr/bin/aarch64-linux-gnu-$tool-10" "/usr/local/bin/aarch64-linux-gnu-$tool"; done
 RUN rustup target add aarch64-unknown-linux-gnu && chmod -R a+rX /opt/rustup /opt/cargo
 RUN printf '#!/bin/sh\n# pkg-config for arm64: its libraries, after any PKG_CONFIG_PATH.\nexport PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig\nexec pkg-config "$@"\n' > /usr/local/bin/aarch64-linux-gnu-pkg-config \
  && chmod +x /usr/local/bin/aarch64-linux-gnu-pkg-config
