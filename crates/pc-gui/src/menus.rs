@@ -184,6 +184,8 @@ fn items(list: &[Item], chosen: Appearance, checked: &dyn Fn(Command) -> bool) -
         Item::Command { label, command, .. } => {
             Some(item(label.into(), checked(command), Box::new(Run(command)), false))
         }
+        // Xfce's, MATE's and Cinnamon's look is their theme's: no other to choose.
+        Item::Appearance { .. } if pc_core::theme::desktop_dark().is_some() => None,
         Item::Appearance { label } => {
             let each = [
                 ("As the system", Appearance::System),
