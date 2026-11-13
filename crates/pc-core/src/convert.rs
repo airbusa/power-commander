@@ -1,5 +1,6 @@
 //! Office documents as PDF, by the Craft tools (WordCraft, GridCraft,
-//! DeckCraft) when they are on the PATH; converted once, then cached.
+//! DeckCraft) when they are on the PATH (on macOS also in the usual bin
+//! folders or inside the app); converted once, then cached.
 
 use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
@@ -30,14 +31,40 @@ pub fn converter_for(path: &Path) -> Option<Converter> {
         .find(|(_, _, extensions)| extensions.contains(&extension.as_str()))?;
     Some(Converter {
         name,
-        program: on_path(program)?,
+        program: on_path(program).or_else(|| in_app(dirs::home_dir().as_deref(), name, program))?,
     })
 }
 
+/// On the PATH; on macOS also where a terminal's PATH has it, as an app
+/// opened from Finder or the Dock gets only the system's folders.
 pub(crate) fn on_path(program: &str) -> Option<PathBuf> {
-    let folders = std::env::var_os("PATH")?;
-    std::env::split_paths(&folders)
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .chain(mac_bin_folders(dirs::home_dir().as_deref()))
         .map(|folder| folder.join(program))
+        .find(|path| path.is_file())
+}
+
+/// Homebrew's, /usr/local's and the user's bin folders.
+fn mac_bin_folders(home: Option<&Path>) -> Vec<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return Vec::new();
+    }
+    let mut folders = vec![PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin")];
+    folders.extend(home.iter().flat_map(|home| [".local/bin", "bin", ".cargo/bin"].map(|folder| home.join(folder))));
+    folders
+}
+
+/// macOS: the tool inside the app, as PhotoCraft ships photocraft-cli.
+fn in_app(home: Option<&Path>, app: &str, program: &str) -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let mine = home.map(|home| home.join("Applications"));
+    [Some(PathBuf::from("/Applications")), mine]
+        .into_iter()
+        .flatten()
+        .map(|apps| apps.join(format!("{app}.app/Contents/MacOS/{program}")))
         .find(|path| path.is_file())
 }
 
@@ -118,5 +145,21 @@ mod tests {
         let err = convert_into(&cache, &converter, &bad).unwrap_err().to_string();
         assert_eq!(err, "Fake: broken");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Where a Finder-started app looks besides the PATH.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn finds_tools_off_the_path() {
+        let home = std::env::temp_dir().join(format!("pc-tools-{}", std::process::id()));
+        let inside = home.join("Applications/DeckCraft.app/Contents/MacOS");
+        std::fs::create_dir_all(&inside).unwrap();
+        std::fs::write(inside.join("deckcraft-cli"), "").unwrap();
+        assert_eq!(in_app(Some(&home), "DeckCraft", "deckcraft-cli"), Some(inside.join("deckcraft-cli")));
+        assert_eq!(in_app(Some(&home), "WordCraft", "wordcraft-cli"), None);
+        let folders = mac_bin_folders(Some(&home));
+        assert!(folders.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(folders.contains(&home.join(".local/bin")));
+        std::fs::remove_dir_all(&home).unwrap();
     }
 }
