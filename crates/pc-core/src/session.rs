@@ -21,6 +21,8 @@ pub struct Session {
     pub sidebar_width: f32,
     /// The panels one above the other.
     pub vertical: bool,
+    /// The terminal's height in pixels; 0 before it was dragged.
+    pub terminal_height: f32,
 }
 
 #[derive(Default, Serialize, Deserialize)]

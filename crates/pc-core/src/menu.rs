@@ -90,6 +90,8 @@ pub enum Command {
     /// Dot files, and Windows' hidden and system files, shown or not.
     HiddenFiles,
     QuickViewPanel,
+    /// The built-in terminal under the panels, shown or hidden; its shell lives on.
+    TerminalPanel,
     VerticalArrangement,
     DuplicateTab,
     AllFiles,
@@ -336,6 +338,7 @@ pub const MENUS: &[Menu] = &[
                 ],
             },
             cmd("Quick View Panel", QuickViewPanel),
+            cmd("Terminal", TerminalPanel),
             cmd("Vertical Arrangement", VerticalArrangement),
             SEP,
             Item::Submenu {

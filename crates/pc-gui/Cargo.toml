@@ -20,6 +20,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # Server prompts reach the window by a channel; GPUI builds it already.
 futures = "0.3"
 pc-core.workspace = true
+# The built-in terminal's emulation and pty (Apache-2.0).
+alacritty_terminal = { version = "0.26", default-features = false }
 
 # The name on macOS's menu bar when run without a bundle, applications' own
 # icons; GPUI builds them already.
@@ -28,6 +30,10 @@ objc2 = "0.6"
 block2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSDictionary", "NSGeometry", "NSObject", "NSError", "NSRange", "NSString", "NSURL", "objc2-core-foundation"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSAppearance", "NSApplication", "NSBezierPath", "NSBitmapImageRep", "NSColor", "NSColorSpace", "NSControl", "NSEvent", "NSFont", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSMenu", "NSMenuItem", "NSPasteboard", "NSPopover", "NSResponder", "NSSharingService", "NSText", "NSTextField", "NSTokenField", "NSTrackingArea", "NSView", "NSViewController", "NSWindow", "NSWorkspace"] }
+
+# The terminal asks the pty whether the shell waits at its prompt; alacritty builds it already.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 # The .exe's icon on Windows, which GPUI gives its windows (resource 1).
 [build-dependencies]

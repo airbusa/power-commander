@@ -51,13 +51,22 @@ const IN_APP_MENU: [Command; 3] = [Command::About, Command::Settings, Command::Q
 /// The commands' keys. Keys bound `before` are unbound first: the new
 /// bindings come after that, so they win.
 pub fn bind(keys: &KeySettings, before: Option<&KeySettings>, cx: &mut App) {
-    let context = || Some(Rc::new(KeyBindingContextPredicate::parse(crate::CONTEXT).unwrap()));
-    let binding = |key: &str, action: Box<dyn Action>| {
-        KeyBinding::load(key, action, context(), false, None, &DummyKeyboardMapper).ok()
+    let binding = |key: &str, action: Box<dyn Action>, context: &str| {
+        let context = Some(Rc::new(KeyBindingContextPredicate::parse(context).unwrap()));
+        KeyBinding::load(key, action, context, false, None, &DummyKeyboardMapper).ok()
     };
-    let unbound = before.into_iter().flat_map(KeySettings::bindings);
-    let unbind = unbound.filter_map(|(key, _)| binding(&key, Box::new(Unbind(Run::name_for_type().into()))));
-    cx.bind_keys(unbind.collect::<Vec<_>>());
+    // The terminal takes every other key.
+    let contexts = |command: Command| match command {
+        Command::TerminalPanel => &[crate::CONTEXT, "Terminal"][..],
+        _ => &[crate::CONTEXT][..],
+    };
+    let mut unbind = Vec::new();
+    for (key, command) in before.into_iter().flat_map(KeySettings::bindings) {
+        for context in contexts(command) {
+            unbind.extend(binding(&key, Box::new(Unbind(Run::name_for_type().into())), context));
+        }
+    }
+    cx.bind_keys(unbind);
     // A key the settings file got wrong is left out.
     let mut bound = keys.bindings();
     // GPUI Kit shows a command's last key, macOS's menu bar its first: there
@@ -67,8 +76,13 @@ pub fn bind(keys: &KeySettings, before: Option<&KeySettings>, cx: &mut App) {
             keys.reverse();
         }
     }
-    let bound = bound.into_iter();
-    cx.bind_keys(bound.filter_map(|(key, command)| binding(&key, Box::new(Run(command)))).collect::<Vec<_>>());
+    let mut bindings = Vec::new();
+    for (key, command) in bound {
+        for context in contexts(command) {
+            bindings.extend(binding(&key, Box::new(Run(command)), context));
+        }
+    }
+    cx.bind_keys(bindings);
     // The menu bar shows the keys: the next window to render puts it up again.
     #[cfg(target_os = "macos")]
     cx.set_global(Installed(None));

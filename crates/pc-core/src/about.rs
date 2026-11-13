@@ -29,6 +29,7 @@ pub const LIBRARIES: &[Part] = &[
     part("GPUI", "The window, drawing and input (Zed's)", "Apache 2.0", "https://github.com/zed-industries/zed"),
     part("GPUI Kit", "Controls: lists, menus, fields, the editor", "Apache 2.0", "https://github.com/longbridge/gpui-component"),
     part("tree-sitter", "Code's colours in the viewer and editor", "MIT", "https://tree-sitter.github.io"),
+    part("alacritty_terminal", "The built-in terminal (drawn as Zed's terminal is, GPL 3.0)", "Apache 2.0", "https://github.com/alacritty/alacritty"),
     part("image", "Pictures", "MIT or Apache 2.0", "https://github.com/image-rs/image"),
     part("pdfium-render", "PDFium from Rust", "MIT or Apache 2.0", "https://github.com/ajrcarey/pdfium-render"),
     part("russh, russh-sftp", "SSH and SFTP", "Apache 2.0", "https://github.com/warp-tech/russh"),

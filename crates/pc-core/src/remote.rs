@@ -203,9 +203,35 @@ pub fn connect(address: &Address, ask: Ask) -> io::Result<(Arc<dyn Remote>, Path
     }
 }
 
+/// `ssh` into an SFTP server's `dir`, for the terminal: the program and
+/// its arguments; none for other servers.
+pub fn ssh_command(url: &str, dir: &std::path::Path) -> Option<(String, Vec<String>)> {
+    let address = Address::parse(url).filter(|address| address.scheme == Scheme::Sftp)?;
+    let mut args = vec!["-t".to_owned()];
+    if let Some(port) = address.port {
+        args.extend(["-p".to_owned(), port.to_string()]);
+    }
+    args.push(match address.user {
+        Some(user) => format!("{user}@{}", address.host),
+        None => address.host,
+    });
+    // The server's shell runs it: a folder gone leaves the shell in its home.
+    let dir = dir.to_string_lossy().replace('\'', r"'\''");
+    args.push(format!("cd '{dir}'; exec \"$SHELL\" -l"));
+    Some(("ssh".to_owned(), args))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opens_ssh_where_the_panel_is() {
+        let (program, args) = ssh_command("sftp://me@example.org:2222", std::path::Path::new("/srv/it's")).unwrap();
+        assert_eq!(program, "ssh");
+        assert_eq!(args, ["-t", "-p", "2222", "me@example.org", r#"cd '/srv/it'\''s'; exec "$SHELL" -l"#]);
+        assert!(ssh_command("ftp://example.org", std::path::Path::new("/")).is_none());
+    }
 
     #[test]
     fn reads_addresses() {
