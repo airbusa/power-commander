@@ -103,7 +103,23 @@ fn draw_still(path: &Path, within: u32) -> Result<Frame, String> {
 
 pub fn is_media(path: &Path) -> bool {
     let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
-    extension.is_some_and(|extension| EXTENSIONS.contains(&extension.as_str()))
+    extension.is_some_and(|extension| {
+        let extension = extension.as_str();
+        EXTENSIONS.contains(&extension) && (!TYPESCRIPT.contains(&extension) || transport_stream(path))
+    })
+}
+
+/// TypeScript's too: these are video only as a transport stream.
+const TYPESCRIPT: [&str; 2] = ["ts", "mts"];
+
+/// MPEG transport stream packets: 0x47 every 188 bytes, or every 192 after
+/// a time code of 4 (a camera's .mts). Reads the file's start.
+fn transport_stream(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(197);
+    let read = std::fs::File::open(path).and_then(|file| file.take(197).read_to_end(&mut head));
+    let synced = |first: usize, packet: usize| head.get(first) == Some(&0x47) && head.get(first + packet) == Some(&0x47);
+    read.is_ok() && (synced(0, 188) || synced(4, 192))
 }
 
 /// libmpv is there, and this system's OpenGL is drawn with.
@@ -1061,6 +1077,23 @@ mod tests {
         assert!(is_media(Path::new("/a/Film.MKV")));
         assert!(is_media(Path::new("song.flac")));
         assert!(!is_media(Path::new("notes.txt")));
+        // .ts and .mts: TypeScript, unless their packets say video.
+        let dir = std::env::temp_dir().join(format!("pc-ts-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, bytes: &[u8]| {
+            std::fs::write(dir.join(name), bytes).unwrap();
+            is_media(&dir.join(name))
+        };
+        let packets = |first: usize, packet: usize| {
+            let mut bytes = vec![0u8; first + packet * 2];
+            (bytes[first], bytes[first + packet]) = (0x47, 0x47);
+            bytes
+        };
+        assert!(!file("next.config.ts", b"export default { reactStrictMode: true };\n"));
+        assert!(file("broadcast.ts", &packets(0, 188)));
+        assert!(file("camera.MTS", &packets(4, 192)));
+        assert!(!file("module.mts", b"export const a = 1;\n"));
+        std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(clock(65.4), "1:05");
         assert_eq!(clock(3725.), "1:02:05");
         assert_eq!(clock(-1.), "0:00");
