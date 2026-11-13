@@ -38,6 +38,8 @@ use std::{path::Path, sync::Arc};
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+pub(crate) use macos::pop_up_list;
 #[cfg(target_os = "windows")]
 mod windows;
 

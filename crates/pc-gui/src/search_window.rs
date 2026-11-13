@@ -14,7 +14,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme, Disableable, IconName, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, IconName, MacControls, Sizable, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use pc_core::origin::Origin;
@@ -1000,8 +1000,8 @@ impl Render for FindFiles {
                             .flex_1()
                             .min_w_0()
                             .gap_2()
-                            .child(
-                                TabBar::new("pages")
+                            .map(|el| {
+                                let tabs = TabBar::new("pages")
                                     .small()
                                     .underline()
                                     .selected_index(self.page)
@@ -1009,9 +1009,29 @@ impl Render for FindFiles {
                                     .on_click(cx.listener(|this, page: &usize, _, cx| {
                                         this.page = *page;
                                         cx.notify();
-                                    })),
-                            )
-                            .child(div().h(px(300.)).child(page)),
+                                    }));
+                                // macOS: a tab view, its segments centred on the page's box.
+                                match cx.try_global::<MacControls>().copied() {
+                                    Some(mac) => el.child(
+                                        div()
+                                            .relative()
+                                            .child(
+                                                div()
+                                                    .mt(px(12.))
+                                                    .pt(px(20.))
+                                                    .px_3()
+                                                    .pb_3()
+                                                    .bg(mac.group)
+                                                    .border_1()
+                                                    .border_color(mac.field_frame)
+                                                    .rounded(px(8.))
+                                                    .child(div().h(px(300.)).child(page)),
+                                            )
+                                            .child(div().absolute().top_0().left_0().right_0().flex().justify_center().child(tabs)),
+                                    ),
+                                    None => el.child(tabs).child(div().h(px(300.)).child(page)),
+                                }
+                            }),
                     )
                     .child(
                         v_flex()

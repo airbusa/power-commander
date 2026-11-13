@@ -377,7 +377,19 @@ impl RenderOnce for TabBar {
             }
             _ => None,
         };
+        // And `Underline` tabs as a tab view's: a segmented control, the
+        // selected segment in the accent.
+        let mac_segments = match self.variant {
+            TabVariant::Underline if !cx.has_global::<crate::NativeControls>() => {
+                cx.try_global::<crate::MacControls>().copied()
+            }
+            _ => None,
+        };
         let (bg, paddings, gap): (Background, _, _) = match self.variant {
+            TabVariant::Underline if mac_segments.is_some() => {
+                let fill = mac_segments.map_or(cx.theme().transparent, |mac| mac.button);
+                (fill.into(), Edges::all(px(0.)), px(0.))
+            }
             TabVariant::Tab if mac.is_some() => {
                 let track = mac.map_or(cx.theme().transparent, |mac| mac.tab_track);
                 (track.into(), Edges::all(px(2.)), px(0.))
@@ -424,7 +436,7 @@ impl RenderOnce for TabBar {
         let has_indicator = matches!(
             self.variant,
             TabVariant::Segmented | TabVariant::Pill | TabVariant::Underline
-        );
+        ) && mac_segments.is_none();
         let num_tabs = self.children.len();
 
         // Bounds tracking for tab indicator animation.
@@ -466,7 +478,10 @@ impl RenderOnce for TabBar {
         reveal.advance(window, cx);
 
         let padding_x = paddings.left;
-        let indicator = self.render_indicator(&bounds_rc, window, cx);
+        let indicator = match mac_segments {
+            Some(_) => None,
+            None => self.render_indicator(&bounds_rc, window, cx),
+        };
         let indicator_epoch = indicator.as_ref().map(|(_, epoch)| *epoch).unwrap_or(0);
         let mut indicator_element = indicator.map(|(el, _)| el);
         let indicator_ready = indicator_element.is_some();
@@ -557,7 +572,8 @@ impl RenderOnce for TabBar {
             .bg(bg)
             .text_color(cx.theme().tab_foreground)
             .when(
-                self.variant == TabVariant::Underline || (self.variant == TabVariant::Tab && mac.is_none()),
+                (self.variant == TabVariant::Underline && mac_segments.is_none())
+                    || (self.variant == TabVariant::Tab && mac.is_none()),
                 |this| {
                     this.child(
                         div()
@@ -573,6 +589,7 @@ impl RenderOnce for TabBar {
             )
             .rounded(self.variant.tab_bar_radius(self.size, cx))
             .when(mac.is_some(), |this| this.rounded(px(14.)).m(px(4.)))
+            .when(mac_segments.is_some(), |this| this.rounded(px(6.)))
             .paddings(paddings)
             .refine_style(&self.style)
             .when_some(self.prefix, |this, prefix| this.child(prefix))

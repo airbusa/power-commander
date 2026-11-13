@@ -200,6 +200,75 @@ fn ns_image_for_icon(
     NSImage::initWithData(NSImage::alloc(), &data)
 }
 
+/// PowerCommander patch: a pop-up button's menu as AppKit shows it, the chosen
+/// row over the button and the menu at least as wide; `chosen` gets the row picked.
+pub(crate) fn pop_up_list(
+    labels: Vec<gpui::SharedString>,
+    selected: Option<usize>,
+    bounds: gpui::Bounds<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+    chosen: impl FnOnce(usize, &mut Window, &mut App) + 'static,
+) {
+    let Some(view_ptr) = ns_view_ptr(window) else {
+        return;
+    };
+    let handle = Window::window_handle(window);
+    cx.spawn(async move |cx| {
+        let row = run_list(view_ptr, &labels, selected, bounds);
+        let _ = cx.update(move |app| {
+            let _ = handle.update(app, move |_, window, app| {
+                if let Some(row) = row {
+                    chosen(row, window, app);
+                }
+                window.refresh();
+            });
+        });
+    })
+    .detach();
+}
+
+fn run_list(
+    view_ptr: usize,
+    labels: &[gpui::SharedString],
+    selected: Option<usize>,
+    bounds: gpui::Bounds<Pixels>,
+) -> Option<usize> {
+    let mtm = MainThreadMarker::new()?;
+    // SAFETY: as in `run_menu`.
+    let view: &NSView = unsafe { &*(view_ptr as *const NSView) };
+    let target = MenuTarget::new();
+    let menu = NSMenu::new(mtm);
+    menu.setAutoenablesItems(false);
+    menu.setMinimumWidth(f32::from(bounds.size.width) as f64 + LIST_INSET);
+    for (row, label) in labels.iter().enumerate() {
+        let item = NSMenuItem::new(mtm);
+        unsafe {
+            item.setTitle(&NSString::from_str(label));
+            item.setTag(row as isize);
+            item.setTarget(Some(&target as &AnyObject));
+            item.setAction(Some(sel!(menuItemClicked:)));
+        }
+        if Some(row) == selected {
+            item.setState(1);
+        }
+        menu.addItem(&item);
+    }
+    let positioning = selected.and_then(|row| menu.itemAtIndex(row as isize));
+    let height = view.bounds().size.height;
+    let location = NSPoint::new(
+        f32::from(bounds.origin.x) as f64 - LIST_INSET,
+        height - f32::from(bounds.origin.y) as f64 + LIST_RAISE,
+    );
+    menu.popUpMenuPositioningItem_atLocation_inView(positioning.as_deref(), location, Some(view));
+    let tag = target.ivars().selected.get();
+    (tag >= 0).then_some(tag as usize)
+}
+
+/// How far left of and above the button the menu starts, so the chosen title lies on the button's.
+const LIST_INSET: f64 = 13.;
+const LIST_RAISE: f64 = 4.;
+
 /// Extract the AppKit `NSView` pointer from the window's raw handle.
 fn ns_view_ptr(window: &Window) -> Option<usize> {
     let handle = HasWindowHandle::window_handle(window).ok()?;

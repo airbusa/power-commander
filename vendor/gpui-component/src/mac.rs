@@ -32,6 +32,9 @@ pub struct MacControls {
     pub tab_track: Hsla,
     pub tab: Hsla,
     pub tab_rim: Hsla,
+    /// Tooltips' fill and rim.
+    pub tooltip: Hsla,
+    pub tooltip_frame: Hsla,
 }
 
 impl Global for MacControls {}

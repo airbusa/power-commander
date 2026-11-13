@@ -653,6 +653,23 @@ impl RenderOnce for Tab {
             TabVariant::Tab if breeze.is_none() => cx.try_global::<crate::MacControls>().copied(),
             _ => None,
         };
+        let mac_segment = match self.variant {
+            TabVariant::Underline if native.is_none() => cx.try_global::<crate::MacControls>().copied(),
+            _ => None,
+        };
+        if let Some(mac) = mac_segment {
+            let transparent = cx.theme().transparent;
+            for style in [&mut normal_style, &mut hover_style, &mut disabled_style, &mut selected_style] {
+                style.bg = transparent.into();
+                style.inner_bg = transparent.into();
+                style.borders = Edges::default();
+                style.border_color = transparent;
+                style.fg = mac.text;
+            }
+            disabled_style.fg = mac.disabled_text;
+            selected_style.bg = mac.accent.into();
+            selected_style.fg = mac.on_accent;
+        }
         if let Some(mac) = mac {
             let transparent = cx.theme().transparent;
             for style in [&mut normal_style, &mut hover_style, &mut disabled_style] {
@@ -672,7 +689,11 @@ impl RenderOnce for Tab {
         } else {
             &normal_style
         };
-        let radius = if mac.is_some() { px(12.) } else { self.variant.radius(self.size, cx) };
+        let radius = match (mac, mac_segment) {
+            (Some(_), _) => px(12.),
+            (None, Some(_)) => px(6.),
+            (None, None) => self.variant.radius(self.size, cx),
+        };
         let inner_radius = self.variant.inner_radius(self.size, cx);
         let inner_paddings = self.variant.inner_paddings(self.size);
         let inner_margins = self.variant.inner_margins(self.size);
@@ -681,6 +702,7 @@ impl RenderOnce for Tab {
         let height = match (breeze, mac) {
             (Some(_), _) => px(34.),
             (None, Some(_)) => px(24.),
+            (None, None) if mac_segment.is_some() => px(24.),
             (None, None) => self.variant.height(self.size),
         };
         let aria_label = self.a11y_label();
@@ -842,6 +864,7 @@ impl RenderOnce for Tab {
                 _ => this.text_sm(),
             })
             .rounded(radius)
+            .when(mac_segment.is_some(), |this| this.px(px(11.)))
             .when(!self.selected && !self.disabled, |this| {
                 this.text_color(normal_style.fg)
                     .bg(normal_style.bg)

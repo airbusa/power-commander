@@ -1,6 +1,6 @@
 diff -ruN a/src/button/button.rs b/src/button/button.rs
---- a/src/button/button.rs	2026-11-13 05:10:44.993253940 +0100
-+++ b/src/button/button.rs	2026-11-13 05:10:45.003633957 +0100
+--- a/src/button/button.rs	2026-11-13 07:54:07.066628136 +0100
++++ b/src/button/button.rs	2026-11-13 07:54:07.159689913 +0100
 @@ -159,6 +159,53 @@
  }
  
@@ -231,8 +231,8 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
              Self::Default | Self::Link | Self::Ghost | Self::Text => cx.theme().transparent.into(),
              Self::Primary => cx.theme().tokens.button_primary.background.opacity(0.15),
 diff -ruN a/src/checkbox.rs b/src/checkbox.rs
---- a/src/checkbox.rs	2026-11-13 05:10:44.994024475 +0100
-+++ b/src/checkbox.rs	2026-11-13 05:10:45.012305316 +0100
+--- a/src/checkbox.rs	2026-11-13 07:54:07.067294202 +0100
++++ b/src/checkbox.rs	2026-11-13 07:54:07.160516642 +0100
 @@ -197,16 +197,25 @@
          window,
          cx,
@@ -316,9 +316,9 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
 +                        (Some(qt), _, _) => {
 +                            let images = &qt.checkbox[checked as usize];
 +                            let (width, height) = qt.size(&images.0[crate::toolkit::NORMAL]);
-+                            // A box taller than the line (Materia's, its padding a ripple's room) centred on it.
++                            // A box far taller than the line (Materia's, its padding a ripple's room) centred on it.
 +                            let line = indicator_size.to_pixels(window.rem_size()) * 1.25;
-+                            this.w(width).h(height).border_0().when(has_content && height > line, |this| this.mt((line - height) / 2.)).child(crate::toolkit::layers(
++                            this.w(width).h(height).border_0().when(has_content && height > line * 1.5, |this| this.mt((line - height) / 2.)).child(crate::toolkit::layers(
 +                                crate::toolkit::CHECKBOX,
 +                                self.disabled,
 +                                |state| crate::toolkit::picture(images.0[state].clone()),
@@ -384,8 +384,8 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
              .when(self.label.is_some() || !children.is_empty(), |this| {
                  this.child(
 diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
---- a/src/dialog/dialog.rs	2026-11-13 05:10:44.994573428 +0100
-+++ b/src/dialog/dialog.rs	2026-11-13 05:10:45.004868743 +0100
+--- a/src/dialog/dialog.rs	2026-11-13 07:54:07.068555088 +0100
++++ b/src/dialog/dialog.rs	2026-11-13 07:54:07.155401396 +0100
 @@ -1,13 +1,20 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a dialog moves by
 +// its title, can open centred over a part of the window, and fades in
@@ -737,8 +737,8 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
  pub(crate) mod tests {
      use super::*;
 diff -ruN a/src/group_box.rs b/src/group_box.rs
---- a/src/group_box.rs	2026-11-13 05:10:44.995743101 +0100
-+++ b/src/group_box.rs	2026-11-13 05:10:45.012188985 +0100
+--- a/src/group_box.rs	2026-11-13 07:54:07.068970785 +0100
++++ b/src/group_box.rs	2026-11-13 07:54:07.151283042 +0100
 @@ -1,6 +1,6 @@
  use gpui::{
      AnyElement, App, Background, ElementId, InteractiveElement as _, IntoElement, ParentElement,
@@ -787,8 +787,8 @@ diff -ruN a/src/group_box.rs b/src/group_box.rs
                              .children(self.children),
                      )
 diff -ruN a/src/highlighter/input_adapter.rs b/src/highlighter/input_adapter.rs
---- a/src/highlighter/input_adapter.rs	2026-11-13 05:10:44.995880372 +0100
-+++ b/src/highlighter/input_adapter.rs	2026-11-13 05:10:45.006755148 +0100
+--- a/src/highlighter/input_adapter.rs	2026-11-13 07:54:07.069509980 +0100
++++ b/src/highlighter/input_adapter.rs	2026-11-13 07:54:07.188214109 +0100
 @@ -1,3 +1,7 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the highlighter
 +// factory is public, and a background parse leaves the fold candidates alone
@@ -824,8 +824,8 @@ diff -ruN a/src/highlighter/input_adapter.rs b/src/highlighter/input_adapter.rs
          });
          parse_task.borrow_mut().replace(task);
 diff -ruN a/src/highlighter/mod.rs b/src/highlighter/mod.rs
---- a/src/highlighter/mod.rs	2026-11-13 05:10:44.996597024 +0100
-+++ b/src/highlighter/mod.rs	2026-11-13 05:10:45.006654447 +0100
+--- a/src/highlighter/mod.rs	2026-11-13 07:54:07.069869388 +0100
++++ b/src/highlighter/mod.rs	2026-11-13 07:54:07.187457837 +0100
 @@ -1,3 +1,7 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the editor's
 +// highlighter factory is public, so an app can wrap it. Changes are marked
@@ -850,8 +850,8 @@ diff -ruN a/src/highlighter/mod.rs b/src/highlighter/mod.rs
  }
  
 diff -ruN a/src/input/input.rs b/src/input/input.rs
---- a/src/input/input.rs	2026-11-13 05:10:44.997028814 +0100
-+++ b/src/input/input.rs	2026-11-13 05:10:45.007573323 +0100
+--- a/src/input/input.rs	2026-11-13 07:54:07.071249686 +0100
++++ b/src/input/input.rs	2026-11-13 07:54:07.131289129 +0100
 @@ -705,6 +705,10 @@
          };
  
@@ -914,8 +914,8 @@ diff -ruN a/src/input/input.rs b/src/input/input.rs
              .items_center()
              .gap(gap_x)
 diff -ruN a/src/input/popovers/completion_menu.rs b/src/input/popovers/completion_menu.rs
---- a/src/input/popovers/completion_menu.rs	2026-11-13 05:10:44.997288377 +0100
-+++ b/src/input/popovers/completion_menu.rs	2026-11-13 05:10:45.007307217 +0100
+--- a/src/input/popovers/completion_menu.rs	2026-11-13 07:54:07.071841421 +0100
++++ b/src/input/popovers/completion_menu.rs	2026-11-13 07:54:07.129692920 +0100
 @@ -1,3 +1,7 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): the completion
 +// menu is as wide as the editor's configured width. Changes are marked
@@ -937,8 +937,8 @@ diff -ruN a/src/input/popovers/completion_menu.rs b/src/input/popovers/completio
                      )
                      .when_some(selected_documentation, |this, documentation| {
 diff -ruN a/src/kbd.rs b/src/kbd.rs
---- a/src/kbd.rs	2026-11-13 05:10:44.997571355 +0100
-+++ b/src/kbd.rs	2026-11-13 05:10:45.012019152 +0100
+--- a/src/kbd.rs	2026-11-13 07:54:07.072428906 +0100
++++ b/src/kbd.rs	2026-11-13 07:54:07.118601324 +0100
 @@ -1,3 +1,8 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a binding of
 +// several keystrokes shows them all. Changes are marked "WDS patch".
@@ -1034,8 +1034,8 @@ diff -ruN a/src/kbd.rs b/src/kbd.rs
      }
  }
 diff -ruN a/src/lib.rs b/src/lib.rs
---- a/src/lib.rs	2026-11-13 05:10:44.997624166 +0100
-+++ b/src/lib.rs	2026-11-13 05:10:45.012099425 +0100
+--- a/src/lib.rs	2026-11-13 07:54:07.072890561 +0100
++++ b/src/lib.rs	2026-11-13 07:54:07.134286554 +0100
 @@ -20,6 +20,15 @@
  mod touch_selection;
  mod virtual_list;
@@ -1062,8 +1062,8 @@ diff -ruN a/src/lib.rs b/src/lib.rs
  
  rust_i18n::i18n!("locales", fallback = "en");
 diff -ruN a/src/list/list.rs b/src/list/list.rs
---- a/src/list/list.rs	2026-11-13 05:10:44.997755535 +0100
-+++ b/src/list/list.rs	2026-11-13 05:10:45.007788652 +0100
+--- a/src/list/list.rs	2026-11-13 07:54:07.073854537 +0100
++++ b/src/list/list.rs	2026-11-13 07:54:07.171672819 +0100
 @@ -1,3 +1,6 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a list can take
 +// a single click as selecting only. Changes are marked "WDS patch".
@@ -1116,8 +1116,8 @@ diff -ruN a/src/list/list.rs b/src/list/list.rs
                              secondary: e.modifiers().secondary(),
 diff -ruN a/src/mac.rs b/src/mac.rs
 --- a/src/mac.rs	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/mac.rs	2026-11-13 05:10:45.012075038 +0100
-@@ -0,0 +1,40 @@
++++ b/src/mac.rs	2026-11-13 07:54:07.157799877 +0100
+@@ -0,0 +1,43 @@
 +// PowerCommander patch: this file is new.
 +use gpui::{Global, Hsla};
 +
@@ -1152,6 +1152,9 @@ diff -ruN a/src/mac.rs b/src/mac.rs
 +    pub tab_track: Hsla,
 +    pub tab: Hsla,
 +    pub tab_rim: Hsla,
++    /// Tooltips' fill and rim.
++    pub tooltip: Hsla,
++    pub tooltip_frame: Hsla,
 +}
 +
 +impl Global for MacControls {}
@@ -1159,8 +1162,8 @@ diff -ruN a/src/mac.rs b/src/mac.rs
 +/// The check box's mark, bolder than GPUI Kit's, as AppKit's.
 +pub(crate) const CHECK_MARK: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path d="M2.4 6.4 4.9 8.9 9.7 3.2" fill="none" stroke="black" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>"#;
 diff -ruN a/src/menu/app_menu_bar.rs b/src/menu/app_menu_bar.rs
---- a/src/menu/app_menu_bar.rs	2026-11-13 05:10:44.997929686 +0100
-+++ b/src/menu/app_menu_bar.rs	2026-11-13 05:10:45.008084084 +0100
+--- a/src/menu/app_menu_bar.rs	2026-11-13 07:54:07.074714599 +0100
++++ b/src/menu/app_menu_bar.rs	2026-11-13 07:54:07.175144023 +0100
 @@ -1,7 +1,13 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): menu-bar menus may
 +// use the window's height. Changes are marked "WDS patch".
@@ -1318,8 +1321,8 @@ diff -ruN a/src/menu/app_menu_bar.rs b/src/menu/app_menu_bar.rs
                      .open(is_open)
                      .on_mouse_down(
 diff -ruN a/src/menu/menu_item.rs b/src/menu/menu_item.rs
---- a/src/menu/menu_item.rs	2026-11-13 05:10:44.998038222 +0100
-+++ b/src/menu/menu_item.rs	2026-11-13 05:10:45.008030903 +0100
+--- a/src/menu/menu_item.rs	2026-11-13 07:54:07.075152046 +0100
++++ b/src/menu/menu_item.rs	2026-11-13 07:54:07.173042576 +0100
 @@ -102,6 +102,10 @@
              .px_2()
              .text_base()
@@ -1345,8 +1348,8 @@ diff -ruN a/src/menu/menu_item.rs b/src/menu/menu_item.rs
                  .when_some(self.on_click, |this, on_click| {
                      this.on_mouse_down(MouseButton::Left, move |_, _, cx| {
 diff -ruN a/src/menu/mod.rs b/src/menu/mod.rs
---- a/src/menu/mod.rs	2026-11-13 05:10:44.998063701 +0100
-+++ b/src/menu/mod.rs	2026-11-13 05:10:45.008053275 +0100
+--- a/src/menu/mod.rs	2026-11-13 07:54:07.075485788 +0100
++++ b/src/menu/mod.rs	2026-11-13 07:54:07.174809989 +0100
 @@ -1,3 +1,6 @@
 +// Modified for PowerCommander: exports MenuBuilder. Changes are marked
 +// "PowerCommander patch".
@@ -1365,8 +1368,8 @@ diff -ruN a/src/menu/mod.rs b/src/menu/mod.rs
  pub use dropdown_menu::DropdownMenu;
  pub use popup_menu::{PopupMenu, PopupMenuItem};
 diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
---- a/src/menu/popup_menu.rs	2026-11-13 05:10:44.998101593 +0100
-+++ b/src/menu/popup_menu.rs	2026-11-13 05:10:45.008133598 +0100
+--- a/src/menu/popup_menu.rs	2026-11-13 07:54:07.076794463 +0100
++++ b/src/menu/popup_menu.rs	2026-11-13 07:54:07.175530805 +0100
 @@ -1,8 +1,13 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a long menu's
 +// scrollbar shows while it scrolls. Changes are marked "WDS patch".
@@ -1473,7 +1476,7 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
  
 diff -ruN a/src/native.rs b/src/native.rs
 --- a/src/native.rs	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/native.rs	2026-11-13 05:10:45.012123941 +0100
++++ b/src/native.rs	2026-11-13 07:54:07.114157228 +0100
 @@ -0,0 +1,63 @@
 +// PowerCommander patch: this file is new.
 +use gpui::{Global, Hsla, Pixels};
@@ -1538,9 +1541,100 @@ diff -ruN a/src/native.rs b/src/native.rs
 +}
 +
 +impl Global for NativeControls {}
+diff -ruN a/src/native_menu/macos.rs b/src/native_menu/macos.rs
+--- a/src/native_menu/macos.rs	2026-11-12 22:39:55.000000000 +0100
++++ b/src/native_menu/macos.rs	2026-11-13 07:54:07.122217816 +0100
+@@ -200,6 +200,75 @@
+     NSImage::initWithData(NSImage::alloc(), &data)
+ }
+ 
++/// PowerCommander patch: a pop-up button's menu as AppKit shows it, the chosen
++/// row over the button and the menu at least as wide; `chosen` gets the row picked.
++pub(crate) fn pop_up_list(
++    labels: Vec<gpui::SharedString>,
++    selected: Option<usize>,
++    bounds: gpui::Bounds<Pixels>,
++    window: &mut Window,
++    cx: &mut App,
++    chosen: impl FnOnce(usize, &mut Window, &mut App) + 'static,
++) {
++    let Some(view_ptr) = ns_view_ptr(window) else {
++        return;
++    };
++    let handle = Window::window_handle(window);
++    cx.spawn(async move |cx| {
++        let row = run_list(view_ptr, &labels, selected, bounds);
++        let _ = cx.update(move |app| {
++            let _ = handle.update(app, move |_, window, app| {
++                if let Some(row) = row {
++                    chosen(row, window, app);
++                }
++                window.refresh();
++            });
++        });
++    })
++    .detach();
++}
++
++fn run_list(
++    view_ptr: usize,
++    labels: &[gpui::SharedString],
++    selected: Option<usize>,
++    bounds: gpui::Bounds<Pixels>,
++) -> Option<usize> {
++    let mtm = MainThreadMarker::new()?;
++    // SAFETY: as in `run_menu`.
++    let view: &NSView = unsafe { &*(view_ptr as *const NSView) };
++    let target = MenuTarget::new();
++    let menu = NSMenu::new(mtm);
++    menu.setAutoenablesItems(false);
++    menu.setMinimumWidth(f32::from(bounds.size.width) as f64 + LIST_INSET);
++    for (row, label) in labels.iter().enumerate() {
++        let item = NSMenuItem::new(mtm);
++        unsafe {
++            item.setTitle(&NSString::from_str(label));
++            item.setTag(row as isize);
++            item.setTarget(Some(&target as &AnyObject));
++            item.setAction(Some(sel!(menuItemClicked:)));
++        }
++        if Some(row) == selected {
++            item.setState(1);
++        }
++        menu.addItem(&item);
++    }
++    let positioning = selected.and_then(|row| menu.itemAtIndex(row as isize));
++    let height = view.bounds().size.height;
++    let location = NSPoint::new(
++        f32::from(bounds.origin.x) as f64 - LIST_INSET,
++        height - f32::from(bounds.origin.y) as f64 + LIST_RAISE,
++    );
++    menu.popUpMenuPositioningItem_atLocation_inView(positioning.as_deref(), location, Some(view));
++    let tag = target.ivars().selected.get();
++    (tag >= 0).then_some(tag as usize)
++}
++
++/// How far left of and above the button the menu starts, so the chosen title lies on the button's.
++const LIST_INSET: f64 = 13.;
++const LIST_RAISE: f64 = 4.;
++
+ /// Extract the AppKit `NSView` pointer from the window's raw handle.
+ fn ns_view_ptr(window: &Window) -> Option<usize> {
+     let handle = HasWindowHandle::window_handle(window).ok()?;
+diff -ruN a/src/native_menu/mod.rs b/src/native_menu/mod.rs
+--- a/src/native_menu/mod.rs	2026-11-12 22:39:55.000000000 +0100
++++ b/src/native_menu/mod.rs	2026-11-13 07:54:07.122773553 +0100
+@@ -38,6 +38,8 @@
+ 
+ #[cfg(target_os = "macos")]
+ mod macos;
++#[cfg(target_os = "macos")]
++pub(crate) use macos::pop_up_list;
+ #[cfg(target_os = "windows")]
+ mod windows;
+ 
 diff -ruN a/src/progress/progress.rs b/src/progress/progress.rs
---- a/src/progress/progress.rs	2026-11-13 05:10:44.998610370 +0100
-+++ b/src/progress/progress.rs	2026-11-13 05:10:45.008673724 +0100
+--- a/src/progress/progress.rs	2026-11-13 07:54:07.077215744 +0100
++++ b/src/progress/progress.rs	2026-11-13 07:54:07.124073186 +0100
 @@ -93,12 +93,18 @@
          let mut inner_style = StyleRefinement::default();
          inner_style.corner_radii = radius;
@@ -1592,8 +1686,8 @@ diff -ruN a/src/progress/progress.rs b/src/progress/progress.rs
                      .refine_style(&inner_style)
                      .map(|this| {
 diff -ruN a/src/radio.rs b/src/radio.rs
---- a/src/radio.rs	2026-11-13 05:10:44.998776065 +0100
-+++ b/src/radio.rs	2026-11-13 05:10:45.012271371 +0100
+--- a/src/radio.rs	2026-11-13 07:54:07.078216677 +0100
++++ b/src/radio.rs	2026-11-13 07:54:07.190820502 +0100
 @@ -8,7 +8,7 @@
  use gpui::{
      AnyElement, App, Axis, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
@@ -1661,8 +1755,8 @@ diff -ruN a/src/radio.rs b/src/radio.rs
              .when(!self.children.is_empty() || self.label.is_some(), |this| {
                  this.child(
 diff -ruN a/src/root.rs b/src/root.rs
---- a/src/root.rs	2026-11-13 05:10:44.998858812 +0100
-+++ b/src/root.rs	2026-11-13 05:10:45.008873324 +0100
+--- a/src/root.rs	2026-11-13 07:54:07.078881577 +0100
++++ b/src/root.rs	2026-11-13 07:54:07.169867072 +0100
 @@ -1,3 +1,6 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): notifications paint
 +// above dialogs. Changes are marked "WDS patch".
@@ -1743,9 +1837,35 @@ diff -ruN a/src/root.rs b/src/root.rs
      }
  }
 diff -ruN a/src/select.rs b/src/select.rs
---- a/src/select.rs	2026-11-13 05:10:44.999177167 +0100
-+++ b/src/select.rs	2026-11-13 05:10:45.012224041 +0100
-@@ -518,6 +518,16 @@
+--- a/src/select.rs	2026-11-13 07:54:07.079948258 +0100
++++ b/src/select.rs	2026-11-13 07:54:07.170047276 +0100
+@@ -393,6 +393,25 @@
+     fn toggle_menu(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+         cx.stop_propagation();
+ 
++        // PowerCommander patch: on macOS, AppKit's own pop-up menu, see `MacControls`.
++        #[cfg(target_os = "macos")]
++        if cx.has_global::<crate::MacControls>() && !self.searchable && !self.state.open {
++            let delegate = &self.state.list.read(cx).delegate().delegate;
++            let labels = (0..delegate.items_count(0))
++                .filter_map(|row| delegate.item(IndexPath::new(row)).map(|item| item.title()))
++                .collect();
++            let selected = self.selected_index(cx).map(|ix| ix.row);
++            let this = cx.entity().downgrade();
++            crate::native_menu::pop_up_list(labels, selected, self.state.bounds, window, cx, move |row, window, cx| {
++                let _ = this.update(cx, |this, cx| {
++                    this.set_selected_index(Some(IndexPath::new(row)), window, cx);
++                    cx.emit(SelectEvent::Confirm(this.selected_value().cloned()));
++                    cx.notify();
++                });
++            });
++            return;
++        }
++
+         self.set_open(!self.state.open, cx);
+ 
+         if self.state.open {
+@@ -518,6 +537,16 @@
          let outline_visible = self.state.open || (is_focused && !self.state.disabled);
  
          let (bg, fg) = input_style(self.state.disabled, cx);
@@ -1762,7 +1882,7 @@ diff -ruN a/src/select.rs b/src/select.rs
  
          self.state.list.update(cx, |list, cx| {
              list.set_searchable(searchable, cx);
-@@ -550,9 +560,28 @@
+@@ -550,9 +579,28 @@
                          })
                          .input_size(self.state.size)
                          .input_text_size(self.state.size)
@@ -1792,7 +1912,7 @@ diff -ruN a/src/select.rs b/src/select.rs
                          })
                          .when(
                              outline_visible && self.state.appearance && self.focus_ring_enabled,
-@@ -596,6 +625,10 @@
+@@ -596,6 +644,10 @@
                                              .xsmall()
                                              .text_color(cx.theme().muted_foreground)
                                              .into_any_element(),
@@ -1804,8 +1924,8 @@ diff -ruN a/src/select.rs b/src/select.rs
                                              .text_color(cx.theme().muted_foreground)
                                              .into_any_element(),
 diff -ruN a/src/slider.rs b/src/slider.rs
---- a/src/slider.rs	2026-11-13 05:10:44.999869252 +0100
-+++ b/src/slider.rs	2026-11-13 05:10:45.012154048 +0100
+--- a/src/slider.rs	2026-11-13 07:54:07.080517786 +0100
++++ b/src/slider.rs	2026-11-13 07:54:07.194871275 +0100
 @@ -5,10 +5,10 @@
  use gpui_base::{Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack, spring};
  
@@ -1934,8 +2054,8 @@ diff -ruN a/src/slider.rs b/src/slider.rs
                              .child(
                                  div()
 diff -ruN a/src/styled.rs b/src/styled.rs
---- a/src/styled.rs	2026-11-13 05:10:45.000406132 +0100
-+++ b/src/styled.rs	2026-11-13 05:10:45.010331184 +0100
+--- a/src/styled.rs	2026-11-13 07:54:07.081118229 +0100
++++ b/src/styled.rs	2026-11-13 07:54:07.177704708 +0100
 @@ -25,6 +25,7 @@
  /// as part of one grounded surface rather than as an outline with a separate
  /// shadow below it. An opaque border cannot reproduce that — a border composites
@@ -1954,75 +2074,10 @@ diff -ruN a/src/styled.rs b/src/styled.rs
  }
  
  /// shadcn/ui's popup surface shadow — a hairline `ring` plus `shadow-md` — at
-diff -ruN a/src/tab/tab_bar.rs b/src/tab/tab_bar.rs
---- a/src/tab/tab_bar.rs	2026-11-13 05:10:45.000566557 +0100
-+++ b/src/tab/tab_bar.rs	2026-11-13 05:10:45.010489535 +0100
-@@ -1,3 +1,6 @@
-+// Modified for Water Data Studio (Apache-2.0, section 4b): the segmented
-+// indicator uses the active tab colour. Changes are marked "WDS patch".
-+
- use std::{cell::RefCell, rc::Rc};
- 
- use gpui::{
-@@ -257,7 +260,8 @@
-                     div()
-                         .w_full()
-                         .h(inner_height)
--                        .bg(cx.theme().tokens.background)
-+                        // WDS patch: the theme's active tab colour, not the background.
-+                        .bg(cx.theme().tokens.tab_active)
-                         .rounded(inner_radius)
-                         .shadow(raised_shadow()),
-                 ),
-@@ -365,7 +369,19 @@
-             Size::Large => px(16.),
-             _ => px(12.),
-         };
-+        // PowerCommander patch: AppKit's window tab bar, see `MacControls`: a
-+        // rounded track holding tabs of equal width.
-+        let mac = match self.variant {
-+            TabVariant::Tab if !cx.has_global::<crate::NativeControls>() => {
-+                cx.try_global::<crate::MacControls>().copied()
-+            }
-+            _ => None,
-+        };
-         let (bg, paddings, gap): (Background, _, _) = match self.variant {
-+            TabVariant::Tab if mac.is_some() => {
-+                let track = mac.map_or(cx.theme().transparent, |mac| mac.tab_track);
-+                (track.into(), Edges::all(px(2.)), px(0.))
-+            }
-             TabVariant::Tab => {
-                 let padding = Edges::all(px(0.));
-                 (cx.theme().tokens.tab_bar.into(), padding, px(0.))
-@@ -466,6 +482,7 @@
-         for (ix, child) in self.children.into_iter().enumerate() {
-             item_metas.push((child.label.clone(), child.icon.clone(), child.disabled));
-             let tab_bar_prefix = child.tab_bar_prefix.unwrap_or(true);
-+            let child = if mac.is_some() { child.flex_1() } else { child };
-             let mut tab = child
-                 .ix(ix)
-                 .tab_bar_prefix(tab_bar_prefix)
-@@ -540,7 +557,7 @@
-             .bg(bg)
-             .text_color(cx.theme().tab_foreground)
-             .when(
--                self.variant == TabVariant::Underline || self.variant == TabVariant::Tab,
-+                self.variant == TabVariant::Underline || (self.variant == TabVariant::Tab && mac.is_none()),
-                 |this| {
-                     this.child(
-                         div()
-@@ -555,6 +572,7 @@
-                 },
-             )
-             .rounded(self.variant.tab_bar_radius(self.size, cx))
-+            .when(mac.is_some(), |this| this.rounded(px(14.)).m(px(4.)))
-             .paddings(paddings)
-             .refine_style(&self.style)
-             .when_some(self.prefix, |this, prefix| this.child(prefix))
 diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
---- a/src/tab/tab.rs	2026-11-13 05:10:45.000516182 +0100
-+++ b/src/tab/tab.rs	2026-11-13 05:10:45.010437917 +0100
-@@ -634,6 +634,37 @@
+--- a/src/tab/tab.rs	2026-11-13 07:54:07.082176202 +0100
++++ b/src/tab/tab.rs	2026-11-13 07:54:07.145711182 +0100
+@@ -634,6 +634,54 @@
                  hover_style.borders.left = px(0.);
              }
          }
@@ -2045,6 +2100,23 @@ diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
 +            TabVariant::Tab if breeze.is_none() => cx.try_global::<crate::MacControls>().copied(),
 +            _ => None,
 +        };
++        let mac_segment = match self.variant {
++            TabVariant::Underline if native.is_none() => cx.try_global::<crate::MacControls>().copied(),
++            _ => None,
++        };
++        if let Some(mac) = mac_segment {
++            let transparent = cx.theme().transparent;
++            for style in [&mut normal_style, &mut hover_style, &mut disabled_style, &mut selected_style] {
++                style.bg = transparent.into();
++                style.inner_bg = transparent.into();
++                style.borders = Edges::default();
++                style.border_color = transparent;
++                style.fg = mac.text;
++            }
++            disabled_style.fg = mac.disabled_text;
++            selected_style.bg = mac.accent.into();
++            selected_style.fg = mac.on_accent;
++        }
 +        if let Some(mac) = mac {
 +            let transparent = cx.theme().transparent;
 +            for style in [&mut normal_style, &mut hover_style, &mut disabled_style] {
@@ -2060,12 +2132,16 @@ diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
          let tab_style = if self.disabled {
              &disabled_style
          } else if self.selected {
-@@ -641,12 +672,17 @@
+@@ -641,12 +689,22 @@
          } else {
              &normal_style
          };
 -        let radius = self.variant.radius(self.size, cx);
-+        let radius = if mac.is_some() { px(12.) } else { self.variant.radius(self.size, cx) };
++        let radius = match (mac, mac_segment) {
++            (Some(_), _) => px(12.),
++            (None, Some(_)) => px(6.),
++            (None, None) => self.variant.radius(self.size, cx),
++        };
          let inner_radius = self.variant.inner_radius(self.size, cx);
          let inner_paddings = self.variant.inner_paddings(self.size);
          let inner_margins = self.variant.inner_margins(self.size);
@@ -2075,12 +2151,21 @@ diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
 +        let height = match (breeze, mac) {
 +            (Some(_), _) => px(34.),
 +            (None, Some(_)) => px(24.),
++            (None, None) if mac_segment.is_some() => px(24.),
 +            (None, None) => self.variant.height(self.size),
 +        };
          let aria_label = self.a11y_label();
  
          let segmented_indicator_active =
-@@ -861,6 +897,11 @@
+@@ -806,6 +864,7 @@
+                 _ => this.text_sm(),
+             })
+             .rounded(radius)
++            .when(mac_segment.is_some(), |this| this.px(px(11.)))
+             .when(!self.selected && !self.disabled, |this| {
+                 this.text_color(normal_style.fg)
+                     .bg(normal_style.bg)
+@@ -861,6 +920,11 @@
                  )
              })
              .child(inner_element)
@@ -2092,9 +2177,109 @@ diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
              .when_some(self.suffix, |this, suffix| {
                  this.child(
                      div()
+diff -ruN a/src/tab/tab_bar.rs b/src/tab/tab_bar.rs
+--- a/src/tab/tab_bar.rs	2026-11-13 07:54:07.083470128 +0100
++++ b/src/tab/tab_bar.rs	2026-11-13 07:54:07.145349649 +0100
+@@ -1,3 +1,6 @@
++// Modified for Water Data Studio (Apache-2.0, section 4b): the segmented
++// indicator uses the active tab colour. Changes are marked "WDS patch".
++
+ use std::{cell::RefCell, rc::Rc};
+ 
+ use gpui::{
+@@ -257,7 +260,8 @@
+                     div()
+                         .w_full()
+                         .h(inner_height)
+-                        .bg(cx.theme().tokens.background)
++                        // WDS patch: the theme's active tab colour, not the background.
++                        .bg(cx.theme().tokens.tab_active)
+                         .rounded(inner_radius)
+                         .shadow(raised_shadow()),
+                 ),
+@@ -365,7 +369,31 @@
+             Size::Large => px(16.),
+             _ => px(12.),
+         };
++        // PowerCommander patch: AppKit's window tab bar, see `MacControls`: a
++        // rounded track holding tabs of equal width.
++        let mac = match self.variant {
++            TabVariant::Tab if !cx.has_global::<crate::NativeControls>() => {
++                cx.try_global::<crate::MacControls>().copied()
++            }
++            _ => None,
++        };
++        // And `Underline` tabs as a tab view's: a segmented control, the
++        // selected segment in the accent.
++        let mac_segments = match self.variant {
++            TabVariant::Underline if !cx.has_global::<crate::NativeControls>() => {
++                cx.try_global::<crate::MacControls>().copied()
++            }
++            _ => None,
++        };
+         let (bg, paddings, gap): (Background, _, _) = match self.variant {
++            TabVariant::Underline if mac_segments.is_some() => {
++                let fill = mac_segments.map_or(cx.theme().transparent, |mac| mac.button);
++                (fill.into(), Edges::all(px(0.)), px(0.))
++            }
++            TabVariant::Tab if mac.is_some() => {
++                let track = mac.map_or(cx.theme().transparent, |mac| mac.tab_track);
++                (track.into(), Edges::all(px(2.)), px(0.))
++            }
+             TabVariant::Tab => {
+                 let padding = Edges::all(px(0.));
+                 (cx.theme().tokens.tab_bar.into(), padding, px(0.))
+@@ -408,7 +436,7 @@
+         let has_indicator = matches!(
+             self.variant,
+             TabVariant::Segmented | TabVariant::Pill | TabVariant::Underline
+-        );
++        ) && mac_segments.is_none();
+         let num_tabs = self.children.len();
+ 
+         // Bounds tracking for tab indicator animation.
+@@ -450,7 +478,10 @@
+         reveal.advance(window, cx);
+ 
+         let padding_x = paddings.left;
+-        let indicator = self.render_indicator(&bounds_rc, window, cx);
++        let indicator = match mac_segments {
++            Some(_) => None,
++            None => self.render_indicator(&bounds_rc, window, cx),
++        };
+         let indicator_epoch = indicator.as_ref().map(|(_, epoch)| *epoch).unwrap_or(0);
+         let mut indicator_element = indicator.map(|(el, _)| el);
+         let indicator_ready = indicator_element.is_some();
+@@ -466,6 +497,7 @@
+         for (ix, child) in self.children.into_iter().enumerate() {
+             item_metas.push((child.label.clone(), child.icon.clone(), child.disabled));
+             let tab_bar_prefix = child.tab_bar_prefix.unwrap_or(true);
++            let child = if mac.is_some() { child.flex_1() } else { child };
+             let mut tab = child
+                 .ix(ix)
+                 .tab_bar_prefix(tab_bar_prefix)
+@@ -540,7 +572,8 @@
+             .bg(bg)
+             .text_color(cx.theme().tab_foreground)
+             .when(
+-                self.variant == TabVariant::Underline || self.variant == TabVariant::Tab,
++                (self.variant == TabVariant::Underline && mac_segments.is_none())
++                    || (self.variant == TabVariant::Tab && mac.is_none()),
+                 |this| {
+                     this.child(
+                         div()
+@@ -555,6 +588,8 @@
+                 },
+             )
+             .rounded(self.variant.tab_bar_radius(self.size, cx))
++            .when(mac.is_some(), |this| this.rounded(px(14.)).m(px(4.)))
++            .when(mac_segments.is_some(), |this| this.rounded(px(6.)))
+             .paddings(paddings)
+             .refine_style(&self.style)
+             .when_some(self.prefix, |this, prefix| this.child(prefix))
 diff -ruN a/src/table/data_table.rs b/src/table/data_table.rs
---- a/src/table/data_table.rs	2026-11-13 05:10:45.000647832 +0100
-+++ b/src/table/data_table.rs	2026-11-13 05:10:45.010580187 +0100
+--- a/src/table/data_table.rs	2026-11-13 07:54:07.083909450 +0100
++++ b/src/table/data_table.rs	2026-11-13 07:54:07.167545340 +0100
 @@ -1,5 +1,10 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): optional lines
 +// between columns; shift and an arrow extends a range of cells; no focus
@@ -2189,8 +2374,8 @@ diff -ruN a/src/table/data_table.rs b/src/table/data_table.rs
      }
  }
 diff -ruN a/src/table/delegate.rs b/src/table/delegate.rs
---- a/src/table/delegate.rs	2026-11-13 05:10:45.000672939 +0100
-+++ b/src/table/delegate.rs	2026-11-13 05:10:45.010682161 +0100
+--- a/src/table/delegate.rs	2026-11-13 07:54:07.084403021 +0100
++++ b/src/table/delegate.rs	2026-11-13 07:54:07.164163883 +0100
 @@ -1,7 +1,10 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a cell can have a
 +// context menu and a background of its own. Changes are marked "WDS patch".
@@ -2230,8 +2415,8 @@ diff -ruN a/src/table/delegate.rs b/src/table/delegate.rs
      fn render_td(
          &mut self,
 diff -ruN a/src/table/state.rs b/src/table/state.rs
---- a/src/table/state.rs	2026-11-13 05:10:45.000780614 +0100
-+++ b/src/table/state.rs	2026-11-13 05:10:45.010751583 +0100
+--- a/src/table/state.rs	2026-11-13 07:54:07.086958748 +0100
++++ b/src/table/state.rs	2026-11-13 07:54:07.167309762 +0100
 @@ -1,3 +1,11 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): in cell selection,
 +// the row header shows row numbers, and the selected cell's row number and
@@ -2763,8 +2948,8 @@ diff -ruN a/src/table/state.rs b/src/table/state.rs
                  }
              })
 diff -ruN a/src/title_bar.rs b/src/title_bar.rs
---- a/src/title_bar.rs	2026-11-13 05:10:45.001669323 +0100
-+++ b/src/title_bar.rs	2026-11-13 05:10:45.012049319 +0100
+--- a/src/title_bar.rs	2026-11-13 07:54:07.087565691 +0100
++++ b/src/title_bar.rs	2026-11-13 07:54:07.157053187 +0100
 @@ -1,3 +1,7 @@
 +// Modified for PowerCommander (Apache-2.0, section 4b): the window's buttons
 +// are those the desktop's layout names, and may be the icon theme's pictures
@@ -2895,7 +3080,7 @@ diff -ruN a/src/title_bar.rs b/src/title_bar.rs
              .id("window-controls")
 diff -ruN a/src/toolkit.rs b/src/toolkit.rs
 --- a/src/toolkit.rs	1970-01-01 01:00:00.000000000 +0100
-+++ b/src/toolkit.rs	2026-11-13 05:10:45.012337517 +0100
++++ b/src/toolkit.rs	2026-11-13 07:54:07.132164316 +0100
 @@ -0,0 +1,106 @@
 +// PowerCommander patch: this file is new.
 +use std::sync::Arc;
@@ -3003,9 +3188,32 @@ diff -ruN a/src/toolkit.rs b/src/toolkit.rs
 +    );
 +    div().size_full().child(canvas.absolute().inset_0())
 +}
+diff -ruN a/src/tooltip.rs b/src/tooltip.rs
+--- a/src/tooltip.rs	2026-11-12 22:39:55.000000000 +0100
++++ b/src/tooltip.rs	2026-11-13 07:54:07.117889509 +0100
+@@ -124,6 +124,19 @@
+                 .px_2()
+                 .text_sm()
+                 .gap_3()
++                // PowerCommander patch: AppKit's tooltip, see `MacControls`: 11 px text
++                // in a small grey box, its corners barely round.
++                .when_some(cx.try_global::<crate::MacControls>().copied(), |this, mac| {
++                    this.bg(mac.tooltip)
++                        .text_color(mac.text)
++                        .border(px(0.5))
++                        .border_color(mac.tooltip_frame)
++                        .rounded(px(3.))
++                        .shadow_sm()
++                        .text_xs()
++                        .px(px(6.))
++                        .py(px(2.5))
++                })
+                 .refine_style(&self.style)
+                 .map(|this| {
+                     this.child(div().map(|this| match self.content {
 diff -ruN a/src/tree.rs b/src/tree.rs
---- a/src/tree.rs	2026-11-13 05:10:45.001866748 +0100
-+++ b/src/tree.rs	2026-11-13 05:10:45.011906768 +0100
+--- a/src/tree.rs	2026-11-13 07:54:07.087989722 +0100
++++ b/src/tree.rs	2026-11-13 07:54:07.151810320 +0100
 @@ -1,3 +1,8 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a context menu
 +// builder gets the menu's context, so it can add submenus; the row renderer
@@ -3080,8 +3288,8 @@ diff -ruN a/src/tree.rs b/src/tree.rs
                              .into_any_element()
                      })
 diff -ruN a/src/window_border.rs b/src/window_border.rs
---- a/src/window_border.rs	2026-11-13 05:10:45.001917996 +0100
-+++ b/src/window_border.rs	2026-11-13 05:10:45.011957665 +0100
+--- a/src/window_border.rs	2026-11-13 07:54:07.088694746 +0100
++++ b/src/window_border.rs	2026-11-13 07:54:07.195204683 +0100
 @@ -21,6 +21,24 @@
  /// corners, so keep the generic window wrapper square until rounded content masks exist.
  pub(crate) const BORDER_RADIUS: Pixels = px(0.0);
@@ -3146,8 +3354,8 @@ diff -ruN a/src/window_border.rs b/src/window_border.rs
                      .when(!tiling.top, |div| div.border_t(BORDER_SIZE))
                      .when(!tiling.bottom, |div| div.border_b(BORDER_SIZE))
 diff -ruN a/src/window_ext.rs b/src/window_ext.rs
---- a/src/window_ext.rs	2026-11-13 05:10:45.001946470 +0100
-+++ b/src/window_ext.rs	2026-11-13 05:10:45.011987772 +0100
+--- a/src/window_ext.rs	2026-11-13 07:54:07.089192442 +0100
++++ b/src/window_ext.rs	2026-11-13 07:54:07.196164534 +0100
 @@ -11,6 +11,10 @@
  
  /// Extension trait for [`Window`] to add dialog, sheet .. functionality.

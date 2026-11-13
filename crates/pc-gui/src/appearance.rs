@@ -160,6 +160,8 @@ fn mac_controls(palette: &Palette) -> MacControls {
         tab_track: ink(if dark { 0.06 } else { 0.1 }),
         tab: if dark { ink(0.19) } else { Hsla::from(rgb(0xf8f8f8)) },
         tab_rim: hsla(0., 0., 1., if dark { 0.2 } else { 1. }),
+        tooltip: Hsla::from(rgb(if dark { 0x282828 } else { 0xe9e9e9 })),
+        tooltip_frame: hsla(0., 0., 0., if dark { 0.75 } else { 0.2 }),
     }
 }
 

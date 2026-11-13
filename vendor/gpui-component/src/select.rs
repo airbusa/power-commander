@@ -393,6 +393,25 @@ where
     fn toggle_menu(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
 
+        // PowerCommander patch: on macOS, AppKit's own pop-up menu, see `MacControls`.
+        #[cfg(target_os = "macos")]
+        if cx.has_global::<crate::MacControls>() && !self.searchable && !self.state.open {
+            let delegate = &self.state.list.read(cx).delegate().delegate;
+            let labels = (0..delegate.items_count(0))
+                .filter_map(|row| delegate.item(IndexPath::new(row)).map(|item| item.title()))
+                .collect();
+            let selected = self.selected_index(cx).map(|ix| ix.row);
+            let this = cx.entity().downgrade();
+            crate::native_menu::pop_up_list(labels, selected, self.state.bounds, window, cx, move |row, window, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.set_selected_index(Some(IndexPath::new(row)), window, cx);
+                    cx.emit(SelectEvent::Confirm(this.selected_value().cloned()));
+                    cx.notify();
+                });
+            });
+            return;
+        }
+
         self.set_open(!self.state.open, cx);
 
         if self.state.open {

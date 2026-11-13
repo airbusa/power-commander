@@ -124,6 +124,19 @@ impl Render for Tooltip {
                 .px_2()
                 .text_sm()
                 .gap_3()
+                // PowerCommander patch: AppKit's tooltip, see `MacControls`: 11 px text
+                // in a small grey box, its corners barely round.
+                .when_some(cx.try_global::<crate::MacControls>().copied(), |this, mac| {
+                    this.bg(mac.tooltip)
+                        .text_color(mac.text)
+                        .border(px(0.5))
+                        .border_color(mac.tooltip_frame)
+                        .rounded(px(3.))
+                        .shadow_sm()
+                        .text_xs()
+                        .px(px(6.))
+                        .py(px(2.5))
+                })
                 .refine_style(&self.style)
                 .map(|this| {
                     this.child(div().map(|this| match self.content {
