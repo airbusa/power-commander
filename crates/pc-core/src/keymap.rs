@@ -125,8 +125,8 @@ const POWER_COMMANDER: Table = &[
     (Full, "alt-shift-d", windows("ctrl-f2")),
     (ThumbnailView, "ctrl-shift-f1", ""),
     (QuickViewPanel, "alt-shift-q", ""),
-    // Zed's and VS Code's; Ctrl+Shift+O where ` takes AltGr.
-    (TerminalPanel, "ctrl-`", "ctrl-shift-o"),
+    // Drop-down terminals' F12 (Yakuake, Guake); Ctrl+Shift+T where a terminal keeps its own keys.
+    (TerminalPanel, "f12", "secondary-shift-t"),
     (DuplicateTab, "secondary-t", ""),
     (AllFiles, "ctrl-shift-f10", ""),
     (Programs, "ctrl-shift-f11", ""),
@@ -203,7 +203,7 @@ const TOTAL_COMMANDER: Table = &[
     (SidebarTree, "ctrl-shift-f8", ""),
     (ThumbnailView, "ctrl-shift-f1", ""),
     (QuickViewPanel, "ctrl-q", ""),
-    (TerminalPanel, "ctrl-`", "ctrl-shift-o"),
+    (TerminalPanel, "f12", "secondary-shift-t"),
     (DuplicateTab, "ctrl-t", ""),
     (AllFiles, "ctrl-f10", ""),
     (Programs, "ctrl-f11", ""),
@@ -359,7 +359,7 @@ const FORKLIFT: Table = &[
     (Brief, "secondary-2", ""),
     (ThumbnailView, "secondary-3", ""),
     (QuickViewPanel, "secondary-shift-p", ""),
-    (TerminalPanel, "ctrl-`", ""),
+    (TerminalPanel, "secondary-shift-t", ""),
     (TargetEqualsSource, "secondary-shift-c", ""),
     (OperationQueue, "secondary-shift-u", ""),
     (DuplicateTab, "secondary-t", ""),
