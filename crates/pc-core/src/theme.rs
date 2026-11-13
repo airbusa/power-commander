@@ -275,17 +275,18 @@ pub(crate) fn on_desktop(name: &str) -> bool {
     std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().split(':').any(|desktop| desktop == name)
 }
 
-/// How much of the window colour the sidebar paints over the system's own
-/// material behind it, macOS's blur, Windows' acrylic, a Wayland
-/// compositor's blur, from its opacity in percent. None: solid, at 100% and
-/// where nothing blurs what is behind.
-pub fn sidebar_tint(opacity: u8) -> Option<f32> {
-    (sidebar_see_through() && opacity < 100).then_some(f32::from(opacity) / 100.)
+/// How much of its colour the sidebar or the terminal paints over the
+/// system's own material behind it, macOS's blur, Windows' acrylic, a
+/// Wayland compositor's blur, from its opacity in percent. None: solid, at
+/// 100% and where nothing blurs what is behind.
+pub fn backdrop_tint(opacity: u8) -> Option<f32> {
+    (see_through() && opacity < 100).then_some(f32::from(opacity) / 100.)
 }
 
-/// Whether the desktop can show through the sidebar, blurred: macOS, Windows,
-/// and Wayland compositors that blur on request (KWin, GNOME 51 and later…).
-pub fn sidebar_see_through() -> bool {
+/// Whether the desktop can show through the sidebar and the terminal,
+/// blurred: macOS, Windows, and Wayland compositors that blur on request
+/// (KWin, GNOME 51 and later…).
+pub fn see_through() -> bool {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     return crate::desktop::compositor_blurs();
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]

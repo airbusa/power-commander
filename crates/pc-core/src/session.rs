@@ -23,6 +23,8 @@ pub struct Session {
     pub vertical: bool,
     /// The terminal's height in pixels; 0 before it was dragged.
     pub terminal_height: f32,
+    /// The terminal was shown: it opens again, as Krusader's.
+    pub terminal: bool,
 }
 
 #[derive(Default, Serialize, Deserialize)]

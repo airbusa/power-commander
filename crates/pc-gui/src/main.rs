@@ -449,6 +449,8 @@ struct Commander {
     terminal_height: f32,
     /// The folder the shell was last sent to; none on a server.
     terminal_dir: Option<PathBuf>,
+    /// How much it covers the desktop behind it (none: solid), and whether that is blurred.
+    terminal_look: (Option<f32>, bool),
     /// Quick View's viewer has the keys: no panel shows a cursor.
     quick_keys: bool,
     /// macOS: the cursor turns grey while another window is in front, as Finder's.
@@ -499,6 +501,7 @@ impl Commander {
         let opacity = settings.sidebar_opacity.0;
         let blur = settings.sidebar_blur.0;
         let sidebar = sidebar::Sidebar::new(session.sidebar, session.sidebar_width, settings.show_hidden, opacity, blur);
+        let terminal_look = (pc_core::theme::backdrop_tint(settings.terminal_opacity.0), settings.terminal_blur.0);
         menus::set_last_filter(&settings.last_filter);
         menus::set(settings.appearance, &|command| sidebar.shows(command), cx);
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
@@ -555,7 +558,15 @@ impl Commander {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         // The window's root, which paints its background, comes after this.
-        cx.defer_in(window, |this, window, cx| this.set_backdrop(window, cx));
+        let terminal = session.terminal;
+        cx.defer_in(window, move |this, window, cx| {
+            this.set_backdrop(window, cx);
+            // Open again, the panels keeping the keys.
+            if terminal {
+                this.toggle_terminal(window, cx);
+                window.focus(&this.focus, cx);
+            }
+        });
         Self {
             panels: [side(0), side(1)],
             active: session.active.min(1),
@@ -596,6 +607,7 @@ impl Commander {
             terminal: None,
             terminal_shown: false,
             terminal_dir: None,
+            terminal_look,
             terminal_height: match session.terminal_height {
                 0. => 260.,
                 height => height,
@@ -604,8 +616,9 @@ impl Commander {
     }
 
     fn apply_settings(&mut self, settings: Settings, window: &mut Window, cx: &mut Context<Self>) {
-        if (settings.sidebar_opacity, settings.sidebar_blur) != (self.settings.sidebar_opacity, self.settings.sidebar_blur) {
-            self.show_sidebar_backdrop(settings.sidebar_opacity.0, settings.sidebar_blur.0, window, cx);
+        let look = |settings: &Settings| (settings.sidebar_opacity, settings.sidebar_blur, settings.terminal_opacity, settings.terminal_blur);
+        if look(&settings) != look(&self.settings) {
+            self.show_backdrop(&settings, window, cx);
         }
         if settings.filter() != self.settings.filter() {
             for side in &mut self.panels {
@@ -1397,6 +1410,7 @@ impl Commander {
                         let ended = cx.subscribe_in(&view, window, |this, _, _: &terminal::Exited, window, cx| {
                             this.terminal = None;
                             this.terminal_shown = false;
+                            this.set_backdrop(window, cx);
                             window.focus(&this.focus, cx);
                             cx.notify();
                         });
@@ -1408,6 +1422,7 @@ impl Commander {
                 }
             }
         }
+        self.set_backdrop(window, cx);
         cx.notify();
     }
 
@@ -1449,7 +1464,6 @@ impl Commander {
             .relative()
             .flex_none()
             .h(px(self.terminal_height))
-            .mx_1()
             .border_1()
             .border_color(cx.theme().border)
             .on_drag_move(cx.listener(|this, event: &DragMoveEvent<TerminalDrag>, window, cx| {
@@ -1470,7 +1484,9 @@ impl Commander {
             }))
             .child(view.clone())
             .child(edge);
-        Some(pane)
+        // Its own background: the desktop may show through it.
+        let tint = self.terminal_look.0.unwrap_or(1.);
+        Some(v_flex().flex_none().px_1().bg(cx.theme().background.opacity(tint)).child(pane))
     }
 
     fn session(&self) -> Session {
@@ -1483,6 +1499,7 @@ impl Commander {
             sidebar_width: self.sidebar.width,
             vertical: self.vertical,
             terminal_height: self.terminal_height,
+            terminal: self.terminal_shown,
         }
     }
 
@@ -2519,16 +2536,21 @@ impl Render for Commander {
         let panels = self.file_menu_actions(panels, cx);
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         let panels = self.desktop_menu_actions(panels, cx);
+        // The terminal paints its own background, which the desktop may show through.
+        let background = cx.theme().background;
         let main = v_flex()
             .flex_1()
             .min_w_0()
             .h_full()
-            .bg(cx.theme().background)
-            .child(panels)
+            .child(v_flex().flex_1().min_h_0().bg(background).child(panels))
             .children(self.render_terminal(cx))
-            .children(self.render_transfers(cx))
-            .child(self.render_command_line(cx))
-            .child(self.render_button_bar(cx));
+            .child(
+                v_flex()
+                    .bg(background)
+                    .children(self.render_transfers(cx))
+                    .child(self.render_command_line(cx))
+                    .child(self.render_button_bar(cx)),
+            );
         // macOS shows the menus on the system's menu bar.
         let menu_bar = !cfg!(target_os = "macos") && !self.menus_behind_button(window);
         // The sidebar may let the desktop through: everything else paints its own background.

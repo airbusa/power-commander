@@ -653,7 +653,6 @@ impl Render for TerminalView {
             .track_focus(&self.focus)
             .size_full()
             .px_1()
-            .bg(cx.theme().background)
             .cursor(CursorStyle::IBeam)
             .on_key_down(cx.listener(Self::key_down))
             .on_action(cx.listener(|this, _: &SendTab, _, _| this.input(b"\t".to_vec())))

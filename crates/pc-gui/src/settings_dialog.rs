@@ -15,7 +15,7 @@ use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectStat
 use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::{Icon, IndexPath};
 use pc_core::dates::{self, Clock};
-use pc_core::settings::{AddonUpdates, FontChoice, MenuStyle, PAGES, Settings, SidebarBlur, SidebarOpacity, StartFont, StartMode};
+use pc_core::settings::{AddonUpdates, FontChoice, MenuStyle, PAGES, Settings, Blur, SidebarOpacity, TerminalOpacity, StartFont, StartMode};
 use pc_core::theme::Appearance;
 
 use crate::Commander;
@@ -81,10 +81,9 @@ pub fn open(
     let limit = input(settings.editor.limit_mb.to_string(), true, cx);
     let external = input(settings.editor.external.clone(), false, cx);
     let pattern = input(settings.date.custom.clone().unwrap_or_else(|| "yyyy-MM-dd".into()), false, cx);
-    let opacity = cx.new(|_| {
-        let value = f32::from(settings.sidebar_opacity.0);
-        SliderState::new().min(0.).max(100.).step(5.).default_value(value)
-    });
+    let slider = |value: u8, cx: &mut App| cx.new(|_| SliderState::new().min(0.).max(100.).step(5.).default_value(f32::from(value)));
+    let opacity = slider(settings.sidebar_opacity.0, cx);
+    let terminal_opacity = slider(settings.terminal_opacity.0, cx);
     let mut families: Vec<SharedString> = cx
         .text_system()
         .all_font_names()
@@ -100,15 +99,20 @@ pub fn open(
     let fixed_families = FIXED_WIDTH.get().cloned().unwrap_or_else(|| families.clone());
     let fixed = Picker::new(fixed_families, &settings.fixed_font, system_fixed_font(&settings, cx), window, cx);
     let view = cx.new(|cx| {
-        // Tried on the sidebar as it moves; closed, the dialog puts back what was applied.
-        let trying = cx.subscribe_in(&opacity, window, |this: &mut SettingsDialog, _, event: &SliderEvent, window, cx| {
-            let SliderEvent::Change(value) = event else {
-                return;
-            };
-            let opacity = value.end().round().clamp(0., 100.) as u8;
-            this.draft.sidebar_opacity = SidebarOpacity(opacity);
-            this.try_backdrop(window, cx);
-        });
+        // Tried on the sidebar or the terminal as it moves; closed, the dialog puts back what was applied.
+        let tried = |slider: &Entity<SliderState>, set: fn(&mut Settings, u8), window: &mut Window, cx: &mut Context<SettingsDialog>| {
+            cx.subscribe_in(slider, window, move |this: &mut SettingsDialog, _, event: &SliderEvent, window, cx| {
+                let SliderEvent::Change(value) = event else {
+                    return;
+                };
+                set(&mut this.draft, value.end().round().clamp(0., 100.) as u8);
+                this.try_backdrop(window, cx);
+            })
+        };
+        let trying = [
+            tried(&opacity, |settings, value| settings.sidebar_opacity = SidebarOpacity(value), window, cx),
+            tried(&terminal_opacity, |settings, value| settings.terminal_opacity = TerminalOpacity(value), window, cx),
+        ];
         // Each input's text into the draft, as typed.
         let bind = |cx: &mut Context<SettingsDialog>,
                     input: &Entity<InputState>,
@@ -174,6 +178,7 @@ pub fn open(
             fixed,
             installed,
             opacity,
+            terminal_opacity,
             _opacity: trying,
             _addons: cx.observe(&crate::addons::entity(cx), |_, _, cx| cx.notify()),
             commander,
@@ -314,10 +319,11 @@ struct SettingsDialog {
     /// The fonts this computer has, for the samples.
     installed: HashSet<SharedString>,
     opacity: Entity<SliderState>,
+    terminal_opacity: Entity<SliderState>,
     _inputs: [Subscription; 5],
     _pickers: Vec<Subscription>,
     _measuring: Task<()>,
-    _opacity: Subscription,
+    _opacity: [Subscription; 2],
     _addons: Subscription,
 }
 
@@ -343,16 +349,16 @@ impl SettingsDialog {
         }
     }
 
-    /// The sidebar as last applied, whatever was tried.
+    /// The sidebar and the terminal as last applied, whatever was tried.
     fn untry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (opacity, blur) = (self.saved.sidebar_opacity.0, self.saved.sidebar_blur.0);
-        let _ = self.commander.update(cx, |commander, cx| commander.show_sidebar_backdrop(opacity, blur, window, cx));
+        let look = self.saved.clone();
+        let _ = self.commander.update(cx, |commander, cx| commander.show_backdrop(&look, window, cx));
     }
 
-    /// The draft's sidebar shown, before it is applied.
+    /// The draft's sidebar and terminal shown, before they are applied.
     fn try_backdrop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (opacity, blur) = (self.draft.sidebar_opacity.0, self.draft.sidebar_blur.0);
-        let _ = self.commander.update(cx, |commander, cx| commander.show_sidebar_backdrop(opacity, blur, window, cx));
+        let look = self.draft.clone();
+        let _ = self.commander.update(cx, |commander, cx| commander.show_backdrop(&look, window, cx));
         cx.notify();
     }
 
@@ -749,29 +755,36 @@ impl SettingsDialog {
         )
     }
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> GroupBox {
-        let opacity = self.draft.sidebar_opacity.0;
+    /// The sidebar's or the `terminal`'s opacity over the desktop, and its blur.
+    fn render_backdrop(&self, terminal: bool, cx: &mut Context<Self>) -> GroupBox {
+        let (title, slider, opacity, blur) = match terminal {
+            false => ("Sidebar", &self.opacity, self.draft.sidebar_opacity.0, self.draft.sidebar_blur.0),
+            true => ("Terminal", &self.terminal_opacity, self.draft.terminal_opacity.0, self.draft.terminal_blur.0),
+        };
         let shown = match opacity {
             100 => "100%, solid".to_owned(),
             0 => "0%, only the desktop".to_owned(),
             _ => format!("{opacity}%"),
         };
-        GroupBox::new().outline().title("Sidebar").child(
+        GroupBox::new().outline().title(title).child(
             v_flex()
                 .gap_2()
                 .child("How much it covers the desktop behind it:")
                 .child(
                     h_flex()
                         .gap_4()
-                        .child(div().flex_1().child(Slider::new(&self.opacity)))
+                        .child(div().flex_1().child(Slider::new(slider)))
                         .child(div().w(px(150.)).child(shown)),
                 )
                 .child(
-                    Checkbox::new("sidebar-blur")
+                    Checkbox::new(if terminal { "terminal-blur" } else { "sidebar-blur" })
                         .label("Blur the desktop behind it")
-                        .checked(self.draft.sidebar_blur.0)
-                        .on_click(cx.listener(|this, checked: &bool, window, cx| {
-                            this.draft.sidebar_blur = SidebarBlur(*checked);
+                        .checked(blur)
+                        .on_click(cx.listener(move |this, checked: &bool, window, cx| {
+                            match terminal {
+                                true => this.draft.terminal_blur = Blur(*checked),
+                                false => this.draft.sidebar_blur = Blur(*checked),
+                            }
                             this.try_backdrop(window, cx);
                         })),
                 ),
@@ -940,8 +953,9 @@ impl SettingsDialog {
                     groups.push(self.render_menus(cx));
                 }
                 // Where the desktop can show through it.
-                if pc_core::theme::sidebar_see_through() {
-                    groups.push(self.render_sidebar(cx));
+                if pc_core::theme::see_through() {
+                    groups.push(self.render_backdrop(false, cx));
+                    groups.push(self.render_backdrop(true, cx));
                 }
                 groups.push(self.render_tabs(cx));
                 groups

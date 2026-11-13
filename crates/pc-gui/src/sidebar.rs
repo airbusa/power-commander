@@ -90,7 +90,7 @@ impl Sidebar {
             closing: None,
             switches: 0,
             leaving: None,
-            tint: theme::sidebar_tint(opacity),
+            tint: theme::backdrop_tint(opacity),
             blur,
             tree: FolderTree::new(hidden),
             tree_scroll: UniformListScrollHandle::new(),
@@ -180,23 +180,28 @@ impl Commander {
         cx.notify();
     }
 
-    /// The sidebar `opacity` percent over the desktop, `blur`red or not: in the settings, or tried in their dialog.
-    pub(crate) fn show_sidebar_backdrop(&mut self, opacity: u8, blur: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.sidebar.tint = theme::sidebar_tint(opacity);
-        self.sidebar.blur = blur;
+    /// The sidebar's and the terminal's opacity over the desktop, blurred or
+    /// not: in the settings, or tried in their dialog.
+    pub(crate) fn show_backdrop(&mut self, look: &pc_core::settings::Settings, window: &mut Window, cx: &mut Context<Self>) {
+        self.sidebar.tint = theme::backdrop_tint(look.sidebar_opacity.0);
+        self.sidebar.blur = look.sidebar_blur.0;
+        self.terminal_look = (theme::backdrop_tint(look.terminal_opacity.0), look.terminal_blur.0);
         self.set_backdrop(window, cx);
         cx.notify();
     }
 
-    /// The desktop shows through, blurred if wished, only while the sidebar is there:
-    /// a see-through window loses subpixel text.
+    /// The desktop shows through, blurred if wished, only while the sidebar
+    /// or the terminal is there: a see-through window loses subpixel text.
     pub(crate) fn set_backdrop(&self, window: &mut Window, cx: &mut App) {
         // Sliding out too.
-        let shown = self.sidebar.tab.or(self.sidebar.closing).is_some();
-        let see_through = shown && self.sidebar.tint.is_some();
+        let sidebar = self.sidebar.tab.or(self.sidebar.closing).is_some() && self.sidebar.tint.is_some();
+        let terminal = self.terminal_shown && self.terminal_look.0.is_some();
+        // shortcut: the window has one backdrop: blurred when either part shown asks for it.
+        let blur = sidebar && self.sidebar.blur || terminal && self.terminal_look.1;
+        let see_through = sidebar || terminal;
         window.set_background_appearance(match see_through {
             false => WindowBackgroundAppearance::Opaque,
-            true if !self.sidebar.blur => WindowBackgroundAppearance::Transparent,
+            true if !blur => WindowBackgroundAppearance::Transparent,
             true => WindowBackgroundAppearance::Blurred,
         });
         window.set_see_through(see_through, cx);

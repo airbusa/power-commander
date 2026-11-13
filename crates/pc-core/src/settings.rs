@@ -20,14 +20,25 @@ impl Default for SidebarOpacity {
     }
 }
 
-/// Whether the desktop shows through the sidebar blurred (else sharp), as Konsole's "Blur background".
+/// The terminal's, as the sidebar's: solid until chosen.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct SidebarBlur(pub bool);
+pub struct TerminalOpacity(pub u8);
 
-impl Default for SidebarBlur {
+impl Default for TerminalOpacity {
     fn default() -> Self {
-        SidebarBlur(true)
+        TerminalOpacity(100)
+    }
+}
+
+/// Whether the desktop shows through blurred (else sharp), as Konsole's "Blur background".
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Blur(pub bool);
+
+impl Default for Blur {
+    fn default() -> Self {
+        Blur(true)
     }
 }
 
@@ -51,7 +62,9 @@ pub struct Settings {
     pub show_hidden: bool,
     pub show_system: bool,
     pub sidebar_opacity: SidebarOpacity,
-    pub sidebar_blur: SidebarBlur,
+    pub sidebar_blur: Blur,
+    pub terminal_opacity: TerminalOpacity,
+    pub terminal_blur: Blur,
     pub viewer: ViewerSettings,
     pub editor: EditorSettings,
     /// Files' own programs for Enter, F3 and F4.
