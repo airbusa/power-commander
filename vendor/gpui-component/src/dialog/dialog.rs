@@ -712,13 +712,16 @@ impl RenderOnce for Dialog {
         };
         let laid_out = moving.clone();
         let has_title = self.title.is_some();
+        let has_footer = self.footer.is_some();
         // PowerCommander patch: AppKit's window, see `MacControls`: 16 px corners,
         // a 32 px title bar of the dialog's colour, the close button on the left.
         let mac = cx
             .try_global::<crate::MacControls>()
             .copied()
             .filter(|_| !cx.has_global::<crate::NativeControls>());
-        let band = px(if mac.is_some() { 32. } else { TITLE_BAND_HEIGHT });
+        // PowerCommander patch: WinUI's ContentDialog, see `NativeControls::command_bar`.
+        let command_bar = cx.try_global::<crate::NativeControls>().and_then(|native| native.command_bar);
+        let band = px(if mac.is_some() { 32. } else if command_bar.is_some() { 52. } else { TITLE_BAND_HEIGHT });
         let corner = mac.map_or(cx.theme().radius_lg, |_| px(16.));
         let active = window.is_window_active();
 
@@ -842,6 +845,7 @@ impl RenderOnce for Dialog {
                                                     .pr(paddings.right + px(28.))
                                                     .map(|this| match mac {
                                                         Some(_) => this.pl(px(36.)).pr(paddings.right),
+                                                        None if command_bar.is_some() => this.pt(px(8.)),
                                                         None => this.bg(theme.muted).border_b_1().border_color(theme.border),
                                                     })
                                                     .rounded_t(corner - px(1.))
@@ -852,6 +856,7 @@ impl RenderOnce for Dialog {
                                                             .when(mac.is_some(), |this| {
                                                                 this.font_semibold().text_color(theme.muted_foreground)
                                                             })
+                                                            .when(command_bar.is_some(), |this| this.text_xl().font_semibold())
                                                             .flex_1()
                                                             .min_w_0()
                                                             .truncate()
@@ -914,9 +919,17 @@ impl RenderOnce for Dialog {
                                                 div()
                                                     .pl(paddings.left)
                                                     .pr(paddings.right)
+                                                    .when_some(command_bar, |this, fill| {
+                                                        this.py(paddings.bottom)
+                                                            .bg(fill)
+                                                            .border_t_1()
+                                                            .border_color(cx.theme().border)
+                                                            .rounded_b(corner - px(1.))
+                                                    })
                                                     .child(footer),
                                             )
                                         })
+                                        .when(command_bar.is_some() && has_footer, |this| this.pb_0())
                                         .children(self.props.close_button.then(|| {
                                             // WDS patch: in the middle of the title's band.
                                             let top = if has_title {

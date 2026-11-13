@@ -107,7 +107,7 @@ pub fn apply(palette: &Palette, cx: &mut App) -> PanelColors {
     });
     // The desktop style's controls (KDE's Breeze, Windows 11's), in its colours.
     if let Some(style) = pc_core::theme::control_style() {
-        cx.set_global(native_controls(style, &palette.controls(style)));
+        cx.set_global(native_controls(style, &palette.controls(style), palette.dark));
         // Windows' and GNOME's corners, and their fields' frame, a button's
         // (GNOME's unframed: its fill).
         let radius = match style {
@@ -191,7 +191,7 @@ fn mac_controls(palette: &Palette) -> MacControls {
 }
 
 /// The controls in `colors`, at the style's sizes.
-fn native_controls(style: ControlStyle, colors: &ControlColors) -> NativeControls {
+fn native_controls(style: ControlStyle, colors: &ControlColors, dark: bool) -> NativeControls {
     let color = |value: u32| Hsla::from(rgb(value));
     let pair = |[fill, frame]: [u32; 2]| (color(fill), color(frame));
     // The sizes: a check box, its corners and frame, a radio's dot; a slider's
@@ -231,6 +231,12 @@ fn native_controls(style: ControlStyle, colors: &ControlColors) -> NativeControl
         field_fill: colors.field_fill.map(color),
         combo_button: style != ControlStyle::Breeze,
         bold: style == ControlStyle::Adwaita,
+        // WinUI's CardBackgroundFillColorDefault and CardStrokeColorDefault.
+        card: (style == ControlStyle::Fluent).then(|| match dark {
+            true => (hsla(0., 0., 1., 0.05), hsla(0., 0., 0., 0.1)),
+            false => (hsla(0., 0., 1., 0.7), hsla(0., 0., 0., 0.06)),
+        }),
+        command_bar: (style == ControlStyle::Fluent).then(|| hsla(0., 0., 0., if dark { 0.15 } else { 0.03 })),
     }
 }
 

@@ -146,9 +146,12 @@ impl RenderOnce for GroupBox {
             .try_global::<crate::MacControls>()
             .copied()
             .filter(|_| !cx.has_global::<crate::NativeControls>());
+        // PowerCommander patch: Windows' card, see `NativeControls::card`.
+        let card = cx.try_global::<crate::NativeControls>().and_then(|native| native.card);
         let (bg, border, has_paddings): (Option<Background>, _, _) = match self.variant {
             GroupBoxVariant::Normal => (None, None, false),
             _ if mac.is_some() => (mac.map(|mac| mac.group.into()), None, true),
+            _ if card.is_some() => (card.map(|card| card.0.into()), card.map(|card| card.1), true),
             GroupBoxVariant::Fill => (Some(cx.theme().tokens.group_box.into()), None, true),
             GroupBoxVariant::Outline => (None, Some(cx.theme().border), true),
         };
@@ -166,6 +169,7 @@ impl RenderOnce for GroupBox {
                         .text_color(cx.theme().muted_foreground)
                         .line_height(relative(1.25))
                         .when_some(mac, |this, mac| this.text_xs().text_color(mac.text).pl(px(10.)))
+                        .when(card.is_some(), |this| this.font_semibold().text_color(cx.theme().foreground))
                         .refine_style(&self.title_style)
                         .child(title),
                 )
@@ -184,6 +188,7 @@ impl RenderOnce for GroupBox {
                             .gap_4()
                             .rounded(cx.theme().radius)
                             .when(mac.is_some(), |this| this.rounded(px(12.)))
+                            .when(card.is_some(), |this| this.rounded(px(8.)))
                             .refine_style(&self.content_style)
                             .children(self.children),
                     )

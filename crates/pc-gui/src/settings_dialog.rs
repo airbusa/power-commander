@@ -184,13 +184,14 @@ pub fn open(
     if PAGES[page] == "Add-ons" {
         crate::addons::shown(cx);
     }
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_dialog(cx, move |dialog, _, cx| {
         let closing = view.clone();
         dialog
             .title("Settings")
             .width(px(WIDTH))
             .overlay_closable(false)
             .child(view.clone())
+            .footer(buttons(&view, cx))
             .on_close(move |_, window, cx| closing.update(cx, |this, cx| this.untry(window, cx)))
     });
 }
@@ -975,53 +976,50 @@ impl SettingsDialog {
 
 impl Render for SettingsDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let changed = self.draft != self.saved;
-        v_flex()
+        h_flex()
             .w_full()
             .h(px(BODY_HEIGHT))
+            .items_start()
             .gap_3()
             .text_sm()
-            .child(
-                h_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .items_start()
-                    .gap_3()
-                    .child(self.render_rail(cx))
-                    .child(self.render_page(cx)),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .justify_end()
-                    .child(
-                        Button::new("settings-ok")
-                            .primary()
-                            .label("OK")
-                            .min_w(px(80.))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.apply(window, cx);
-                                window.close_dialog(cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("settings-cancel")
-                            .outline()
-                            .label("Cancel")
-                            .min_w(px(80.))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.untry(window, cx);
-                                window.close_dialog(cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("settings-apply")
-                            .outline()
-                            .label("Apply")
-                            .min_w(px(80.))
-                            .disabled(!changed)
-                            .on_click(cx.listener(|this, _, window, cx| this.apply(window, cx))),
-                    ),
-            )
+            .child(self.render_rail(cx))
+            .child(self.render_page(cx))
     }
+}
+
+/// OK, Cancel and Apply, in the dialog's footer.
+fn buttons(view: &Entity<SettingsDialog>, cx: &App) -> impl IntoElement {
+    let changed = view.read(cx).draft != view.read(cx).saved;
+    let (ok, cancel, apply) = (view.clone(), view.clone(), view.clone());
+    h_flex()
+        .gap_2()
+        .justify_end()
+        .child(
+            Button::new("settings-ok")
+                .primary()
+                .label("OK")
+                .min_w(px(80.))
+                .on_click(move |_, window, cx| {
+                    ok.update(cx, |this, cx| this.apply(window, cx));
+                    window.close_dialog(cx);
+                }),
+        )
+        .child(
+            Button::new("settings-cancel")
+                .outline()
+                .label("Cancel")
+                .min_w(px(80.))
+                .on_click(move |_, window, cx| {
+                    cancel.update(cx, |this, cx| this.untry(window, cx));
+                    window.close_dialog(cx);
+                }),
+        )
+        .child(
+            Button::new("settings-apply")
+                .outline()
+                .label("Apply")
+                .min_w(px(80.))
+                .disabled(!changed)
+                .on_click(move |_, window, cx| apply.update(cx, |this, cx| this.apply(window, cx))),
+        )
 }

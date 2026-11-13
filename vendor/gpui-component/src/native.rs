@@ -48,6 +48,10 @@ pub struct NativeControls {
     /// and the check mark bold (GNOME's).
     pub combo_button: bool,
     pub bold: bool,
+    /// Windows': a group box as a card, its fill and rim, its title bold.
+    pub card: Option<(Hsla, Hsla)>,
+    /// Windows': a dialog's buttons in a band of this fill, its title unbanded and large.
+    pub command_bar: Option<Hsla>,
 }
 
 impl NativeControls {
