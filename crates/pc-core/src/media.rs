@@ -12,11 +12,17 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// Video, and sound alone.
-pub const EXTENSIONS: &[&str] = &[
+const VIDEO: &[&str] = &[
     "3gp", "avi", "flv", "m2ts", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "mts", "ogv", "ts",
-    "vob", "webm", "wmv", "aac", "aiff", "ape", "flac", "m4a", "mka", "mp3", "oga", "ogg",
-    "opus", "wav", "wma",
+    "vob", "webm", "wmv",
 ];
+const SOUND: &[&str] = &["aac", "aiff", "ape", "flac", "m4a", "mka", "mp3", "oga", "ogg", "opus", "wav", "wma"];
+
+/// Video, which has a frame to show (Thumbnails).
+pub fn is_video(path: &Path) -> bool {
+    let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+    extension.is_some_and(|extension| VIDEO.contains(&extension.as_str())) && is_media(path)
+}
 
 /// Pictures FFmpeg reads and the image crate does not: iPhones' HEIC, and AVIF.
 pub const STILLS: &[&str] = &["heic", "heif", "hif", "avif"];
@@ -26,9 +32,10 @@ pub fn is_still(path: &Path) -> bool {
     extension.is_some_and(|extension| STILLS.contains(&extension.as_str()))
 }
 
-/// Such a picture, drawn by libmpv at its own size, or smaller to fit a
-/// square `within` pixels a side; turned as the file says (`heif`), which
-/// mpv does not do for tiled pictures, so it turns none. Blocks.
+/// Such a picture, or a video's frame a tenth in (Thumbnails), drawn by
+/// libmpv at its own size, or smaller to fit a square `within` pixels a side;
+/// turned as the file says: a HEIF by `heif`, which mpv leaves out for tiled
+/// pictures, so it turns those none; a video by mpv. Blocks.
 pub fn still(path: &Path, within: u32) -> Result<Frame, String> {
     // glibc served the decoder's tiles and frames, after the first big one,
     // from pools that fragmented: memory grew with each picture. Past 1 MB
@@ -48,13 +55,18 @@ pub fn still(path: &Path, within: u32) -> Result<Frame, String> {
     unsafe {
         libc::malloc_trim(0);
     }
-    let frame = drawn?;
-    let (bgra, width, height) = crate::heif::apply(&crate::heif::turns(path), frame.bgra, frame.width, frame.height);
+    let (frame, clockwise) = drawn?;
+    // The CPU's drawing leaves mpv's turn out: degrees clockwise, as quarter turns the other way.
+    let turns = match is_still(path) {
+        true => crate::heif::turns(path),
+        false => vec![crate::heif::Turn::Rotate(((360 - clockwise % 360) / 90 % 4) as u8)],
+    };
+    let (bgra, width, height) = crate::heif::apply(&turns, frame.bgra, frame.width, frame.height);
     Ok(Frame { width, height, bgra })
 }
 
-/// `still`'s picture as mpv draws it.
-fn draw_still(path: &Path, within: u32) -> Result<Frame, String> {
+/// `still`'s picture as mpv draws it, and the turn mpv has for it, in degrees clockwise.
+fn draw_still(path: &Path, within: u32) -> Result<(Frame, u32), String> {
     let (changed, wait) = mpsc::channel();
     let player = Player::start(path, true, true, move || {
         let _ = changed.send(());
@@ -98,14 +110,14 @@ fn draw_still(path: &Path, within: u32) -> Result<Frame, String> {
     let mut frame = last.expect("waited for one");
     // bgr0's fourth byte is no alpha.
     frame.bgra.chunks_exact_mut(4).for_each(|pixel| pixel[3] = 255);
-    Ok(frame)
+    Ok((frame, player.double("video-params/rotate").unwrap_or(0.) as u32))
 }
 
 pub fn is_media(path: &Path) -> bool {
     let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
     extension.is_some_and(|extension| {
         let extension = extension.as_str();
-        EXTENSIONS.contains(&extension) && (!TYPESCRIPT.contains(&extension) || transport_stream(path))
+        (VIDEO.contains(&extension) || SOUND.contains(&extension)) && (!TYPESCRIPT.contains(&extension) || transport_stream(path))
     })
 }
 
@@ -200,7 +212,9 @@ impl Player {
             ("keep-open", "yes"),
             ("hwdec", if still { "no" } else { "auto-safe" }),
             ("aid", if still { "no" } else { "auto" }),
-            ("video-rotate", if still { "no" } else { "0" }),
+            ("video-rotate", if still && is_still(path) { "no" } else { "0" }),
+            // A video's opening frames are often black.
+            ("start", if still && is_video(path) { "10%" } else { "0" }),
             // mpv's probe of NVIDIA's prints "Cannot load libcuda.so.1" where it is missing.
             ("gpu-hwdec-interop", if cfg!(target_os = "linux") && !nvidia() { "vaapi" } else { "auto" }),
             ("input-default-bindings", "no"),

@@ -125,6 +125,9 @@ fn parse_turns(meta: &[u8]) -> Option<Vec<Turn>> {
 /// `pixels` (4 bytes each, `width` by `height`) turned; the new width and height.
 pub fn apply(turns: &[Turn], mut pixels: Vec<u8>, mut width: u32, mut height: u32) -> (Vec<u8>, u32, u32) {
     for turn in turns {
+        if *turn == Turn::Rotate(0) {
+            continue;
+        }
         let (w, h) = (width as usize, height as usize);
         let mut out = vec![0u8; pixels.len()];
         // Where the pixel at (x, y) goes, in the turned picture of width `to_w`.
@@ -181,6 +184,7 @@ mod tests {
         assert_eq!(apply(&[Turn::Rotate(1)], pixels.clone(), 2, 1), ([b, a].concat(), 1, 2));
         assert_eq!(apply(&[Turn::Rotate(3)], pixels.clone(), 2, 1), ([a, b].concat(), 1, 2));
         assert_eq!(apply(&[Turn::Rotate(2)], pixels.clone(), 2, 1), ([b, a].concat(), 2, 1));
+        assert_eq!(apply(&[Turn::Rotate(0)], pixels.clone(), 2, 1), ([a, b].concat(), 2, 1), "none");
         assert_eq!(apply(&[Turn::Mirror { top_bottom: false }], pixels.clone(), 2, 1), ([b, a].concat(), 2, 1));
         assert_eq!(apply(&[Turn::Mirror { top_bottom: true }], pixels, 2, 1), ([a, b].concat(), 2, 1));
     }

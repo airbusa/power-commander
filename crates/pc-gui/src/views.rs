@@ -22,7 +22,7 @@ const THUMB_PIXELS: u32 = 192;
 const THUMBS_KEPT: usize = 3000;
 
 /// Pictures' thumbnails by path: none while being made, or where it failed;
-/// and how many HEIC or AVIF ones libmpv is drawing.
+/// and how many libmpv is drawing (HEIC, AVIF, a video's frame).
 #[derive(Default)]
 pub(crate) struct Thumbnails(HashMap<PathBuf, Option<Arc<RenderImage>>>, usize);
 
@@ -216,8 +216,8 @@ impl Commander {
         if let Some(made) = self.thumbnails.0.get(path) {
             return made.clone();
         }
-        let still = pc_core::media::is_still(path) && pc_core::media::available();
-        let readable = image::ImageFormat::from_path(path).is_ok_and(|format| format.reading_enabled());
+        let still = (pc_core::media::is_still(path) || pc_core::media::is_video(path)) && pc_core::media::available();
+        let readable = image::ImageFormat::from_path(path).is_ok_and(|format| format.reading_enabled()) || is_pdf(path);
         if !readable && !still || still && self.thumbnails.1 >= STILLS_AT_ONCE {
             return None;
         }
@@ -250,11 +250,24 @@ impl Commander {
     }
 }
 
+fn is_pdf(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("pdf")) && pc_core::pdf::available()
+}
+
 /// GPUI takes images as BGRA.
 fn make_thumbnail(path: &Path) -> Option<Arc<RenderImage>> {
-    if pc_core::media::is_still(path) {
+    if pc_core::media::is_still(path) || pc_core::media::is_video(path) {
         let frame = pc_core::media::still(path, THUMB_PIXELS).ok()?;
         let pixels = image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra)?;
+        return Some(Arc::new(RenderImage::new([image::Frame::new(pixels)])));
+    }
+    // A PDF's first page.
+    if is_pdf(path) {
+        let page = *pc_core::pdf::pages(path).ok()?.first()?;
+        let bitmap = pc_core::pdf::render(path, 0, pc_core::pdf::fit_width(page, THUMB_PIXELS, THUMB_PIXELS)).ok()?;
+        let (width, height) = (bitmap.width, bitmap.height);
+        let mut pixels = image::RgbaImage::from_raw(width, height, bitmap.into_rgba())?;
+        pixels.pixels_mut().for_each(|pixel| pixel.0.swap(0, 2));
         return Some(Arc::new(RenderImage::new([image::Frame::new(pixels)])));
     }
     let picture = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?.decode().ok()?;
