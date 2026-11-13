@@ -99,9 +99,14 @@ impl Player {
             ("terminal", "no"),
             ("pause", if paused { "yes" } else { "no" }),
         ] {
+            let optional = name == "gpu-hwdec-interop";
             let (name, value) = (text(name)?, text(value)?);
             // SAFETY: valid strings, a live handle.
-            player.check(unsafe { (mpv.set_option_string)(handle.0, name.as_ptr(), value.as_ptr()) })?;
+            let set = player.check(unsafe { (mpv.set_option_string)(handle.0, name.as_ptr(), value.as_ptr()) });
+            // Our Linux libmpv (the add-on) has no VAAPI and refuses it: it decodes on the processor.
+            if !optional {
+                set?;
+            }
         }
         // SAFETY: a live handle.
         player.check(unsafe { (mpv.initialize)(handle.0) })?;
@@ -516,7 +521,7 @@ struct Mpv {
     _library: libloading::Library,
 }
 
-/// Linux's; macOS and Windows have none, Power Commander ships its own (vendor/mpv).
+/// Linux's, after ours (an add-on, vendor/mpv); macOS and Windows have none.
 const NAMES: &[&str] = &["libmpv.so.2", "libmpv.so"];
 /// The shipped one, and what makes it.
 pub(crate) const BUNDLED: Option<(&str, &str)> = match () {
@@ -544,11 +549,13 @@ fn load() -> Result<Mpv, String> {
         // SAFETY: loading libmpv runs only its libraries' initialisers.
         unsafe { libloading::Library::new(&path) }.map_err(|err| format!("libmpv: {err}"))?
     } else {
+        let ours = crate::bundled::path("mpv", NAMES[0]);
+        let ours = ours.exists().then_some(ours.into_os_string());
         // SAFETY: as above.
-        NAMES
-            .iter()
+        ours.into_iter()
+            .chain(NAMES.iter().map(Into::into))
             .find_map(|name| unsafe { libloading::Library::new(name) }.ok())
-            .ok_or_else(|| format!("libmpv is not installed ({})", NAMES[0]))?
+            .ok_or_else(|| format!("libmpv is not installed ({}): Settings > Add-ons downloads it", NAMES[0]))?
     };
     /// A function of libmpv's, typed as the header says.
     fn get<T: Copy>(library: &libloading::Library, name: &str) -> Result<T, String> {

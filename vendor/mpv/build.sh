@@ -1,35 +1,47 @@
 #!/bin/sh
-# Builds libmpv for macOS from source into vendor/mpv/macos-<arch>, for this
-# Mac's processor: LGPL, for macOS 13 or later (as PDFium), with what the
-# viewer plays. The sources are checked against SHA256SUMS.
-# Needs Xcode's command line tools (their python3 too), ninja and pkg-config
-# (Homebrew's), and on Intel nasm.
-# Linux has libmpv from the system; Windows plays no video yet.
+# Builds libmpv from source into vendor/mpv/<os>-<arch>, for this machine's
+# processor: LGPL, with what the viewer plays. The sources are checked
+# against SHA256SUMS. Windows fetches a build instead (fetch.bat).
+# macOS: for macOS 13 or later (as PDFium); needs Xcode's command line tools
+# (their python3 too), ninja and pkg-config (Homebrew's), and on Intel nasm.
+# Linux: for the glibc it is built with, so in the oldest distribution the
+# release is for (Ubuntu 24.04); needs a C/C++ compiler, python3, ninja,
+# pkg-config, patchelf, nasm (x86_64), and the development files of what
+# every desktop has, which it uses: PulseAudio, ALSA, FreeType, HarfBuzz,
+# FriBidi, fontconfig and zlib.
 set -eu
 cd "$(dirname "$0")"
-[ "$(uname -s)" = Darwin ] || { echo "Only macOS builds bundle libmpv." >&2; exit 1; }
-case "$(uname -m)" in
-    arm64) ARCH=aarch64 TOOLS="ninja pkg-config" ;;
-    x86_64) ARCH=x86_64 TOOLS="ninja pkg-config nasm" ;;
-    *) echo "No macOS build for $(uname -m)." >&2; exit 1 ;;
+case "$(uname -s)-$(uname -m)" in
+    Darwin-arm64) OS=macos ARCH=aarch64 TOOLS="ninja pkg-config" ;;
+    Darwin-x86_64) OS=macos ARCH=x86_64 TOOLS="ninja pkg-config nasm" ;;
+    Linux-x86_64) OS=linux ARCH=x86_64 TOOLS="ninja pkg-config patchelf nasm python3" ;;
+    Linux-aarch64) OS=linux ARCH=aarch64 TOOLS="ninja pkg-config patchelf python3" ;;
+    *) echo "No libmpv build for $(uname -s) $(uname -m)." >&2; exit 1 ;;
 esac
 for tool in $TOOLS; do
-    command -v $tool >/dev/null || { echo "$tool is missing (brew install $tool)" >&2; exit 1; }
+    command -v $tool >/dev/null || { echo "$tool is missing" >&2; exit 1; }
 done
-# Apple's: one for this Mac's processor; another Intel one would build for Intel.
-PYTHON=/usr/bin/python3
 HERE=$(pwd)
-OUT=$HERE/macos-$ARCH
+OUT=$HERE/$OS-$ARCH
 WORK=$HERE/.build
 DL=$WORK/download
 SRC=$WORK/src
 BUILD=$WORK/build-$ARCH
 PREFIX=$WORK/prefix-$ARCH
-JOBS=$(sysctl -n hw.ncpu)
-export MACOSX_DEPLOYMENT_TARGET=13.0
-# Only what is built here: none of Homebrew's libraries slips in.
-export PKG_CONFIG_LIBDIR=$PREFIX/lib/pkgconfig
-export PKG_CONFIG_PATH=
+if [ $OS = macos ]; then
+    # Apple's: one for this Mac's processor; another Intel one would build for Intel.
+    PYTHON=/usr/bin/python3
+    JOBS=$(sysctl -n hw.ncpu)
+    export MACOSX_DEPLOYMENT_TARGET=13.0
+    # Only what is built here: none of Homebrew's libraries slips in.
+    export PKG_CONFIG_LIBDIR=$PREFIX/lib/pkgconfig
+    export PKG_CONFIG_PATH=
+else
+    PYTHON=python3
+    JOBS=$(nproc)
+    # Ours first, then the system's.
+    export PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig
+fi
 
 # Package as saved, URL: downloaded once, checked, unpacked into $SRC.
 get() {
@@ -72,21 +84,33 @@ build() {
 build "$SRC/dav1d-1.5.4" -Denable_tools=false -Denable_examples=false -Denable_tests=false -Denable_docs=false
 
 # FFmpeg as LGPL (no --enable-gpl): every decoder and demuxer, no encoders or devices.
+# Linux: lavfi's device (none of the system's), which the frames test plays;
+# no bzlib, whose library Debian and Fedora name differently; decoded on the
+# processor, as pc-core reads each frame back anyway.
+if [ $OS = macos ]; then
+    set -- --disable-avdevice --install-name-dir=@rpath --enable-audiotoolbox --enable-videotoolbox --enable-bzlib \
+        --extra-cflags="-mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" \
+        --extra-ldflags="-mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" --extra-libs=-liconv
+else
+    set --
+fi
 mkdir "$BUILD/ffmpeg"
 (cd "$BUILD/ffmpeg" &&
-    "$SRC/ffmpeg-9.0.2/configure" --prefix="$PREFIX" --install-name-dir=@rpath \
+    "$SRC/ffmpeg-9.0.2/configure" --prefix="$PREFIX" \
         --enable-shared --disable-static --disable-programs --disable-doc --disable-debug \
-        --disable-autodetect --enable-audiotoolbox --enable-videotoolbox --enable-zlib \
-        --enable-bzlib --enable-iconv --enable-libdav1d \
-        --disable-avdevice --disable-encoders --disable-muxers \
-        --extra-cflags="-mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" \
-        --extra-ldflags="-mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" --extra-libs=-liconv &&
+        --disable-autodetect --enable-zlib --enable-iconv --enable-libdav1d \
+        --disable-encoders --disable-muxers "$@" &&
     make -j"$JOBS" && make install)
 
-build "$SRC/freetype-2.15.0" --auto-features=disabled -Dharfbuzz=disabled -Dzlib=none
-build "$SRC/fribidi-1.0.18" -Ddocs=false -Dbin=false -Dtests=false
-build "$SRC/harfbuzz-15.1.0" --auto-features=disabled -Dfreetype=enabled
-build "$SRC/libass-0.17.5" --auto-features=disabled -Dcoretext=enabled
+# Linux: the system's FreeType, FriBidi, HarfBuzz and fontconfig, as every desktop has them.
+if [ $OS = macos ]; then
+    build "$SRC/freetype-2.15.0" --auto-features=disabled -Dharfbuzz=disabled -Dzlib=none
+    build "$SRC/fribidi-1.0.18" -Ddocs=false -Dbin=false -Dtests=false
+    build "$SRC/harfbuzz-15.1.0" --auto-features=disabled -Dfreetype=enabled
+    build "$SRC/libass-0.17.5" --auto-features=disabled -Dcoretext=enabled
+else
+    build "$SRC/libass-0.17.5" --auto-features=disabled -Dfontconfig=enabled
+fi
 
 # libplacebo's generators and headers, which its archive leaves out (its
 # Vulkan stubs want Vulkan's headers, Vulkan off as it is).
@@ -98,17 +122,45 @@ for part in jinja:jinja2-3.1.6 markupsafe:markupsafe-3.0.4 glad:glad2-2.0.8 fast
 done
 build "$PLACEBO" --auto-features=disabled -Dopengl=enabled -Ddemos=false -Dtests=false
 
-# mpv 0.42 builds the function its Core Audio output needs only with Cocoa.
-patch -s -d "$SRC/mpv-0.42.0" -p1 < "$HERE/mpv-coreaudio-without-cocoa.patch"
-# mpv as a library, LGPL: OpenGL in the context pc-core makes, Core Audio.
-# No Cocoa, whose code wants mpv's Swift: VideoToolbox's frames are copied
-# out, not handed to OpenGL, as pc-core reads each one back anyway.
+# mpv as a library, LGPL: OpenGL in the context pc-core makes; Core Audio,
+# or PulseAudio and ALSA.
+if [ $OS = macos ]; then
+    # mpv 0.42 builds the function its Core Audio output needs only with Cocoa.
+    patch -s -d "$SRC/mpv-0.42.0" -p1 < "$HERE/mpv-coreaudio-without-cocoa.patch"
+    # No Cocoa, whose code wants mpv's Swift: VideoToolbox's frames are copied
+    # out, not handed to OpenGL, as pc-core reads each one back anyway.
+    set -- -Dcoreaudio=enabled
+else
+    set -- -Dpulse=enabled -Dalsa=enabled -Dlibavdevice=enabled
+fi
 build "$SRC/mpv-0.42.0" --auto-features=disabled -Dlibmpv=true -Dcplayer=false -Dgpl=false \
-    -Dcoreaudio=enabled -Dgl=enabled -Dplain-gl=enabled -Diconv=enabled -Dzlib=enabled
+    -Dgl=enabled -Dplain-gl=enabled -Diconv=enabled -Dzlib=enabled "$@"
 
 # libmpv and the libraries of ours it loads, by the names it loads them with.
 rm -rf "$OUT"
 mkdir "$OUT"
+if [ $OS = linux ]; then
+    collect() {
+        name=$(basename "$1")
+        [ -e "$OUT/$name" ] && return
+        cp -L "$1" "$OUT/$name"
+        chmod u+w "$OUT/$name"
+        for dep in $(readelf -d "$1" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'); do
+            [ ! -e "$PREFIX/lib/$dep" ] || collect "$PREFIX/lib/$dep"
+        done
+    }
+    collect "$PREFIX/lib/libmpv.so.2"
+    # Each finds the others beside libmpv; no symbols but the exported ones.
+    for lib in "$OUT"/*.so*; do
+        patchelf --set-rpath '$ORIGIN' "$lib"
+        strip --strip-unneeded "$lib"
+    done
+    # Loaded binding every symbol, as the app loads it.
+    "$PYTHON" -I -c 'import ctypes, os, sys; ctypes.CDLL(sys.argv[1], os.RTLD_NOW)' "$OUT/libmpv.so.2"
+    echo "libmpv is in $OUT; from the system it takes:"
+    ldd "$OUT/libmpv.so.2" | grep -v "$OUT" | awk '{print "  " $1}'
+    exit 0
+fi
 collect() {
     name=$(basename "$1")
     [ -e "$OUT/$name" ] && return

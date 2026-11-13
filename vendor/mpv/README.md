@@ -1,13 +1,16 @@
-# libmpv 0.42.0 (built for macOS), and for Windows
+# libmpv 0.42.0 (built for macOS and Linux), and for Windows
 
-The viewer plays video and sound with libmpv. Linux has it from the system
-(`libmpv.so.2`, in every distribution); macOS and Windows have none, so Power
-Commander ships its own there and uses only that one. Like PDFium it is not
-in git: get it once after cloning, and again after an update.
+The viewer plays video and sound with libmpv. macOS and Windows have none, so
+Power Commander has its own there and uses only that one. On Linux it uses
+ours when installed, else the system's (`libmpv.so.2`: `libmpv2` on Debian and
+Ubuntu, `mpv-libs` on Fedora, whose FFmpeg lacks H.264 and HEVC). Like PDFium
+it is not in git: get it once after cloning, and again after an update.
 
 - macOS: `vendor/mpv/build.sh` (needs Xcode's command line tools, and
   Homebrew's `ninja` and `pkg-config`, on Intel `nasm` too; it can take most
   of an hour)
+- Linux: `vendor/mpv/build.sh`, in the oldest distribution the release is for
+  (Ubuntu 24.04; see the script for what it needs), a few minutes
 - Windows: `vendor\mpv\fetch.bat` (Windows 10 or later)
 
 ## Windows
@@ -48,9 +51,21 @@ What is built:
 - Everything else with all optional features off, but FreeType in HarfBuzz,
   Core Text in libass and OpenGL in libplacebo.
 
-It is an add-on, apart from the app: `packaging/addons.sh` zips the
-libraries, signed as the app is, with this file as their notice, and Settings
-> Add-ons downloads them into the user's data folder.
+It is an add-on, apart from the app, on macOS and Linux: `packaging/addons.sh`
+zips the libraries (on macOS signed as the app is) with this file as their
+notice, and Settings > Add-ons downloads them into the user's data folder.
+
+## Linux
+
+Built as on macOS from the same sources, with these differences: PulseAudio
+and ALSA for sound; libass finds fonts with fontconfig; FreeType, HarfBuzz,
+FriBidi, fontconfig, zlib and the sound libraries are the system's (every
+desktop has them), so `linux-<arch>` holds `libmpv.so.2` and the 10 libraries
+of ours it loads, 32 MB, found beside it (`$ORIGIN`), stripped. FFmpeg has
+lavfi's device (none of the system's), which the frames test plays, and no
+bzip2. No VAAPI, which would make `libva` a must: video is decoded on the
+processor, as pc-core reads each frame back anyway. Built in Ubuntu 24.04,
+it needs glibc 2.38 or later.
 
 ## What is in it
 

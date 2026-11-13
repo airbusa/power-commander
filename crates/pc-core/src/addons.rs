@@ -66,7 +66,8 @@ impl Addon {
             Addon::Office if cfg!(windows) => &["wordcraft-cli.exe", "gridcraft-cli.exe", "deckcraft-cli.exe"],
             Addon::Office => &["wordcraft-cli", "gridcraft-cli", "deckcraft-cli"],
             Addon::Media if cfg!(windows) => &["libmpv-2.dll"],
-            Addon::Media => &["libmpv.2.dylib"],
+            Addon::Media if cfg!(target_os = "macos") => &["libmpv.2.dylib"],
+            Addon::Media => &["libmpv.so.2"],
             Addon::Cloud if cfg!(windows) => &["rclone.exe"],
             Addon::Cloud => &["rclone"],
         }
@@ -79,10 +80,10 @@ impl Addon {
         }
         let elsewhere = match self {
             Addon::Office => crate::convert::system_tool(),
-            Addon::Media => match crate::media::BUNDLED {
-                Some((name, _)) => crate::bundled::builtin("mpv", name),
-                None => crate::media::available().then(|| PathBuf::from("libmpv")),
-            },
+            // Linux also has the system's.
+            Addon::Media => crate::bundled::builtin("mpv", self.files()[0]).or_else(|| {
+                (crate::media::BUNDLED.is_none() && crate::media::available()).then(|| PathBuf::from("libmpv"))
+            }),
             Addon::Cloud => crate::bundled::builtin("rclone", self.files()[0])
                 .or_else(|| crate::convert::on_path(self.files()[0])),
         };

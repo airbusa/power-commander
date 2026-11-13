@@ -18,8 +18,10 @@ packaging/linux/package.sh
 | `rclone/` | `vendor/rclone` (built from source; needs Go), with its license |
 | `share/applications`, `share/icons` | the menu entry and icons, beside this file |
 
-Video and sound play through the system's libmpv (`libmpv2` on Debian and
-Ubuntu, `mpv-libs` on Fedora); without it they do not play.
+Video and sound play through libmpv: the add-on (Settings > Add-ons, our
+build: `vendor/mpv/build.sh`), else the system's (`libmpv2` on Debian and
+Ubuntu, `mpv-libs` on Fedora); without either they do not play. Office
+documents need the Craft tools, the add-on or the system's.
 
 ## Installing
 

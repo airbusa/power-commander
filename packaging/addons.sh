@@ -76,6 +76,11 @@ case $PLATFORM in
         [ -n "$dylibs" ] && cp vendor/mpv/README.md "vendor/mpv/$PLATFORM/libmpv.md"
         # shellcheck disable=SC2086
         make mpv "$MPV" "vendor/mpv/$PLATFORM" libmpv.2.dylib $dylibs libmpv.md ;;
+    linux-*)
+        libs=$(cd "vendor/mpv/$PLATFORM" 2>/dev/null && ls *.so.* 2>/dev/null || true)
+        [ -n "$libs" ] && cp vendor/mpv/README.md "vendor/mpv/$PLATFORM/libmpv.md"
+        # shellcheck disable=SC2086
+        make mpv "$MPV" "vendor/mpv/$PLATFORM" libmpv.so.2 $libs libmpv.md ;;
 esac
 make rclone "$RCLONE" "vendor/rclone/$PLATFORM" rclone COPYING
 make craft "$CRAFT" "vendor/craft/$PLATFORM" wordcraft-cli gridcraft-cli deckcraft-cli wordcraft.txt gridcraft.txt deckcraft.txt
