@@ -78,7 +78,7 @@ fn convert_into(folder: &Path, converter: &Converter, path: &Path) -> io::Result
 }
 
 /// The cached copy's name: the file's path, size and time, hashed.
-fn key(path: &Path) -> io::Result<String> {
+pub(crate) fn key(path: &Path) -> io::Result<String> {
     let meta = std::fs::metadata(path)?;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     OsString::from(path).hash(&mut hasher);

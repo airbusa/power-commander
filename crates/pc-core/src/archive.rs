@@ -111,8 +111,16 @@ const SCRATCH: &str = "powercommander-";
 /// Locked while its run lasts; the system unlocks it when the run ends.
 const LOCK: &str = ".lock";
 
-/// This run's lock, once `scratch()` exists.
+/// This run's locks, once `scratch()` and `tars()` exist.
 static HELD: Mutex<Option<File>> = Mutex::new(None);
+static HELD_TARS: Mutex<Option<File>> = Mutex::new(None);
+
+/// Compressed tars' tars, unpacked once a run: on disk, as a big one would
+/// fill a /tmp that is memory (Fedora's).
+fn tars() -> PathBuf {
+    let cache = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
+    cache.join(format!("{SCRATCH}{}", std::process::id()))
+}
 
 /// A new folder under `scratch()`, so files of one name never meet.
 pub fn fresh_scratch() -> io::Result<PathBuf> {
@@ -124,8 +132,11 @@ pub fn fresh_scratch() -> io::Result<PathBuf> {
 
 /// Creates `scratch()` and locks it, at the first use.
 fn claim() -> io::Result<PathBuf> {
-    let dir = scratch();
-    let mut held = HELD.lock().unwrap();
+    claim_in(scratch(), &HELD)
+}
+
+fn claim_in(dir: PathBuf, held: &Mutex<Option<File>>) -> io::Result<PathBuf> {
+    let mut held = held.lock().unwrap();
     if held.is_none() {
         fs::create_dir_all(&dir)?;
         let lock = File::create(dir.join(LOCK))?;
@@ -135,15 +146,20 @@ fn claim() -> io::Result<PathBuf> {
     Ok(dir)
 }
 
-/// Removes `scratch()` as the app quits; Windows deletes no open file, so unlocked first.
+/// Removes `scratch()` and `tars()` as the app quits; Windows deletes no open file, so unlocked first.
 pub fn remove_scratch() {
     HELD.lock().unwrap().take();
     let _ = fs::remove_dir_all(scratch());
+    HELD_TARS.lock().unwrap().take();
+    let _ = fs::remove_dir_all(tars());
 }
 
 /// Removes the folders runs left behind when killed or crashed.
 pub fn remove_stale_scratch() {
     remove_stale(&std::env::temp_dir(), &scratch());
+    if let Some(cache) = tars().parent() {
+        remove_stale(cache, &tars());
+    }
 }
 
 fn remove_stale(temp: &Path, ours: &Path) {
@@ -187,7 +203,10 @@ pub(crate) fn extract(
     // -spd: a name with `*` or `[` is no wildcard.
     let command = if folders { "x" } else { "e" };
     let take = [command, "-y", "-spd", "-bso0", "-bsp0", out.as_str()];
-    let output = if is_compressed_tar(archive) {
+    let unpacked = unpacked_tar(archive).filter(|tar| tar.is_file());
+    let output = if let Some(tar) = unpacked {
+        seven_zip(&take, Some(&tar)).args(listed).output().map_err(missing)?
+    } else if is_compressed_tar(archive) {
         let mut unpack = seven_zip(&["x", "-so"], Some(archive))
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -249,37 +268,16 @@ pub struct Watch {
 pub(crate) fn list_watched(archive: &Path, watch: &Watch) -> io::Result<Vec<Item>> {
     let name = archive.file_name().unwrap_or_default().to_string_lossy();
     let fail = |err: String| io::Error::other(format!("{name}: {err}"));
-    let mut unpack = match is_compressed_tar(archive) {
-        true => Some(
-            seven_zip(&["x", "-so", "-bsp2", "-bso0"], Some(archive))
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .map_err(missing)?,
-        ),
-        false => None,
+    // A compressed tar is unpacked whole, once: its tar is listed, and files are taken from it at once.
+    let listed = match is_compressed_tar(archive) {
+        true => unpack_tar(archive, watch)?,
+        false => archive.to_owned(),
     };
-    let mut command = match &mut unpack {
-        Some(unpack) => {
-            let mut command = seven_zip(&["l", "-slt", "-ba", "-si", "-ttar"], None);
-            command.stdin(unpack.stdout.take().expect("piped"));
-            command
-        }
-        None => seven_zip(&["l", "-slt", "-ba"], Some(archive)),
-    };
-    let mut listing = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(missing)?;
-    // The unpacking one's percentages, as they come.
-    let reading = unpack.as_mut().map(|unpack| {
-        let (mut progress, percent) = (unpack.stderr.take().expect("piped"), watch.percent.clone());
-        std::thread::spawn(move || {
-            let mut chunk = [0; 4096];
-            while let Ok(read @ 1..) = progress.read(&mut chunk) {
-                if let Some(at) = crate::packing::last_percent(&chunk[..read]) {
-                    percent.store(at, Ordering::Relaxed);
-                }
-            }
-        })
-    });
+    let mut listing = seven_zip(&["l", "-slt", "-ba"], Some(&listed))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(missing)?;
     let (mut stdout, mut stderr) = (listing.stdout.take().expect("piped"), listing.stderr.take().expect("piped"));
     let (done, read) = mpsc::channel();
     std::thread::spawn(move || {
@@ -293,26 +291,76 @@ pub(crate) fn list_watched(archive: &Path, watch: &Watch) -> io::Result<Vec<Item
             Ok(output) => break output,
             Err(mpsc::RecvTimeoutError::Timeout) if !watch.stop.load(Ordering::Relaxed) => {}
             Err(_) => {
-                for child in [Some(&mut listing), unpack.as_mut()].into_iter().flatten() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
+                let _ = listing.kill();
+                let _ = listing.wait();
                 return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
             }
         }
     };
     let status = listing.wait()?;
-    if let Some(mut unpack) = unpack {
-        let unpacked = unpack.wait()?;
-        reading.map(std::thread::JoinHandle::join);
-        if status.success() && !unpacked.success() {
-            return Err(fail(failure(unpacked, b"")));
-        }
-    }
     if !status.success() {
         return Err(fail(failure(status, &stderr)));
     }
     Ok(parse(&String::from_utf8_lossy(&stdout)))
+}
+
+/// Where a compressed tar's tar is unpacked this run: by its path, size and time.
+fn unpacked_tar(archive: &Path) -> Option<PathBuf> {
+    let key = crate::convert::key(archive).ok()?;
+    is_compressed_tar(archive).then(|| tars().join(format!("{key}.tar")))
+}
+
+/// The tar inside `archive`, unpacked into `tars()` unless it is already,
+/// 7-Zip's percentage in `watch`; stopped, or failing, it leaves none.
+fn unpack_tar(archive: &Path, watch: &Watch) -> io::Result<PathBuf> {
+    let name = archive.file_name().unwrap_or_default().to_string_lossy();
+    let tar = unpacked_tar(archive).ok_or_else(|| io::Error::other(format!("{name}: cannot be read")))?;
+    if tar.is_file() {
+        return Ok(tar);
+    }
+    claim_in(tars(), &HELD_TARS)?;
+    let part = tar.with_extension("part");
+    let mut file = File::create(&part)?;
+    let mut unpack = seven_zip(&["x", "-so", "-bsp2", "-bso0"], Some(archive))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(missing)?;
+    // Its percentages, as they come.
+    let (mut progress, percent) = (unpack.stderr.take().expect("piped"), watch.percent.clone());
+    let reading = std::thread::spawn(move || {
+        let mut chunk = [0; 4096];
+        while let Ok(read @ 1..) = progress.read(&mut chunk) {
+            if let Some(at) = crate::packing::last_percent(&chunk[..read]) {
+                percent.store(at, Ordering::Relaxed);
+            }
+        }
+    });
+    let mut stdout = unpack.stdout.take().expect("piped");
+    let (done, copied) = mpsc::channel();
+    std::thread::spawn(move || drop(done.send(io::copy(&mut stdout, &mut file))));
+    let copied = loop {
+        match copied.recv_timeout(Duration::from_millis(50)) {
+            Ok(copied) => break copied,
+            Err(mpsc::RecvTimeoutError::Timeout) if !watch.stop.load(Ordering::Relaxed) => {}
+            Err(_) => {
+                let _ = unpack.kill();
+                let _ = unpack.wait();
+                let _ = fs::remove_file(&part);
+                return Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"));
+            }
+        }
+    };
+    let unpacked = unpack.wait()?;
+    let _ = reading.join();
+    let failed = match (copied, unpacked.success()) {
+        (Ok(_), true) => return fs::rename(&part, &tar).map(|()| tar),
+        // As a full disk.
+        (Err(err), _) => io::Error::new(err.kind(), format!("{name}: {err}")),
+        (Ok(_), false) => io::Error::other(format!("{name}: {}", failure(unpacked, b""))),
+    };
+    let _ = fs::remove_file(&part);
+    Err(failed)
 }
 
 /// The entries of `dir` inside the archive, `..` first.
