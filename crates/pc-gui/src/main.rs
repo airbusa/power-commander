@@ -1696,7 +1696,7 @@ impl Commander {
     /// shows them always; above Quick View too, as Total Commander's.
     fn render_tab_bar(&self, ix: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let side = &self.panels[ix];
-        if side.tabs.panels().len() < 2 && !self.settings.tab_header_always {
+        if side.tabs.panels().len() < 2 && !self.settings.tab_header_always.0 {
             return None;
         }
         let commander = cx.entity();
@@ -1718,6 +1718,13 @@ impl Commander {
                         .small()
                         .selected_index(side.tabs.active())
                         .children(tabs)
+                        .suffix(
+                            Button::new(("tab-new", ix)).ghost().xsmall().label("+").tooltip("New Tab").on_click(cx.listener(move |this, _, window, cx| {
+                                this.active = ix;
+                                this.change_tabs(Tabs::duplicate, cx);
+                                window.focus(&this.focus, cx);
+                            })),
+                        )
                         .on_click(cx.listener(move |this, tab: &usize, window, cx| {
                             this.select_tab(ix, *tab, cx);
                             window.focus(&this.focus, cx);

@@ -91,7 +91,7 @@ fn menu_bar(buf: &mut Buffer, area: Rect) {
 /// One side; gives the area of its file rows.
 fn panel(buf: &mut Buffer, area: Rect, app: &mut App, ix: usize) -> Rect {
     let active = ix == app.active;
-    let tabs_shown = app.sides[ix].tabs.panels().len() > 1 || app.settings.tab_header_always;
+    let tabs_shown = app.sides[ix].tabs.panels().len() > 1 || app.settings.tab_header_always.0;
     Block::bordered().style(PANEL).render(area, buf);
     let inner = area.inner(ratatui::layout::Margin::new(1, 1));
     if inner.height < 4 || inner.width < 10 {

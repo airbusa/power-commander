@@ -42,6 +42,17 @@ impl Default for Blur {
     }
 }
 
+/// The folder tabs' header shown also with one tab, its + at hand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TabHeaderAlways(pub bool);
+
+impl Default for TabHeaderAlways {
+    fn default() -> Self {
+        TabHeaderAlways(true)
+    }
+}
+
 /// Look for add-ons' updates at start and daily.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AddonUpdates(pub bool);
@@ -58,7 +69,7 @@ pub struct Settings {
     pub appearance: crate::theme::Appearance,
     pub menu: MenuStyle,
     /// Show the tab header also when there is only one tab.
-    pub tab_header_always: bool,
+    pub tab_header_always: TabHeaderAlways,
     pub show_hidden: bool,
     pub show_system: bool,
     pub sidebar_opacity: SidebarOpacity,

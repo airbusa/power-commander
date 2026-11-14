@@ -447,9 +447,9 @@ impl SettingsDialog {
         GroupBox::new().outline().title("Folder tabs").child(
             Checkbox::new("tab-header-always")
                 .label("Show the tab header also when there is only one tab")
-                .checked(self.draft.tab_header_always)
+                .checked(self.draft.tab_header_always.0)
                 .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                    this.draft.tab_header_always = *checked;
+                    this.draft.tab_header_always = pc_core::settings::TabHeaderAlways(*checked);
                     cx.notify();
                 })),
         )
