@@ -59,6 +59,8 @@ pub enum Command {
     Bookmarks,
     /// The folder shown, into Bookmarks.
     BookmarkFolder,
+    /// Bookmarks to add, remove, rename and put in order.
+    ManageBookmarks,
     GoBack,
     GoForward,
     /// Alt+Down: the tab's last places, to pick one.
@@ -297,6 +299,7 @@ pub const MENUS: &[Menu] = &[
             SEP,
             cmd("Bookmarks", Bookmarks),
             cmd("Bookmark This Folder", BookmarkFolder),
+            cmd("Manage Bookmarks...", ManageBookmarks),
         ],
     },
     Menu {

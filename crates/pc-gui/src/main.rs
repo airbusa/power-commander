@@ -6,6 +6,7 @@ mod app_icons;
 mod appearance;
 mod associations_dialog;
 mod attributes_dialog;
+mod bookmarks_dialog;
 mod compare_view;
 mod about;
 mod activity_dialog;
@@ -2292,6 +2293,7 @@ impl Render for Commander {
                     Command::GoHome => this.go_home(window, cx),
                     Command::Bookmarks => this.show_bookmarks(window, cx),
                     Command::BookmarkFolder => this.bookmark_folder(window, cx),
+                    Command::ManageBookmarks => this.manage_bookmarks(window, cx),
                     Command::ToggleSidebar => {
                         let tab = this.sidebar.tab.unwrap_or(this.sidebar.last);
                         this.toggle_sidebar(tab, window, cx)

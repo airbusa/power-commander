@@ -109,8 +109,9 @@ const POWER_COMMANDER: Table = &[
     (Search, "secondary-f", windows("alt-f7")),
     (SearchInSeparateProcess, "secondary-shift-f", ""),
     (Bookmarks, "secondary-b", ""),
-    // A browser's.
+    // A browser's, as the next.
     (BookmarkFolder, "secondary-d", ""),
+    (ManageBookmarks, "secondary-shift-o", ""),
     (GoBack, "alt-left", ""),
     (FolderHistory, "alt-down", ""),
     (GoForward, "alt-right", ""),

@@ -1,6 +1,6 @@
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
 
@@ -207,6 +207,14 @@ impl Default for ViewerSettings {
 /// The settings dialog's pages.
 pub const PAGES: &[&str] = &["Layout", "Display", "Font", "Date", "Language", "Edit/View", "Add-ons"];
 
+/// A folder of this computer's own: not a server's, as kio-fuse, gvfs or
+/// Windows' `\\server\share` show them.
+pub fn bookmarkable(path: &Path) -> bool {
+    use std::path::{Component, Prefix};
+    let unc = matches!(path.components().next(), Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::UNC(..) | Prefix::VerbatimUNC(..)));
+    path.is_absolute() && !unc && path.is_dir() && crate::mounts::url_of(path).is_none()
+}
+
 pub fn config_dir() -> Option<PathBuf> {
     Some(dirs::config_dir()?.join("powercommander"))
 }
@@ -217,6 +225,21 @@ impl Settings {
             hidden: self.show_hidden,
             system: self.show_system,
         }
+    }
+
+    /// A bookmark's name: its own, else its folder's.
+    pub fn bookmark_name(&self, path: &Path) -> String {
+        match self.bookmark_names.get(path) {
+            Some(name) => name.clone(),
+            None => path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned()),
+        }
+    }
+
+    /// Bookmarks A to Z by their names, case aside.
+    pub fn sort_bookmarks(&mut self) {
+        let mut bookmarks = std::mem::take(&mut self.bookmarks);
+        bookmarks.sort_by_cached_key(|path| self.bookmark_name(path).to_lowercase());
+        self.bookmarks = bookmarks;
     }
 
     /// What the core shows by them everywhere: dates, folders' order.
@@ -281,4 +304,24 @@ pub(crate) fn write_json(file: &str, value: &impl Serialize) -> io::Result<()> {
     let temp = dir.join(format!("{file}.new"));
     fs::write(&temp, serde_json::to_string_pretty(value)?)?;
     fs::rename(temp, dir.join(file))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sorts_bookmarks_and_takes_only_folders() {
+        let mut settings = Settings { bookmarks: vec!["/x/b".into(), "/x/C".into(), "/x/a".into()], ..Settings::default() };
+        settings.bookmark_names.insert("/x/a".into(), "Zed".into());
+        settings.sort_bookmarks();
+        assert_eq!(settings.bookmarks, [PathBuf::from("/x/b"), "/x/C".into(), "/x/a".into()]);
+        let dir = std::env::temp_dir();
+        assert!(bookmarkable(&dir));
+        assert!(!bookmarkable(Path::new("relative")));
+        let file = dir.join(format!("pc-bookmark-{}", std::process::id()));
+        fs::write(&file, "").unwrap();
+        assert!(!bookmarkable(&file), "a file");
+        fs::remove_file(&file).unwrap();
+    }
 }
