@@ -232,10 +232,11 @@ impl Commander {
                     return this.toggle_terminal(window, cx);
                 }
                 // A panels' command from the menus: the panels take the keys again.
-                let command = *command;
-                cx.defer_in(window, move |this, window, cx| {
-                    window.focus(&this.focus, cx);
-                    this.focus.clone().dispatch_action(&Run(command), window, cx);
+                // Outside this update: the panels' listeners update the commander too.
+                let (command, focus) = (*command, this.focus.clone());
+                window.defer(cx, move |window, cx| {
+                    window.focus(&focus, cx);
+                    focus.dispatch_action(&Run(command), window, cx);
                 });
             }))
             .child(self.render_terminal_tabs(cx))
