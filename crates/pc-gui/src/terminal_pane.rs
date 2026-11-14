@@ -114,6 +114,32 @@ impl Commander {
         self.terminal_changed(window, cx);
     }
 
+    /// The tab's × or key, asked first; a shell that exits closes unasked.
+    fn confirm_close_terminal_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(view) = self.terminals.get(ix).map(|tab| tab.view.clone()) else {
+            return;
+        };
+        let text = match view.read(cx).idle() {
+            Some(false) => "Close this terminal tab? The program running in it will be stopped.",
+            _ => "Close this terminal tab? Its shell will end.",
+        };
+        let commander = cx.entity().downgrade();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let (commander, view) = (commander.clone(), view.clone());
+            alert.title("Close Tab").description(text).ok_text("Close").show_cancel(true).on_ok(move |_, window, cx| {
+                // Closed at once: its delayed close would give the focus back to the closed shell.
+                window.close_dialog(cx);
+                // Found again: another tab may have closed meanwhile.
+                let _ = commander.update(cx, |this, cx| {
+                    if let Some(ix) = this.terminals.iter().position(|tab| tab.view == view) {
+                        this.close_terminal_tab(ix, window, cx);
+                    }
+                });
+                false
+            })
+        });
+    }
+
     fn select_terminal_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(tab) = self.terminals.get(ix) {
             self.terminal_tab = ix;
@@ -180,7 +206,7 @@ impl Commander {
                 .ghost()
                 .xsmall()
                 .label("×")
-                .on_click(cx.listener(move |this, _, window, cx| this.close_terminal_tab(ix, window, cx)));
+                .on_click(cx.listener(move |this, _, window, cx| this.confirm_close_terminal_tab(ix, window, cx)));
             Tab::new().label(name).suffix(close)
         });
         let tabs: Vec<Tab> = tabs.collect();
@@ -218,7 +244,7 @@ impl Commander {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &terminal::NewTerminalTab, window, cx| this.new_terminal_tab(window, cx)))
-            .on_action(cx.listener(|this, _: &terminal::CloseTerminalTab, window, cx| this.close_terminal_tab(this.terminal_tab, window, cx)))
+            .on_action(cx.listener(|this, _: &terminal::CloseTerminalTab, window, cx| this.confirm_close_terminal_tab(this.terminal_tab, window, cx)))
             .on_action(cx.listener(|this, _: &terminal::NextTerminalTab, window, cx| {
                 let next = (this.terminal_tab + 1) % this.terminals.len().max(1);
                 this.select_terminal_tab(next, window, cx);
