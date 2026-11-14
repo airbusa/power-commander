@@ -909,6 +909,15 @@ impl Commander {
                             .item(act("Move Up", |this, ix, window, cx| this.move_bookmark(ix, ix.wrapping_sub(1), window, cx)))
                             .item(act("Move Down", |this, ix, window, cx| this.move_bookmark(ix, ix + 1, window, cx)))
                             .separator()
+                            .item(act("Copy Name", |this, ix, _, cx| {
+                                let name = this.settings.bookmarks.get(ix).map(|path| this.settings.bookmark_name(path));
+                                cx.write_to_clipboard(ClipboardItem::new_string(name.unwrap_or_default()));
+                            }))
+                            .item(act("Copy Path", |this, ix, _, cx| {
+                                let path = this.settings.bookmarks.get(ix).map(|path| path.display().to_string());
+                                cx.write_to_clipboard(ClipboardItem::new_string(path.unwrap_or_default()));
+                            }))
+                            .separator()
                             .item(act("Remove from Bookmarks", Commander::remove_bookmark))
                             .item(act("Manage Bookmarks...", |this, _, window, cx| this.manage_bookmarks(window, cx)))
                     }),
@@ -1081,7 +1090,7 @@ impl Commander {
         let theme = cx.theme();
         let selected = self.sidebar.selected == Some((scheme, ix));
         let commander = cx.entity().downgrade();
-        let (address, saved) = (server.address.clone(), server.saved);
+        let (address, saved, name) = (server.address.clone(), server.saved, server.name.clone());
         h_flex()
             .id((scheme.name(), ix))
             .h(ROW + px(2.))
@@ -1112,7 +1121,7 @@ impl Commander {
                     cx.notify();
                 }
             }))
-            .context_menu(move |menu, _, _| server_menu(menu, commander.clone(), address.clone(), saved))
+            .context_menu(move |menu, _, _| server_menu(menu, commander.clone(), address.clone(), name.clone(), saved))
     }
 }
 
@@ -1139,6 +1148,7 @@ fn server_menu(
     menu: gpui_kit::component::menu::PopupMenu,
     commander: WeakEntity<Commander>,
     address: Address,
+    name: String,
     saved: Option<usize>,
 ) -> gpui_kit::component::menu::PopupMenu {
     let act = |label: &'static str, run: fn(&mut Commander, &mut Window, &mut Context<Commander>)| {
@@ -1147,11 +1157,21 @@ fn server_menu(
             let _ = commander.update(cx, |this, cx| run(this, window, cx));
         })
     };
-    let commander_for_connect = commander.clone();
+    let copy = |label: &'static str, text: String| PopupMenuItem::new(label).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone())));
+    // Its address as typed to connect: no password is kept in it.
+    let (copy_name, copy_path) = (copy("Copy Name", name), copy("Copy Path", address.url()));
+    let (commander_for_connect, ssh) = (commander.clone(), address.clone());
+    let sftp = address.scheme == Scheme::Sftp;
     let connect = PopupMenuItem::new("Connect").on_click(move |_, window, cx| {
         let _ = commander_for_connect.update(cx, |this, cx| this.connect(this.active, address.clone(), window, cx));
     });
     let mut menu = menu.item(connect);
+    if sftp {
+        let commander = commander.clone();
+        menu = menu.item(PopupMenuItem::new("Open in Terminal").on_click(move |_, window, cx| {
+            let _ = commander.update(cx, |this, cx| this.ssh_in_terminal(&ssh, window, cx));
+        }));
+    }
     if let Some(ix) = saved {
         let edit = |label: &'static str, run: fn(&mut Commander, usize, &mut Window, &mut Context<Commander>)| {
             let commander = commander.clone();
@@ -1165,6 +1185,9 @@ fn server_menu(
             .item(edit("Delete", |this, ix, window, cx| this.delete_server(ix, window, cx)));
     }
     menu.separator()
+        .item(copy_name)
+        .item(copy_path)
+        .separator()
         .item(act("New connection...", |this, window, cx| this.edit_server(None, false, window, cx)))
         .item(act("Disconnect", |this, window, cx| this.disconnect(window, cx)))
 }

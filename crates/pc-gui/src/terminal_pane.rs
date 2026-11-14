@@ -62,11 +62,23 @@ impl Commander {
     /// Another shell, in the active panel's folder, or by ssh in an SFTP panel's.
     pub(crate) fn new_terminal_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let panel = self.panels[self.active].tabs.current();
-        let home = std::env::home_dir().unwrap_or_default();
         let ssh = panel.remote().and_then(|remote| pc_core::remote::ssh_command(&remote.url(), panel.folder()));
         // An archive's folder is not this computer's.
         let dir = (panel.remote().is_none() && !panel.in_archive()).then(|| panel.folder().to_owned());
-        match TerminalView::open(dir.as_deref().unwrap_or(&home), ssh, window, cx) {
+        self.open_terminal_tab(dir, ssh, window, cx);
+    }
+
+    /// A saved SFTP server's shell, by ssh, in its folder if it has one.
+    pub(crate) fn ssh_in_terminal(&mut self, address: &pc_core::remote::Address, window: &mut Window, cx: &mut Context<Self>) {
+        let dir = address.path.as_deref().unwrap_or(".");
+        let ssh = pc_core::remote::ssh_command(&address.url(), Path::new(dir));
+        self.open_terminal_tab(None, ssh, window, cx);
+    }
+
+    /// A shell in `dir` (else home), or `program` there.
+    fn open_terminal_tab(&mut self, dir: Option<PathBuf>, program: Option<(String, Vec<String>)>, window: &mut Window, cx: &mut Context<Self>) {
+        let home = std::env::home_dir().unwrap_or_default();
+        match TerminalView::open(dir.as_deref().unwrap_or(&home), program, window, cx) {
             Ok(view) => {
                 let ended = cx.subscribe_in(&view, window, |this, view, _: &Exited, window, cx| {
                     if let Some(ix) = this.terminals.iter().position(|tab| &tab.view == view) {
