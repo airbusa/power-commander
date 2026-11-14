@@ -107,7 +107,7 @@ build "$SRC/dav1d-1.5.4" -Denable_tools=false -Denable_examples=false -Denable_t
 # FFmpeg as LGPL (no --enable-gpl): every decoder and demuxer, no encoders or devices.
 # Linux: lavfi's device (none of the system's), which the frames test plays;
 # no bzlib, whose library Debian and Fedora name differently; decoded on the
-# processor, as pc-core reads each frame back anyway.
+# processor, as sc-core reads each frame back anyway.
 if [ $OS = macos ]; then
     set -- --disable-avdevice --install-name-dir=@rpath --enable-audiotoolbox --enable-videotoolbox --enable-bzlib \
         --extra-cflags="-mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET" \
@@ -146,13 +146,13 @@ for part in jinja:jinja2-3.1.6 markupsafe:markupsafe-3.0.4 glad:glad2-2.0.8 fast
 done
 build "$PLACEBO" --auto-features=disabled -Dopengl=enabled -Ddemos=false -Dtests=false
 
-# mpv as a library, LGPL: OpenGL in the context pc-core makes; Core Audio,
+# mpv as a library, LGPL: OpenGL in the context sc-core makes; Core Audio,
 # or PulseAudio and ALSA.
 if [ $OS = macos ]; then
     # mpv 0.42 builds the function its Core Audio output needs only with Cocoa.
     patch -s -d "$SRC/mpv-0.42.0" -p1 < "$HERE/mpv-coreaudio-without-cocoa.patch"
     # No Cocoa, whose code wants mpv's Swift: VideoToolbox's frames are copied
-    # out, not handed to OpenGL, as pc-core reads each one back anyway.
+    # out, not handed to OpenGL, as sc-core reads each one back anyway.
     set -- -Dcoreaudio=enabled
 else
     set -- -Dpulse=enabled -Dalsa=enabled -Dlibavdevice=enabled

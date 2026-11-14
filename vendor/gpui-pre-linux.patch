@@ -2,7 +2,7 @@ diff -ruN a/src/linux/clipboard_files.rs b/src/linux/clipboard_files.rs
 --- a/src/linux/clipboard_files.rs	1970-01-01 01:00:00.000000000 +0100
 +++ b/src/linux/clipboard_files.rs	2026-11-13 14:24:36.459487567 +0100
 @@ -0,0 +1,105 @@
-+// PowerCommander patch: files on the clipboard as file managers put them
++// SparkCommander patch: files on the clipboard as file managers put them
 +// there, a URI list with GNOME's and KDE's mark of a cut, so that files
 +// copied or cut here paste in them, and theirs here.
 +
@@ -111,8 +111,8 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
 --- a/src/linux/wayland/client.rs	2026-11-13 14:24:36.456392695 +0100
 +++ b/src/linux/wayland/client.rs	2026-11-13 14:24:36.458922093 +0100
 @@ -1,3 +1,6 @@
-+// Modified for PowerCommander (Apache-2.0, section 4b): files on the clipboard
-+// as file managers put them there. Changes are marked "PowerCommander patch".
++// Modified for SparkCommander (Apache-2.0, section 4b): files on the clipboard
++// as file managers put them there. Changes are marked "SparkCommander patch".
 +
  use std::{
      cell::{RefCell, RefMut},
@@ -121,11 +121,11 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
      xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1,
  };
  use wayland_protocols_plasma::blur::client::{org_kde_kwin_blur, org_kde_kwin_blur_manager};
-+// PowerCommander patch: blur where KDE's own protocol is gone (KWin 6.8).
++// SparkCommander patch: blur where KDE's own protocol is gone (KWin 6.8).
 +use wayland_protocols::ext::background_effect::v1::client::{
 +    ext_background_effect_manager_v1, ext_background_effect_surface_v1,
 +};
-+// PowerCommander patch: the window's icon from its pixels, as X11's.
++// SparkCommander patch: the window's icon from its pixels, as X11's.
 +use wayland_protocols::xdg::toplevel_icon::v1::client::{
 +    xdg_toplevel_icon_manager_v1, xdg_toplevel_icon_v1,
 +};
@@ -155,7 +155,7 @@ diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
              return;
          };
          if state.mouse_focused_window.is_some() || state.keyboard_focused_window.is_some() {
-+            // PowerCommander patch: files are offered as file managers read them too.
++            // SparkCommander patch: files are offered as file managers read them too.
 +            let files = crate::linux::clipboard_files::files_of(&item).is_some();
              state.clipboard.set(item);
              let Some(serial) = state.serial_tracker.selection_serial() else {
@@ -187,8 +187,8 @@ diff -ruN a/src/linux/wayland/clipboard.rs b/src/linux/wayland/clipboard.rs
 --- a/src/linux/wayland/clipboard.rs	2026-11-13 14:24:36.456513394 +0100
 +++ b/src/linux/wayland/clipboard.rs	2026-11-13 14:24:36.458678820 +0100
 @@ -1,3 +1,6 @@
-+// Modified for PowerCommander (Apache-2.0, section 4b): files on the clipboard
-+// as file managers put them there. Changes are marked "PowerCommander patch".
++// Modified for SparkCommander (Apache-2.0, section 4b): files on the clipboard
++// as file managers put them there. Changes are marked "SparkCommander patch".
 +
  use std::{
      fs::File,
@@ -205,7 +205,7 @@ diff -ruN a/src/linux/wayland/clipboard.rs b/src/linux/wayland/clipboard.rs
          }
      }
  
-+    /// PowerCommander patch: another program's files, as file managers offer them.
++    /// SparkCommander patch: another program's files, as file managers offer them.
 +    fn read_files(&self, connection: &Connection) -> Option<ClipboardItem> {
 +        if !self.has_mime_type(URI_LIST) {
 +            return None;
@@ -228,7 +228,7 @@ diff -ruN a/src/linux/wayland/clipboard.rs b/src/linux/wayland/clipboard.rs
  
 -    pub fn send(&self, _mime_type: String, fd: OwnedFd) {
 +    pub fn send(&self, mime_type: String, fd: OwnedFd) {
-+        // PowerCommander patch: files as file managers read them.
++        // SparkCommander patch: files as file managers read them.
 +        if let Some(bytes) = self.contents.as_ref().and_then(|c| file_bytes(c, &mime_type)) {
 +            return self.send_bytes(fd, bytes);
 +        }
@@ -239,7 +239,7 @@ diff -ruN a/src/linux/wayland/clipboard.rs b/src/linux/wayland/clipboard.rs
              return self.contents.clone();
          }
  
-+        // PowerCommander patch: files before their text.
++        // SparkCommander patch: files before their text.
          let item = offer
 -            .read_text(&self.connection)
 +            .read_files(&self.connection)
@@ -254,7 +254,7 @@ diff -ruN a/src/linux/wayland/window.rs b/src/linux/wayland/window.rs
      xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1,
  };
  use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
-+// PowerCommander patch: see `background_effect`.
++// SparkCommander patch: see `background_effect`.
 +use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
  use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
  
@@ -263,7 +263,7 @@ diff -ruN a/src/linux/wayland/window.rs b/src/linux/wayland/window.rs
      app_id: Option<String>,
      appearance: WindowAppearance,
      blur: Option<org_kde_kwin_blur::OrgKdeKwinBlur>,
-+    // PowerCommander patch: the blur of ext-background-effect-v1.
++    // SparkCommander patch: the blur of ext-background-effect-v1.
 +    background_effect: Option<ExtBackgroundEffectSurfaceV1>,
      viewport: Option<wp_viewport::WpViewport>,
      outputs: HashMap<ObjectId, Output>,
@@ -272,7 +272,7 @@ diff -ruN a/src/linux/wayland/window.rs b/src/linux/wayland/window.rs
                  xdg_state.toplevel.set_app_id(app_id.clone());
              }
  
-+            // PowerCommander patch: see `set_toplevel_icon`.
++            // SparkCommander patch: see `set_toplevel_icon`.
 +            if let Some(icon) = options.icon.as_ref() {
 +                set_toplevel_icon(&globals, &xdg_state.toplevel, icon.width(), icon.height(), icon.as_raw());
 +            }
@@ -292,7 +292,7 @@ diff -ruN a/src/linux/wayland/window.rs b/src/linux/wayland/window.rs
          if let Some(blur) = &state.blur {
              blur.release();
          }
-+        // PowerCommander patch.
++        // SparkCommander patch.
 +        if let Some(effect) = &state.background_effect {
 +            effect.destroy();
 +        }
@@ -303,7 +303,7 @@ diff -ruN a/src/linux/wayland/window.rs b/src/linux/wayland/window.rs
              if let Some(scale) = scale {
                  state.scale = scale;
              }
-+            // PowerCommander patch: see `update_background_effect`.
++            // SparkCommander patch: see `update_background_effect`.
 +            update_background_effect(&mut state);
              let device_bounds = state.bounds.to_device_pixels(state.scale);
              if let Some(renderer) = &mut state.renderer {
@@ -316,7 +316,7 @@ diff -ruN a/src/linux/wayland/window.rs b/src/linux/wayland/window.rs
 +    region.destroy();
 +}
 +
-+// PowerCommander patch: KWin 6.8 blurs only through ext-background-effect-v1,
++// SparkCommander patch: KWin 6.8 blurs only through ext-background-effect-v1,
 +// which blurs no more than the region given: the window inside its shadow, so
 +// it is given again on every resize.
 +fn update_background_effect(state: &mut WaylandWindowState) {
@@ -348,7 +348,7 @@ diff -ruN a/src/linux/wayland/window.rs b/src/linux/wayland/window.rs
      bounds
  }
 +
-+// PowerCommander patch: the window's icon from its pixels (xdg-toplevel-icon-v1,
++// SparkCommander patch: the window's icon from its pixels (xdg-toplevel-icon-v1,
 +// KWin), as X11's `_NET_WM_ICON`: it needs no installed desktop file.
 +fn set_toplevel_icon(globals: &Globals, toplevel: &xdg_toplevel::XdgToplevel, width: u32, height: u32, rgba: &[u8]) {
 +    use std::io::Write;
@@ -401,7 +401,7 @@ diff -ruN a/src/linux/window_icon.rs b/src/linux/window_icon.rs
 --- a/src/linux/window_icon.rs	1970-01-01 01:00:00.000000000 +0100
 +++ b/src/linux/window_icon.rs	2026-11-13 14:24:36.459511553 +0100
 @@ -0,0 +1,69 @@
-+// PowerCommander patch: a window's icon in the sizes panels show it at, each
++// SparkCommander patch: a window's icon in the sizes panels show it at, each
 +// shrunk here by averaging, so the desktop need not scale one large image
 +// (Plasma's taskbar does that roughly).
 +
@@ -474,8 +474,8 @@ diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
 --- a/src/linux/x11/client.rs	2026-11-13 14:24:36.456760805 +0100
 +++ b/src/linux/x11/client.rs	2026-11-13 14:24:36.459087086 +0100
 @@ -1,3 +1,6 @@
-+// Modified for PowerCommander (Apache-2.0, section 4b): files on the clipboard
-+// as file managers put them there. Changes are marked "PowerCommander patch".
++// Modified for SparkCommander (Apache-2.0, section 4b): files on the clipboard
++// as file managers put them there. Changes are marked "SparkCommander patch".
 +
  use anyhow::{Context as _, anyhow};
  use ashpd::WindowIdentifier;
@@ -487,7 +487,7 @@ diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
 -        state
 -            .clipboard
 -            .set_text(
-+        // PowerCommander patch: files are offered as file managers read them too.
++        // SparkCommander patch: files are offered as file managers read them too.
 +        let written = match crate::linux::clipboard_files::files_of(&item) {
 +            Some(_) => state.clipboard.set_files(
 +                &item,
@@ -509,7 +509,7 @@ diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
          {
              return state.clipboard_item.clone();
          }
-+        // PowerCommander patch: another program's files before their text.
++        // SparkCommander patch: another program's files before their text.
 +        if let Some(files) = state.clipboard.get_files(clipboard::ClipboardKind::Clipboard) {
 +            return Some(files);
 +        }
@@ -520,8 +520,8 @@ diff -ruN a/src/linux/x11/clipboard.rs b/src/linux/x11/clipboard.rs
 --- a/src/linux/x11/clipboard.rs	2026-11-13 14:24:36.456905750 +0100
 +++ b/src/linux/x11/clipboard.rs	2026-11-13 14:24:36.459210701 +0100
 @@ -1,3 +1,6 @@
-+// Modified for PowerCommander (Apache-2.0, section 4b): files on the clipboard
-+// as file managers put them there. Changes are marked "PowerCommander patch".
++// Modified for SparkCommander (Apache-2.0, section 4b): files on the clipboard
++// as file managers put them there. Changes are marked "SparkCommander patch".
 +
  /*
   * Copyright 2022 - 2025 Zed Industries, Inc.
@@ -531,7 +531,7 @@ diff -ruN a/src/linux/x11/clipboard.rs b/src/linux/x11/clipboard.rs
  
  use gpui::{ClipboardItem, Image, ImageFormat, hash};
 +
-+// PowerCommander patch: files on the clipboard.
++// SparkCommander patch: files on the clipboard.
 +use crate::linux::clipboard_files::{GNOME_FILES, KDE_CUT, URI_LIST, file_bytes, files_item};
  use strum::IntoEnumIterator;
  
@@ -541,7 +541,7 @@ diff -ruN a/src/linux/x11/clipboard.rs b/src/linux/x11/clipboard.rs
  
          // HTML: b"text/html",
 -        // URI_LIST: b"text/uri-list",
-+        // PowerCommander patch: files, as file managers put them.
++        // SparkCommander patch: files, as file managers put them.
 +        URI_LIST: b"text/uri-list",
 +        GNOME_FILES: b"x-special/gnome-copied-files",
 +        KDE_CUT: b"application/x-kde-cutselection",
@@ -552,7 +552,7 @@ diff -ruN a/src/linux/x11/clipboard.rs b/src/linux/x11/clipboard.rs
          self.inner.write(data, selection, wait)
      }
  
-+    /// PowerCommander patch: the item's text, and its files as file managers read them.
++    /// SparkCommander patch: the item's text, and its files as file managers read them.
 +    pub(crate) fn set_files(
 +        &self,
 +        item: &ClipboardItem,
@@ -576,7 +576,7 @@ diff -ruN a/src/linux/x11/clipboard.rs b/src/linux/x11/clipboard.rs
 +        self.inner.write(data, selection, wait)
 +    }
 +
-+    /// PowerCommander patch: another program's files, as file managers offer them.
++    /// SparkCommander patch: another program's files, as file managers offer them.
 +    pub(crate) fn get_files(&self, selection: ClipboardKind) -> Option<ClipboardItem> {
 +        let atoms = &self.inner.atoms;
 +        let list = self.inner.read(&[atoms.URI_LIST], selection).ok()?;
@@ -606,7 +606,7 @@ diff -ruN a/src/linux/x11/window.rs b/src/linux/x11/window.rs
 -                    u32::from_le_bytes([b, g, r, a])
 -                }));
 +                let mut property_data: Vec<u32> = Vec::new();
-+                // PowerCommander patch: every size, so the window manager picks one near what it shows.
++                // SparkCommander patch: every size, so the window manager picks one near what it shows.
 +                let sizes = match image.width() == image.height() {
 +                    true => crate::linux::window_icon::sizes(image.as_raw(), image.width()),
 +                    false => vec![(image.width(), image.as_raw().to_vec())],
@@ -624,10 +624,10 @@ diff -ruN a/src/linux.rs b/src/linux.rs
 --- a/src/linux.rs	2026-11-13 14:24:36.457134275 +0100
 +++ b/src/linux.rs	2026-11-13 14:24:36.459532252 +0100
 @@ -1,3 +1,8 @@
-+// Modified for PowerCommander (Apache-2.0, section 4b): files on the clipboard.
-+// Changes are marked "PowerCommander patch".
++// Modified for SparkCommander (Apache-2.0, section 4b): files on the clipboard.
++// Changes are marked "SparkCommander patch".
 +
-+// PowerCommander patch: files on the clipboard.
++// SparkCommander patch: files on the clipboard.
 +mod clipboard_files;
  mod dispatcher;
  mod display_connection;
@@ -636,7 +636,7 @@ diff -ruN a/src/linux.rs b/src/linux.rs
  mod text_system;
  #[cfg(feature = "wayland")]
  mod wayland;
-+// PowerCommander patch: a window's icon in several sizes.
++// SparkCommander patch: a window's icon in several sizes.
 +#[cfg(any(feature = "wayland", feature = "x11"))]
 +mod window_icon;
  #[cfg(feature = "x11")]

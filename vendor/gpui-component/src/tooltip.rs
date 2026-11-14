@@ -124,7 +124,7 @@ impl Render for Tooltip {
                 .px_2()
                 .text_sm()
                 .gap_3()
-                // PowerCommander patch: AppKit's tooltip, see `MacControls`: 11 px text
+                // SparkCommander patch: AppKit's tooltip, see `MacControls`: 11 px text
                 // in a small grey box, its corners barely round.
                 .when_some(cx.try_global::<crate::MacControls>().copied(), |this, mac| {
                     this.bg(mac.tooltip)

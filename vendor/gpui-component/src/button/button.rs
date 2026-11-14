@@ -159,7 +159,7 @@ pub enum ButtonVariant {
 }
 
 impl ButtonVariant {
-    /// PowerCommander patch: push buttons in the desktop style's colours, see
+    /// SparkCommander patch: push buttons in the desktop style's colours, see
     /// `NativeControls`; the default (primary) one in its own.
     fn native(&self, outline: bool, state: ButtonStyleState, cx: &App) -> Option<ButtonVariantStyle> {
         let native = cx.try_global::<crate::NativeControls>().copied()?;
@@ -183,7 +183,7 @@ impl ButtonVariant {
         Some(ButtonVariantStyle { bg: bg.into(), border, fg, underline: false, shadow: false })
     }
 
-    /// PowerCommander patch: AppKit's push buttons, see `MacControls`: filled,
+    /// SparkCommander patch: AppKit's push buttons, see `MacControls`: filled,
     /// unframed, the default (primary) one in the accent; no change on hover.
     fn mac(&self, state: Option<ButtonStyleState>, cx: &App) -> Option<ButtonVariantStyle> {
         let mac = cx.try_global::<crate::MacControls>().copied()?;
@@ -657,12 +657,12 @@ impl RenderOnce for Button {
         let style: ButtonVariant = self.variant;
         let native_framed = cx.has_global::<crate::NativeControls>()
             && matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Secondary);
-        // PowerCommander patch: push buttons as the Qt style draws them, see `ToolkitControls`.
+        // SparkCommander patch: push buttons as the Qt style draws them, see `ToolkitControls`.
         let qt = matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Default | ButtonVariant::Secondary)
             && !self.shows_selected_style();
         let qt = qt.then(|| cx.try_global::<crate::ToolkitControls>().cloned()).flatten();
         let qt_default = self.variant == ButtonVariant::Primary;
-        // PowerCommander patch: AppKit's push buttons are 24 px, see `MacControls`.
+        // SparkCommander patch: AppKit's push buttons are 24 px, see `MacControls`.
         let mac_push = cx.has_global::<crate::MacControls>()
             && !cx.has_global::<crate::NativeControls>()
             && self.variant.is_mac_push();
@@ -790,7 +790,7 @@ impl RenderOnce for Button {
             .when(self.border_corners.bottom_right, |this| {
                 this.rounded_br(rounding)
             })
-            // PowerCommander patch: every native push button is framed, see `NativeControls`.
+            // SparkCommander patch: every native push button is framed, see `NativeControls`.
             .when(qt.is_none() && (self.variant.is_default() || self.outline || native_framed), |this| {
                 this.when(self.border_edges.left, |this| this.border_l_1())
                     .when(self.border_edges.right, |this| this.border_r_1())
@@ -862,7 +862,7 @@ impl RenderOnce for Button {
                         .min_w_0()
                         .whitespace_nowrap()
                         .text_ellipsis()
-                        // PowerCommander patch: GNOME's labels are bold, see `NativeControls`.
+                        // SparkCommander patch: GNOME's labels are bold, see `NativeControls`.
                         .when(native_bold, |this| this.font_weight(gpui::FontWeight::BOLD))
                         .child(label),
                 )
@@ -893,7 +893,7 @@ impl RenderOnce for Button {
                         .refine_style(&instance_style)
                 })
                 .disabled(|style| {
-                    // PowerCommander patch: the Qt style's disabled button has its own fill.
+                    // SparkCommander patch: the Qt style's disabled button has its own fill.
                     let style = match qt.is_some() {
                         true => style,
                         false => style.bg(disabled_style.bg).border_color(disabled_style.border),
@@ -917,7 +917,7 @@ impl RenderOnce for Button {
         .track_focus(&focus_handle)
         .tab_index(self.tab_index)
         .tab_stop(self.tab_stop)
-        // PowerCommander patch: Windows' darker bottom edge of the frame, see `NativeControls`.
+        // SparkCommander patch: Windows' darker bottom edge of the frame, see `NativeControls`.
         .when_some(native_edge, |this, edge| {
             this.relative().child(
                 div().absolute().left(rounding).right(rounding).bottom(gpui::px(-1.)).h(gpui::px(1.)).bg(edge),

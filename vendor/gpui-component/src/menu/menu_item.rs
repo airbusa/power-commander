@@ -102,7 +102,7 @@ impl RenderOnce for MenuItemElement {
             .px_2()
             .text_base()
             .text_color(cx.theme().foreground)
-            // PowerCommander patch: the highlighted item framed in `ring`, as KDE's.
+            // SparkCommander patch: the highlighted item framed in `ring`, as KDE's.
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().transparent)

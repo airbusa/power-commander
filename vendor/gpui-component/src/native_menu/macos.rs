@@ -200,7 +200,7 @@ fn ns_image_for_icon(
     NSImage::initWithData(NSImage::alloc(), &data)
 }
 
-/// PowerCommander patch: an entry of a drawn menu shown by AppKit, see
+/// SparkCommander patch: an entry of a drawn menu shown by AppKit, see
 /// `PopupMenu::show_native`.
 pub(crate) enum NativeEntry {
     Separator,
@@ -220,7 +220,7 @@ pub(crate) enum NativeEntry {
     },
 }
 
-/// PowerCommander patch: shows `entries` as an `NSMenu` at `position`; `picked`
+/// SparkCommander patch: shows `entries` as an `NSMenu` at `position`; `picked`
 /// gets the path to the item chosen, its index in each menu down to it.
 pub(crate) fn pop_up_entries(
     entries: Vec<NativeEntry>,
@@ -363,7 +363,7 @@ fn key_equivalent(stroke: &gpui::Keystroke) -> Option<(String, objc2_app_kit::NS
     Some((key, flags))
 }
 
-/// PowerCommander patch: a pop-up button's menu as AppKit shows it, the chosen
+/// SparkCommander patch: a pop-up button's menu as AppKit shows it, the chosen
 /// row over the button and the menu at least as wide; `chosen` gets the row picked.
 pub(crate) fn pop_up_list(
     labels: Vec<gpui::SharedString>,

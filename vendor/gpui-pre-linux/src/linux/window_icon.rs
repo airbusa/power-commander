@@ -1,4 +1,4 @@
-// PowerCommander patch: a window's icon in the sizes panels show it at, each
+// SparkCommander patch: a window's icon in the sizes panels show it at, each
 // shrunk here by averaging, so the desktop need not scale one large image
 // (Plasma's taskbar does that roughly).
 

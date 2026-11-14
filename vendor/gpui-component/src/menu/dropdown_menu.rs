@@ -135,7 +135,7 @@ where
                         menu.update(cx, |menu, cx| {
                             menu.set_trigger_focus(Some(trigger_focus.clone()), cx)
                         });
-                        // PowerCommander patch: on macOS, AppKit's own menu below the
+                        // SparkCommander patch: on macOS, AppKit's own menu below the
                         // button, see `MacControls`; the popover closes at once.
                         #[cfg(target_os = "macos")]
                         {
@@ -202,7 +202,7 @@ struct TriggerFocus {
 #[derive(Default)]
 struct TriggerFocusState {
     focus_handle: Option<FocusHandle>,
-    /// PowerCommander patch: where the trigger was last drawn, for a native menu.
+    /// SparkCommander patch: where the trigger was last drawn, for a native menu.
     bounds: Rc<Cell<Bounds<Pixels>>>,
 }
 

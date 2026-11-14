@@ -803,7 +803,7 @@ impl X11WindowState {
             if let Some(image) = params.icon {
                 // https://specifications.freedesktop.org/wm-spec/1.4/ar01s05.html#id-1.6.13
                 let mut property_data: Vec<u32> = Vec::new();
-                // PowerCommander patch: every size, so the window manager picks one near what it shows.
+                // SparkCommander patch: every size, so the window manager picks one near what it shows.
                 let sizes = match image.width() == image.height() {
                     true => crate::linux::window_icon::sizes(image.as_raw(), image.width()),
                     false => vec![(image.width(), image.as_raw().to_vec())],

@@ -1,7 +1,7 @@
-// Modified for PowerCommander (Apache-2.0, section 4b): files on the clipboard.
-// Changes are marked "PowerCommander patch".
+// Modified for SparkCommander (Apache-2.0, section 4b): files on the clipboard.
+// Changes are marked "SparkCommander patch".
 
-// PowerCommander patch: files on the clipboard.
+// SparkCommander patch: files on the clipboard.
 mod clipboard_files;
 mod dispatcher;
 mod display_connection;
@@ -13,7 +13,7 @@ mod system_notifications;
 mod text_system;
 #[cfg(feature = "wayland")]
 mod wayland;
-// PowerCommander patch: a window's icon in several sizes.
+// SparkCommander patch: a window's icon in several sizes.
 #[cfg(any(feature = "wayland", feature = "x11"))]
 mod window_icon;
 #[cfg(feature = "x11")]

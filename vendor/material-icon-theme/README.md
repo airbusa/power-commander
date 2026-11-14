@@ -11,8 +11,8 @@ source https://github.com/material-extensions/vscode-material-icon-theme), unmod
   (https://pictogrammers.com/library/mdi/) and Material Symbols
   (https://fonts.google.com/icons), both Apache 2.0.
 
-`pc-core` reads the mapping; `pc-gui` embeds the SVGs at build time.
+`sc-core` reads the mapping; `sc-gui` embeds the SVGs at build time.
 
 The `.vsix` from Open VSX had SHA-256
 `55b565f200881abfd807baf9be52fce45fd52fef013ba71b0f8394984ce1ae06` (checked).
-To update: unpack a newer `.vsix` the same way and run `cargo test -p pc-core`.
+To update: unpack a newer `.vsix` the same way and run `cargo test -p sc-core`.

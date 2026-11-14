@@ -197,7 +197,7 @@ pub(crate) fn checkbox_check_icon(
         window,
         cx,
     );
-    // PowerCommander patch: the desktop style's mark, see `NativeControls`;
+    // SparkCommander patch: the desktop style's mark, see `NativeControls`;
     // AppKit's, bolder, on the accent, see `MacControls`.
     let mac = cx.try_global::<crate::MacControls>().copied();
     let color = match (cx.try_global::<crate::NativeControls>(), mac) {
@@ -264,7 +264,7 @@ impl RenderOnce for Checkbox {
         let radius = cx.theme().radius.min(px(4.));
         let disabled_text_color = cx.theme().muted_foreground;
         let instance_style = self.style.clone();
-        // PowerCommander patch: see `ToolkitControls`.
+        // SparkCommander patch: see `ToolkitControls`.
         let qt = cx.try_global::<crate::ToolkitControls>().cloned();
         base.role(self.role)
             .group(crate::toolkit::CHECKBOX)
@@ -313,7 +313,7 @@ impl RenderOnce for Checkbox {
                     .when(has_content, |this| this.mt(indicator_size * 0.125))
                     .flex_shrink_0()
                     .border_1()
-                    // PowerCommander patch: the Qt style's box, else the desktop style's, see `ToolkitControls`, `NativeControls`;
+                    // SparkCommander patch: the Qt style's box, else the desktop style's, see `ToolkitControls`, `NativeControls`;
                     // AppKit's, see `MacControls`.
                     .map(|this| match (&qt, cx.try_global::<crate::NativeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
                         (Some(qt), _, _) => {

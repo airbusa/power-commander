@@ -1,7 +1,7 @@
 # libmpv 0.42.0 (built for macOS and Linux), and for Windows
 
 The viewer plays video and sound with libmpv, and shows HEIC and AVIF photos.
-Power Commander uses only its own, on every system, never the system's (on
+Spark Commander uses only its own, on every system, never the system's (on
 Fedora its FFmpeg lacks H.264 and HEVC). Like PDFium it is not in git: get it
 once after cloning, and again after an update.
 
@@ -30,7 +30,7 @@ mpv draws with OpenGL (WGL); where it is too old for mpv, as Windows' own
 1.1 in Remote Desktop, on the CPU (mpv's software renderer), slower.
 
 To update: change `BUILD` and `URL` in `fetch.bat` and the two digests in
-`SHA256SUMS`, run it, and `cargo test -p pc-core media -- --ignored`.
+`SHA256SUMS`, run it, and `cargo test -p sc-core media -- --ignored`.
 
 ## macOS
 
@@ -46,9 +46,9 @@ What is built:
 - FFmpeg as LGPL (no `--enable-gpl`): every decoder, demuxer and filter, no
   encoders, muxers or devices; VideoToolbox decodes in hardware.
 - mpv as a library only, LGPL (`-Dgpl=false`): OpenGL in the context
-  pc-core makes, Core Audio. No Cocoa: in 0.42 its code needs mpv's Swift
+  sc-core makes, Core Audio. No Cocoa: in 0.42 its code needs mpv's Swift
   part; so VideoToolbox's frames are copied out rather than handed to
-  OpenGL, as pc-core reads each frame back anyway.
+  OpenGL, as sc-core reads each frame back anyway.
 - Everything else with all optional features off, but FreeType in HarfBuzz,
   Core Text in libass and OpenGL in libplacebo.
 
@@ -65,7 +65,7 @@ desktop has them), so `linux-<arch>` holds `libmpv.so.2` and the 10 libraries
 of ours it loads, 32 MB, found beside it (`$ORIGIN`), stripped. FFmpeg has
 lavfi's device (none of the system's), which the frames test plays, and no
 bzip2. No VAAPI, which would make `libva` a must: video is decoded on the
-processor, as pc-core reads each frame back anyway. Built in Ubuntu 20.04,
+processor, as sc-core reads each frame back anyway. Built in Ubuntu 20.04,
 it needs glibc 2.31 or later: Debian 11, Ubuntu 20.04, RHEL 9 and since.
 
 ## What is in it
@@ -92,4 +92,4 @@ Jinja2 3.1.6 and MarkupSafe 3.0.4.
 
 To update: change the versions in `build.sh` and their digests in
 `SHA256SUMS` (Homebrew's formulas have both), update the table, run
-`build.sh`, and `cargo test -p pc-core media -- --ignored`.
+`build.sh`, and `cargo test -p sc-core media -- --ignored`.

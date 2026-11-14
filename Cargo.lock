@@ -5617,77 +5617,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pc-core"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "crc32fast",
- "dirs 6.0.0",
- "encoding_rs",
- "flate2",
- "glow",
- "html5ever",
- "keyring",
- "khronos-egl",
- "libc",
- "libloading",
- "markup5ever_rcdom",
- "md-5",
- "memchr",
- "pdfium-render",
- "regex",
- "ring",
- "roxmltree 0.21.1",
- "russh",
- "russh-config",
- "russh-sftp",
- "rustls",
- "serde",
- "serde_json",
- "similar",
- "suppaftp",
- "tokio",
- "trash",
- "ureq",
- "wayland-client",
- "wayland-protocols",
- "windows 0.62.2",
- "zbus",
-]
-
-[[package]]
-name = "pc-gui"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "block2 0.6.2",
- "futures",
- "gpui-kit",
- "image",
- "libc",
- "objc2 0.6.5",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "pc-core",
- "raw-window-handle",
- "tree-sitter",
- "tree-sitter-xml",
- "winresource",
-]
-
-[[package]]
-name = "pc-tui"
-version = "0.1.0"
-dependencies = [
- "image",
- "pc-core",
- "ratatui",
- "ratatui-image",
- "unicode-width",
-]
-
-[[package]]
 name = "pdfium-render"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7287,6 +7216,77 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "sc-core"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "crc32fast",
+ "dirs 6.0.0",
+ "encoding_rs",
+ "flate2",
+ "glow",
+ "html5ever",
+ "keyring",
+ "khronos-egl",
+ "libc",
+ "libloading",
+ "markup5ever_rcdom",
+ "md-5",
+ "memchr",
+ "pdfium-render",
+ "regex",
+ "ring",
+ "roxmltree 0.21.1",
+ "russh",
+ "russh-config",
+ "russh-sftp",
+ "rustls",
+ "serde",
+ "serde_json",
+ "similar",
+ "suppaftp",
+ "tokio",
+ "trash",
+ "ureq",
+ "wayland-client",
+ "wayland-protocols",
+ "windows 0.62.2",
+ "zbus",
+]
+
+[[package]]
+name = "sc-gui"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "block2 0.6.2",
+ "futures",
+ "gpui-kit",
+ "image",
+ "libc",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "raw-window-handle",
+ "sc-core",
+ "tree-sitter",
+ "tree-sitter-xml",
+ "winresource",
+]
+
+[[package]]
+name = "sc-tui"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "ratatui",
+ "ratatui-image",
+ "sc-core",
+ "unicode-width",
 ]
 
 [[package]]

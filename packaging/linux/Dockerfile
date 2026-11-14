@@ -1,9 +1,9 @@
 # The Linux release's build machine: Ubuntu 20.04, glibc 2.31, so what it
 # builds runs on Debian 11, Ubuntu 20.04, RHEL 9 and every distribution since;
-# with Rust and what the app, libmpv (vendor/mpv) and pc-gtkstyle build with.
-#   docker build -t powercommander-build packaging/linux
+# with Rust and what the app, libmpv (vendor/mpv) and sc-gtkstyle build with.
+#   docker build -t sparkcommander-build packaging/linux
 # gcc 10 for libplacebo's C++20; Python 3.9 for the Meson and Jinja2 vendor/mpv
-# brings (MarkupSafe 3 needs it). pc-qtstyle needs Qt 6, which 20.04 lacks:
+# brings (MarkupSafe 3 needs it). sc-qtstyle needs Qt 6, which 20.04 lacks:
 # Dockerfile.qt builds it.
 FROM ubuntu:20.04
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \

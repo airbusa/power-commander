@@ -1,7 +1,7 @@
 // Modified for Water Data Studio (Apache-2.0, section 4b): a binding of
 // several keystrokes shows them all. Changes are marked "WDS patch".
-// Modified for PowerCommander: numpad keys show as "Num +", "Num -", "Num *"
-// and "Num /". Changes are marked "PowerCommander patch".
+// Modified for SparkCommander: numpad keys show as "Num +", "Num -", "Num *"
+// and "Num /". Changes are marked "SparkCommander patch".
 
 use gpui::{
     Action, AsKeystroke, FocusHandle, Half, InteractiveElement as _, IntoElement, KeyBinding,
@@ -228,7 +228,7 @@ impl Kbd {
             "down" => keys.push('↓'),
             #[cfg(not(target_os = "macos"))]
             "down" => keys.push_str("Down"),
-            // PowerCommander patch: GPUI names the numpad's keys by their operation.
+            // SparkCommander patch: GPUI names the numpad's keys by their operation.
             "add" => keys.push_str("Num +"),
             "subtract" => keys.push_str("Num -"),
             "multiply" => keys.push_str("Num *"),

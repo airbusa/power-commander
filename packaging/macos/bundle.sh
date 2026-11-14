@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds "Power Commander.app" for Apple silicon or Intel (`bundle.sh aarch64`
+# Builds "Spark Commander.app" for Apple silicon or Intel (`bundle.sh aarch64`
 # or `bundle.sh x86_64`; this Mac's by default), with 7-Zip and PDFium from
 # vendor/ (fetched first), and a zip of it for a release, both in
 # target/<arch>-apple-darwin/release. libmpv, rclone and the Craft tools are
@@ -22,19 +22,19 @@ for vendored in 7zip/$PLATFORM/7zz:fetch.sh pdfium/$PLATFORM/libpdfium.dylib:fet
 done
 VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
 
-cargo build --release -p pc-gui --target "$TRIPLE"
+cargo build --release -p sc-gui --target "$TRIPLE"
 
-# Programs in MacOS, libraries in Frameworks (pc-core's bundled.rs looks there), the rest in Resources.
-APP="$OUT/Power Commander.app"
+# Programs in MacOS, libraries in Frameworks (sc-core's bundled.rs looks there), the rest in Resources.
+APP="$OUT/Spark Commander.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources/licenses/PDFium"
-cp "$OUT/powercommander" "vendor/7zip/$PLATFORM/7zz" "$APP/Contents/MacOS/"
+cp "$OUT/sparkcommander" "vendor/7zip/$PLATFORM/7zz" "$APP/Contents/MacOS/"
 cp "vendor/pdfium/$PLATFORM/libpdfium.dylib" "$APP/Contents/Frameworks/"
 LICENSES="$APP/Contents/Resources/licenses"
-cp LICENSE "$LICENSES/Power Commander.txt"
+cp LICENSE "$LICENSES/Spark Commander.txt"
 cp "vendor/7zip/$PLATFORM/License.txt" "$LICENSES/7-Zip.txt"
 cp -R "vendor/pdfium/$PLATFORM/LICENSE" "vendor/pdfium/$PLATFORM/licenses" "$LICENSES/PDFium/"
-cp packaging/macos/PowerCommander.icns "$APP/Contents/Resources/"
+cp packaging/macos/SparkCommander.icns "$APP/Contents/Resources/"
 
 # macOS 13: PDFium's. Automatic graphics switching: mpv's OpenGL leaves a
 # laptop on its integrated GPU.
@@ -46,17 +46,17 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>Power Commander</string>
+    <string>Spark Commander</string>
     <key>CFBundleExecutable</key>
-    <string>powercommander</string>
+    <string>sparkcommander</string>
     <key>CFBundleIconFile</key>
-    <string>PowerCommander</string>
+    <string>SparkCommander</string>
     <key>CFBundleIdentifier</key>
-    <string>io.github.airbusa.powercommander</string>
+    <string>io.github.airbusa.sparkcommander</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Power Commander</string>
+    <string>Spark Commander</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -68,19 +68,19 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSDesktopFolderUsageDescription</key>
-    <string>Power Commander shows and works on the files you open.</string>
+    <string>Spark Commander shows and works on the files you open.</string>
     <key>NSDocumentsFolderUsageDescription</key>
-    <string>Power Commander shows and works on the files you open.</string>
+    <string>Spark Commander shows and works on the files you open.</string>
     <key>NSDownloadsFolderUsageDescription</key>
-    <string>Power Commander shows and works on the files you open.</string>
+    <string>Spark Commander shows and works on the files you open.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Power Commander connects to the SFTP and FTP servers you open on your network.</string>
+    <string>Spark Commander connects to the SFTP and FTP servers you open on your network.</string>
     <key>NSNetworkVolumesUsageDescription</key>
-    <string>Power Commander shows and works on the files you open.</string>
+    <string>Spark Commander shows and works on the files you open.</string>
     <key>NSRemovableVolumesUsageDescription</key>
-    <string>Power Commander shows and works on the files you open.</string>
+    <string>Spark Commander shows and works on the files you open.</string>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
 </dict>
@@ -95,7 +95,7 @@ codesign "$@" "$APP"/Contents/Frameworks/*.dylib "$APP/Contents/MacOS/7zz"
 codesign "$@" "$APP"
 codesign --verify --strict "$APP"
 
-ZIP="$OUT/power-commander-$VERSION-macos-$ARCH.zip"
+ZIP="$OUT/spark-commander-$VERSION-macos-$ARCH.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 echo "$APP"

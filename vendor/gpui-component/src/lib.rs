@@ -20,13 +20,13 @@ mod title_bar;
 mod touch_selection;
 mod virtual_list;
 mod window_border;
-// PowerCommander patch: see `NativeControls`.
+// SparkCommander patch: see `NativeControls`.
 mod native;
 pub use native::NativeControls;
-// PowerCommander patch: see `ToolkitControls`.
+// SparkCommander patch: see `ToolkitControls`.
 mod toolkit;
 pub use toolkit::{StateImages, ToolkitControls};
-// PowerCommander patch: see `MacControls`.
+// SparkCommander patch: see `MacControls`.
 mod mac;
 pub use mac::MacControls;
 mod window_ext;

@@ -21,14 +21,14 @@ const RESIZE_HIT_SIZE: Pixels = px(4.0);
 /// corners, so keep the generic window wrapper square until rounded content masks exist.
 pub(crate) const BORDER_RADIUS: Pixels = px(0.0);
 
-/// PowerCommander patch: the top corners' radius of a window drawing its own
+/// SparkCommander patch: the top corners' radius of a window drawing its own
 /// frame, as the desktop's theme rounds them. The root surface and a title bar
 /// round theirs with `top_corners`, so no background shows past the curve.
 pub struct WindowCornerRadius(pub Pixels);
 
 impl gpui::Global for WindowCornerRadius {}
 
-/// PowerCommander patch: the window's top-left and top-right radius now; none
+/// SparkCommander patch: the window's top-left and top-right radius now; none
 /// on a side tiled or maximized, or framed by the system.
 pub fn top_corners(window: &Window, cx: &App) -> (Pixels, Pixels) {
     let Decorations::Client { tiling } = window.window_decorations() else {

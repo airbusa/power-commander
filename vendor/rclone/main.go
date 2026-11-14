@@ -1,4 +1,4 @@
-// rclone with only the services Power Commander offers, and the commands it runs.
+// rclone with only the services Spark Commander offers, and the commands it runs.
 package main
 
 import (

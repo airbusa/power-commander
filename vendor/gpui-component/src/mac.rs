@@ -1,4 +1,4 @@
-// PowerCommander patch: this file is new.
+// SparkCommander patch: this file is new.
 use gpui::{Global, Hsla};
 
 /// Controls drawn as AppKit draws them (macOS 26, measured), in the system's

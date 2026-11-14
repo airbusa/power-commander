@@ -1,5 +1,5 @@
-// Modified for PowerCommander (Apache-2.0, section 4b): files on the clipboard
-// as file managers put them there. Changes are marked "PowerCommander patch".
+// Modified for SparkCommander (Apache-2.0, section 4b): files on the clipboard
+// as file managers put them there. Changes are marked "SparkCommander patch".
 
 /*
  * Copyright 2022 - 2025 Zed Industries, Inc.
@@ -52,7 +52,7 @@ use x11rb::{
 
 use gpui::{ClipboardItem, Image, ImageFormat, hash};
 
-// PowerCommander patch: files on the clipboard.
+// SparkCommander patch: files on the clipboard.
 use crate::linux::clipboard_files::{GNOME_FILES, KDE_CUT, URI_LIST, file_bytes, files_item};
 use strum::IntoEnumIterator;
 
@@ -84,7 +84,7 @@ x11rb::atom_manager! {
         TEXT_MIME_UNKNOWN: b"text/plain",
 
         // HTML: b"text/html",
-        // PowerCommander patch: files, as file managers put them.
+        // SparkCommander patch: files, as file managers put them.
         URI_LIST: b"text/uri-list",
         GNOME_FILES: b"x-special/gnome-copied-files",
         KDE_CUT: b"application/x-kde-cutselection",
@@ -1003,7 +1003,7 @@ impl Clipboard {
         self.inner.write(data, selection, wait)
     }
 
-    /// PowerCommander patch: the item's text, and its files as file managers read them.
+    /// SparkCommander patch: the item's text, and its files as file managers read them.
     pub(crate) fn set_files(
         &self,
         item: &ClipboardItem,
@@ -1027,7 +1027,7 @@ impl Clipboard {
         self.inner.write(data, selection, wait)
     }
 
-    /// PowerCommander patch: another program's files, as file managers offer them.
+    /// SparkCommander patch: another program's files, as file managers offer them.
     pub(crate) fn get_files(&self, selection: ClipboardKind) -> Option<ClipboardItem> {
         let atoms = &self.inner.atoms;
         let list = self.inner.read(&[atoms.URI_LIST], selection).ok()?;

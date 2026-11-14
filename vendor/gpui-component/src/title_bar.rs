@@ -1,6 +1,6 @@
-// Modified for PowerCommander (Apache-2.0, section 4b): the window's buttons
+// Modified for SparkCommander (Apache-2.0, section 4b): the window's buttons
 // are those the desktop's layout names, and may be the icon theme's pictures
-// in round buttons, as GTK draws them. Changes are marked "PowerCommander patch".
+// in round buttons, as GTK draws them. Changes are marked "SparkCommander patch".
 
 use std::rc::Rc;
 
@@ -108,7 +108,7 @@ impl TitleBar {
     }
 }
 
-/// PowerCommander patch: the window buttons' pictures (minimize, maximize,
+/// SparkCommander patch: the window buttons' pictures (minimize, maximize,
 /// restore, close), SVG files drawn as GTK does, in round buttons.
 pub struct WindowButtonPictures(pub [SharedString; 4]);
 
@@ -238,7 +238,7 @@ impl RenderOnce for ControlIcon {
             .items_center()
             .text_color(fg)
             .map(|this| match picture.is_some() {
-                // PowerCommander patch: GTK's, a round button shaded under the pointer.
+                // SparkCommander patch: GTK's, a round button shaded under the pointer.
                 true => this
                     .size(px(24.))
                     .mx(px(5.))
@@ -310,7 +310,7 @@ impl RenderOnce for WindowControls {
         // compositor may support neither minimize nor maximize. Close is
         // always ours to offer.
         let mut supported = window.window_controls();
-        // PowerCommander patch: only the buttons the desktop's layout names (GNOME's default: close alone).
+        // SparkCommander patch: only the buttons the desktop's layout names (GNOME's default: close alone).
         // shortcut: they stay on the right where the layout puts them left; follow its sides when asked.
         if let Some(layout) = cx.button_layout() {
             let named = |button| layout.left.iter().chain(&layout.right).any(|named| *named == Some(button));

@@ -155,7 +155,7 @@ impl RenderOnce for Slider {
             (relative(percentage.start), relative(1. - percentage.end))
         };
         let rem_size = window.rem_size();
-        // PowerCommander patch: the desktop style's groove and handle, see `NativeControls`;
+        // SparkCommander patch: the desktop style's groove and handle, see `NativeControls`;
         // AppKit's groove and pill-shaped knob, see `MacControls`.
         let native = cx.try_global::<crate::NativeControls>().copied();
         let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| native.is_none());

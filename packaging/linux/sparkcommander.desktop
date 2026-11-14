@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Spark Commander
+GenericName=File Manager
+Comment=Twin-panel file manager
+Exec=sparkcommander
+Icon=sparkcommander
+Terminal=false
+Categories=System;FileTools;FileManager;
+StartupNotify=true
+StartupWMClass=sparkcommander

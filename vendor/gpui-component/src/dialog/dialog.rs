@@ -1,8 +1,8 @@
 // Modified for Water Data Studio (Apache-2.0, section 4b): a dialog moves by
 // its title, can open centred over a part of the window, and fades in
 // without sliding. Changes are marked "WDS patch".
-// Modified for PowerCommander: the title is smaller and ends in "…" when
-// long; on macOS the frame is a window's. Changes are marked "PowerCommander patch".
+// Modified for SparkCommander: the title is smaller and ends in "…" when
+// long; on macOS the frame is a window's. Changes are marked "SparkCommander patch".
 
 use super::entrance::{DialogEntrance, EntranceSurface};
 use crate::root::WindowState;
@@ -352,7 +352,7 @@ pub(crate) fn overlay_color(overlay: bool, cx: &App) -> Hsla {
     cx.theme().overlay
 }
 
-/// PowerCommander patch: AppKit's red close button, grey while the window
+/// SparkCommander patch: AppKit's red close button, grey while the window
 /// is not in front, its cross shown under the pointer.
 fn mac_close_button(button: gpui_base::Button, mac: crate::MacControls, active: bool) -> impl IntoElement {
     let (fill, rim) = match active {
@@ -713,13 +713,13 @@ impl RenderOnce for Dialog {
         let laid_out = moving.clone();
         let has_title = self.title.is_some();
         let has_footer = self.footer.is_some();
-        // PowerCommander patch: AppKit's window, see `MacControls`: 16 px corners,
+        // SparkCommander patch: AppKit's window, see `MacControls`: 16 px corners,
         // a 32 px title bar of the dialog's colour, the close button on the left.
         let mac = cx
             .try_global::<crate::MacControls>()
             .copied()
             .filter(|_| !cx.has_global::<crate::NativeControls>());
-        // PowerCommander patch: WinUI's ContentDialog, see `NativeControls::command_bar`.
+        // SparkCommander patch: WinUI's ContentDialog, see `NativeControls::command_bar`.
         let command_bar = cx.try_global::<crate::NativeControls>().and_then(|native| native.command_bar);
         let band = px(if mac.is_some() { 32. } else if command_bar.is_some() { 52. } else { TITLE_BAND_HEIGHT });
         let corner = mac.map_or(cx.theme().radius_lg, |_| px(16.));
@@ -849,7 +849,7 @@ impl RenderOnce for Dialog {
                                                         None => this.bg(theme.muted).border_b_1().border_color(theme.border),
                                                     })
                                                     .rounded_t(corner - px(1.))
-                                                    // PowerCommander patch: the window title's size; a long one ends in "…".
+                                                    // SparkCommander patch: the window title's size; a long one ends in "…".
                                                     .child(
                                                         DialogTitle::new()
                                                             .text_sm()

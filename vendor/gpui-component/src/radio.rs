@@ -238,7 +238,7 @@ impl RenderOnce for Radio {
                     .flex_shrink_0()
                     .rounded_full_style(cx)
                     .border_1()
-                    // PowerCommander patch: the desktop style's circle and dot, see `NativeControls`; AppKit's, see `MacControls`.
+                    // SparkCommander patch: the desktop style's circle and dot, see `NativeControls`; AppKit's, see `MacControls`.
                     .map(|this| match (cx.try_global::<crate::NativeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
                         (None, Some(mac)) => {
                             let fill = if checked && !disabled { mac.accent } else { mac.well };

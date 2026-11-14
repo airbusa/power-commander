@@ -369,7 +369,7 @@ impl RenderOnce for TabBar {
             Size::Large => px(16.),
             _ => px(12.),
         };
-        // PowerCommander patch: AppKit's window tab bar, see `MacControls`: a
+        // SparkCommander patch: AppKit's window tab bar, see `MacControls`: a
         // rounded track holding tabs of equal width.
         let mac = match self.variant {
             TabVariant::Tab if !cx.has_global::<crate::NativeControls>() => {

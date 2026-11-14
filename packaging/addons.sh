@@ -20,7 +20,7 @@ PY=python3
 case $PLATFORM in windows-*) EXE=.exe PY=python ;; esac
 # The bundled 7-Zip zips where zip is missing (Git Bash).
 SEVENZIP=$(pwd)/vendor/7zip/windows-x86_64/7z.exe
-REPO=airbusa/power-commander
+REPO=airbusa/spark-commander
 TAG=addons
 URL=https://github.com/$REPO/releases/download/$TAG
 OUT=target/addons
@@ -112,7 +112,7 @@ make craft "$CRAFT" "vendor/craft/$PLATFORM" wordcraft-cli$EXE gridcraft-cli$EXE
 if [ "${1:-}" = --upload ] && [ -n "$MADE" ]; then
     gh release view "$TAG" -R "$REPO" >/dev/null 2>&1 ||
         gh release create "$TAG" -R "$REPO" --title "Add-ons" --latest=false \
-            --notes "Power Commander's add-ons, downloaded by Settings > Add-ons: libmpv (video and sound), rclone (online storage), the Craft tools (office documents). addons.json lists them."
+            --notes "Spark Commander's add-ons, downloaded by Settings > Add-ons: libmpv (video and sound), rclone (online storage), the Craft tools (office documents). addons.json lists them."
     # shellcheck disable=SC2086
     gh release upload "$TAG" -R "$REPO" --clobber $MADE "$MANIFEST"
 fi

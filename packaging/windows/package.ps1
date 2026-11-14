@@ -12,15 +12,15 @@ foreach ($file in "7zip\$platform\7z.exe", "pdfium\$platform\pdfium.dll") {
 $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"$' | Select-Object -First 1).Matches.Groups[1].Value
 
 $target = "$Arch-pc-windows-msvc"
-cargo build --release --target $target -p pc-gui -p pc-tui
+cargo build --release --target $target -p sc-gui -p sc-tui
 if ($LASTEXITCODE) { throw 'cargo build failed' }
 $bin = "target\$target\release"
 
-# Each tool's folder, its license inside, beside the programs: where pc-core's bundled.rs looks.
-$dir = "target\release\power-commander-$version-$platform"
+# Each tool's folder, its license inside, beside the programs: where sc-core's bundled.rs looks.
+$dir = "target\release\spark-commander-$version-$platform"
 if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
 New-Item -ItemType Directory -Force $dir | Out-Null
-Copy-Item "$bin\powercommander.exe", "$bin\pc.exe", LICENSE $dir
+Copy-Item "$bin\sparkcommander.exe", "$bin\scmd.exe", LICENSE $dir
 foreach ($tool in '7zip', 'pdfium') {
     Copy-Item -Recurse "vendor\$tool\$platform" "$dir\$tool"
 }

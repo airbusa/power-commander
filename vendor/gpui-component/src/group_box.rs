@@ -140,13 +140,13 @@ impl GroupBoxVariants for GroupBox {
 
 impl RenderOnce for GroupBox {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        // PowerCommander patch: AppKit's box, see `MacControls`: faintly filled,
+        // SparkCommander patch: AppKit's box, see `MacControls`: faintly filled,
         // unframed, 12 px corners, its title small above it.
         let mac = cx
             .try_global::<crate::MacControls>()
             .copied()
             .filter(|_| !cx.has_global::<crate::NativeControls>());
-        // PowerCommander patch: Windows' card, see `NativeControls::card`.
+        // SparkCommander patch: Windows' card, see `NativeControls::card`.
         let card = cx.try_global::<crate::NativeControls>().and_then(|native| native.card);
         let (bg, border, has_paddings): (Option<Background>, _, _) = match self.variant {
             GroupBoxVariant::Normal => (None, None, false),

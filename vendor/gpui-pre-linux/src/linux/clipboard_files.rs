@@ -1,4 +1,4 @@
-// PowerCommander patch: files on the clipboard as file managers put them
+// SparkCommander patch: files on the clipboard as file managers put them
 // there, a URI list with GNOME's and KDE's mark of a cut, so that files
 // copied or cut here paste in them, and theirs here.
 

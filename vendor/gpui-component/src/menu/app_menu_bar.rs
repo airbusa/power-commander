@@ -1,7 +1,7 @@
 // Modified for Water Data Studio (Apache-2.0, section 4b): menu-bar menus may
 // use the window's height. Changes are marked "WDS patch".
-// Modified for PowerCommander: a bar of a window's own menus, each built as
-// it opens. Changes are marked "PowerCommander patch".
+// Modified for SparkCommander: a bar of a window's own menus, each built as
+// it opens. Changes are marked "SparkCommander patch".
 
 use crate::{
     InteractiveElementExt as _, Selectable, Sizable,
@@ -21,11 +21,11 @@ use gpui::{
 
 const CONTEXT: &str = "AppMenuBar";
 
-/// PowerCommander patch: builds a window's own menu each time it opens.
+/// SparkCommander patch: builds a window's own menu each time it opens.
 pub type MenuBuilder =
     std::rc::Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
 
-/// PowerCommander patch: the app's menu, or a window's own.
+/// SparkCommander patch: the app's menu, or a window's own.
 enum Items {
     App(OwnedMenu),
     Built(MenuBuilder),
@@ -59,7 +59,7 @@ impl AppMenuBar {
         })
     }
 
-    /// PowerCommander patch: a bar of a window's own menus instead of the app's.
+    /// SparkCommander patch: a bar of a window's own menus instead of the app's.
     pub fn built(menus: Vec<(SharedString, MenuBuilder)>, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| {
             let menu_bar = cx.entity();
@@ -314,14 +314,14 @@ impl AppMenu {
 impl Render for AppMenu {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_open = self.is_open(cx);
-        // PowerCommander patch: a window's own menu is built anew as it opens,
+        // SparkCommander patch: a window's own menu is built anew as it opens,
         // as what it shows may have changed.
         if !is_open && matches!(self.items, Items::Built(_)) {
             self.popup_menu = None;
             self._subscription = None;
         }
 
-        // PowerCommander patch: an open menu's name in the accent, as KDE's.
+        // SparkCommander patch: an open menu's name in the accent, as KDE's.
         let theme = cx.theme();
         let colors = ButtonCustomVariant::new(cx)
             .color(theme.transparent)

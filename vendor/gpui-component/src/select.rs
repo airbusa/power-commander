@@ -393,7 +393,7 @@ where
     fn toggle_menu(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
 
-        // PowerCommander patch: on macOS, AppKit's own pop-up menu, see `MacControls`.
+        // SparkCommander patch: on macOS, AppKit's own pop-up menu, see `MacControls`.
         #[cfg(target_os = "macos")]
         if cx.has_global::<crate::MacControls>() && !self.searchable && !self.state.open {
             let delegate = &self.state.list.read(cx).delegate().delegate;
@@ -537,7 +537,7 @@ where
         let outline_visible = self.state.open || (is_focused && !self.state.disabled);
 
         let (bg, fg) = input_style(self.state.disabled, cx);
-        // PowerCommander patch: AppKit's pop-up button, see `MacControls`: filled
+        // SparkCommander patch: AppKit's pop-up button, see `MacControls`: filled
         // as a push button, 24 px, with its up and down chevrons.
         let mac = cx
             .try_global::<crate::MacControls>()
@@ -588,7 +588,7 @@ where
                                     this.h(px(24.)).py_0()
                                 })
                         })
-                        // PowerCommander patch: Windows' and GNOME's combo box is a push button, see `NativeControls`.
+                        // SparkCommander patch: Windows' and GNOME's combo box is a push button, see `NativeControls`.
                         .when_some(native_combo, |this, native| {
                             let [(fill, frame), (hover, hover_frame), _] = native.button;
                             this.bg(fill)

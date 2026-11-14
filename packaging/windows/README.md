@@ -21,7 +21,7 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\package.ps1 -Arch aar
 
 | In the folder | From |
 |---|---|
-| `powercommander.exe` (the app), `pc.exe` (in the terminal) | `cargo build --release`; the C runtime is linked in |
+| `sparkcommander.exe` (the app), `scmd.exe` (in the terminal) | `cargo build --release`; the C runtime is linked in |
 | `7zip\` | `vendor/7zip`, with its license |
 | `pdfium\` | `vendor/pdfium`, with its licenses |
 
@@ -31,4 +31,4 @@ downloads them (`packaging/addons.sh`, in Git Bash, makes them).
 
 ## Installing
 
-Unzip it anywhere and run `powercommander.exe`; nothing is installed.
+Unzip it anywhere and run `sparkcommander.exe`; nothing is installed.

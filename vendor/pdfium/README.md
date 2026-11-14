@@ -30,4 +30,4 @@ library in `Contents/Frameworks`, signed with the app, and the licenses in
 
 The pdfium-render crate is built for this API version (`pdfium_8125`). To
 update: change the version in both scripts, the crate's API feature and
-`SHA256SUMS`, run a fetch script, and `cargo test -p pc-core`.
+`SHA256SUMS`, run a fetch script, and `cargo test -p sc-core`.

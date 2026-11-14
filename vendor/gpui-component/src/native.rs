@@ -1,4 +1,4 @@
-// PowerCommander patch: this file is new.
+// SparkCommander patch: this file is new.
 use gpui::{Global, Hsla, Pixels};
 
 /// Controls drawn as the desktop's own style draws them (KDE's Breeze,

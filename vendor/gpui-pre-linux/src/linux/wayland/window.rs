@@ -29,7 +29,7 @@ use wayland_protocols::{
     xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1,
 };
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
-// PowerCommander patch: see `background_effect`.
+// SparkCommander patch: see `background_effect`.
 use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
@@ -111,7 +111,7 @@ pub struct WaylandWindowState {
     app_id: Option<String>,
     appearance: WindowAppearance,
     blur: Option<org_kde_kwin_blur::OrgKdeKwinBlur>,
-    // PowerCommander patch: the blur of ext-background-effect-v1.
+    // SparkCommander patch: the blur of ext-background-effect-v1.
     background_effect: Option<ExtBackgroundEffectSurfaceV1>,
     viewport: Option<wp_viewport::WpViewport>,
     outputs: HashMap<ObjectId, Output>,
@@ -600,7 +600,7 @@ impl WaylandWindowState {
                 xdg_state.toplevel.set_app_id(app_id.clone());
             }
 
-            // PowerCommander patch: see `set_toplevel_icon`.
+            // SparkCommander patch: see `set_toplevel_icon`.
             if let Some(icon) = options.icon.as_ref() {
                 set_toplevel_icon(&globals, &xdg_state.toplevel, icon.width(), icon.height(), icon.as_raw());
             }
@@ -796,7 +796,7 @@ impl Drop for WaylandWindow {
         if let Some(blur) = &state.blur {
             blur.release();
         }
-        // PowerCommander patch.
+        // SparkCommander patch.
         if let Some(effect) = &state.background_effect {
             effect.destroy();
         }
@@ -1532,7 +1532,7 @@ impl WaylandWindowStatePtr {
             if let Some(scale) = scale {
                 state.scale = scale;
             }
-            // PowerCommander patch: see `update_background_effect`.
+            // SparkCommander patch: see `update_background_effect`.
             update_background_effect(&mut state);
             let device_bounds = state.bounds.to_device_pixels(state.scale);
             if let Some(renderer) = &mut state.renderer {
@@ -2355,7 +2355,7 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
     region.destroy();
 }
 
-// PowerCommander patch: KWin 6.8 blurs only through ext-background-effect-v1,
+// SparkCommander patch: KWin 6.8 blurs only through ext-background-effect-v1,
 // which blurs no more than the region given: the window inside its shadow, so
 // it is given again on every resize.
 fn update_background_effect(state: &mut WaylandWindowState) {
@@ -2459,7 +2459,7 @@ fn inset_by_tiling(mut bounds: Bounds<Pixels>, inset: Pixels, tiling: Tiling) ->
     bounds
 }
 
-// PowerCommander patch: the window's icon from its pixels (xdg-toplevel-icon-v1,
+// SparkCommander patch: the window's icon from its pixels (xdg-toplevel-icon-v1,
 // KWin), as X11's `_NET_WM_ICON`: it needs no installed desktop file.
 fn set_toplevel_icon(globals: &Globals, toplevel: &xdg_toplevel::XdgToplevel, width: u32, height: u32, rgba: &[u8]) {
     use std::io::Write;

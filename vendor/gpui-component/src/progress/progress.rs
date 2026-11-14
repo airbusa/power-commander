@@ -93,7 +93,7 @@ impl RenderOnce for Progress {
         let mut inner_style = StyleRefinement::default();
         inner_style.corner_radii = radius;
 
-        // PowerCommander patch: the desktop style's groove and fill, see `NativeControls`.
+        // SparkCommander patch: the desktop style's groove and fill, see `NativeControls`.
         let native = cx.try_global::<crate::NativeControls>().copied();
         // AppKit's 8 px groove, rimmed, see `MacControls`.
         let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| native.is_none());

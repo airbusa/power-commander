@@ -1,11 +1,11 @@
 # The build machine for 64-bit ARM Linux, cross-compiling on x86_64: the one
 # in Dockerfile (Ubuntu 20.04, glibc 2.31), with its arm64 libraries and the
 # aarch64 compilers, gcc 10 as there.
-#   docker build -t powercommander-build-arm64 -f packaging/linux/Dockerfile.arm64 packaging/linux
+#   docker build -t sparkcommander-build-arm64 -f packaging/linux/Dockerfile.arm64 packaging/linux
 # GLib's, HarfBuzz's and PulseAudio's development packages are only unpacked:
 # installed, libglib2.0-dev:arm64 brings arm64's python3, which replaces amd64's.
-# No Qt or GTK ones (they need GLib's): pc-qtstyle and pc-gtkstyle are built on an ARM machine.
-FROM powercommander-build
+# No Qt or GTK ones (they need GLib's): sc-qtstyle and sc-gtkstyle are built on an ARM machine.
+FROM sparkcommander-build
 RUN sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list \
  && for suite in focal focal-updates focal-security; do \
         echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ $suite main universe"; \

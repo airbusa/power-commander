@@ -1,5 +1,5 @@
-// Modified for PowerCommander (Apache-2.0, section 4b): files on the clipboard
-// as file managers put them there. Changes are marked "PowerCommander patch".
+// Modified for SparkCommander (Apache-2.0, section 4b): files on the clipboard
+// as file managers put them there. Changes are marked "SparkCommander patch".
 
 use std::{
     cell::{RefCell, RefMut},
@@ -78,11 +78,11 @@ use wayland_protocols::{
     xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1,
 };
 use wayland_protocols_plasma::blur::client::{org_kde_kwin_blur, org_kde_kwin_blur_manager};
-// PowerCommander patch: blur where KDE's own protocol is gone (KWin 6.8).
+// SparkCommander patch: blur where KDE's own protocol is gone (KWin 6.8).
 use wayland_protocols::ext::background_effect::v1::client::{
     ext_background_effect_manager_v1, ext_background_effect_surface_v1,
 };
-// PowerCommander patch: the window's icon from its pixels, as X11's.
+// SparkCommander patch: the window's icon from its pixels, as X11's.
 use wayland_protocols::xdg::toplevel_icon::v1::client::{
     xdg_toplevel_icon_manager_v1, xdg_toplevel_icon_v1,
 };
@@ -1479,7 +1479,7 @@ impl WaylandConnection {
             return;
         };
         if state.mouse_focused_window.is_some() || state.keyboard_focused_window.is_some() {
-            // PowerCommander patch: files are offered as file managers read them too.
+            // SparkCommander patch: files are offered as file managers read them too.
             let files = crate::linux::clipboard_files::files_of(&item).is_some();
             state.clipboard.set(item);
             let Some(serial) = state.serial_tracker.selection_serial() else {

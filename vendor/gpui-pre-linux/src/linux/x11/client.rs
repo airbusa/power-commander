@@ -1,5 +1,5 @@
-// Modified for PowerCommander (Apache-2.0, section 4b): files on the clipboard
-// as file managers put them there. Changes are marked "PowerCommander patch".
+// Modified for SparkCommander (Apache-2.0, section 4b): files on the clipboard
+// as file managers put them there. Changes are marked "SparkCommander patch".
 
 use anyhow::{Context as _, anyhow};
 use ashpd::WindowIdentifier;
@@ -1841,7 +1841,7 @@ impl X11Client {
 
     pub(crate) fn write_to_clipboard(&self, item: gpui::ClipboardItem) {
         let mut state = self.0.borrow_mut();
-        // PowerCommander patch: files are offered as file managers read them too.
+        // SparkCommander patch: files are offered as file managers read them too.
         let written = match crate::linux::clipboard_files::files_of(&item) {
             Some(_) => state.clipboard.set_files(
                 &item,
@@ -1879,7 +1879,7 @@ impl X11Client {
         {
             return state.clipboard_item.clone();
         }
-        // PowerCommander patch: another program's files before their text.
+        // SparkCommander patch: another program's files before their text.
         if let Some(files) = state.clipboard.get_files(clipboard::ClipboardKind::Clipboard) {
             return Some(files);
         }

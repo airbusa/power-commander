@@ -719,7 +719,7 @@ impl RenderOnce for Input {
         } else {
             bg
         };
-        // PowerCommander patch: Windows' fields, see `NativeControls`: a button's
+        // SparkCommander patch: Windows' fields, see `NativeControls`: a button's
         // fill, the page's when focused, and a bottom line, the accent's when focused.
         let native = cx.try_global::<crate::NativeControls>().copied().filter(|_| self.appearance && self.bordered);
         let field_line = native.and_then(|native| native.field_line.map(|line| (line, native.checked_fill)));
@@ -811,7 +811,7 @@ impl RenderOnce for Input {
                     .when(self.bordered, |this| {
                         this.border_1().border_color(cx.theme().input)
                     })
-                    // PowerCommander patch: AppKit's text field, see `MacControls`: a
+                    // SparkCommander patch: AppKit's text field, see `MacControls`: a
                     // faint frame, 6 px corners, 24 px as the push buttons beside it.
                     .when_some(mac, |this, mac| {
                         this.rounded(px(6.))

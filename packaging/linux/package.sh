@@ -2,7 +2,7 @@
 # Builds the Linux release for this computer's processor: a folder with the
 # programs, 7-Zip, PDFium and rclone from vendor/ (fetched or built first),
 # the menu entry and icons, and a tar.gz of it, both in target/release.
-# BIN: a folder with powercommander and pc (and the style helpers) already built
+# BIN: a folder with sparkcommander and scmd (and the style helpers) already built
 # (for another distribution, in its container); unset, they are built here.
 set -eu
 cd "$(dirname "$0")/../.."
@@ -21,18 +21,18 @@ VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
 
 if [ -z "${BIN:-}" ]; then
     [ "$ARCH" = "$(uname -m)" ] || { echo "BIN: a folder with the programs built for $ARCH" >&2; exit 1; }
-    cargo build --release -p pc-gui -p pc-tui
+    cargo build --release -p sc-gui -p sc-tui
     BIN=${CARGO_TARGET_DIR:-target}/release
 fi
 
-# Each tool's folder, its license inside, beside the programs: where pc-core's bundled.rs looks.
-DIR=target/release/power-commander-$VERSION-linux-$ARCH
+# Each tool's folder, its license inside, beside the programs: where sc-core's bundled.rs looks.
+DIR=target/release/spark-commander-$VERSION-linux-$ARCH
 rm -rf "$DIR"
 mkdir -p "$DIR/share/applications" "$DIR/share/icons"
-cp "$BIN/powercommander" "$BIN/pc" "$DIR/"
+cp "$BIN/sparkcommander" "$BIN/scmd" "$DIR/"
 # The desktop's look through its toolkit, KDE's Qt style and the GTK 3 theme
 # of Xfce, MATE and Cinnamon: built with the oldest Qt 6 and GTK 3 the release is for.
-for helper in pc-qtstyle:Qt6Widgets pc-gtkstyle:gtk+-3.0; do
+for helper in sc-qtstyle:Qt6Widgets sc-gtkstyle:gtk+-3.0; do
     name=${helper%%:*}
     if [ -e "$BIN/$name" ]; then
         cp "$BIN/$name" "$DIR/"
@@ -46,7 +46,7 @@ for tool in 7zip pdfium rclone; do
     cp -R "vendor/$tool/$PLATFORM" "$DIR/$tool"
 done
 cp LICENSE "$DIR/"
-cp packaging/linux/powercommander.desktop "$DIR/share/applications/"
+cp packaging/linux/sparkcommander.desktop "$DIR/share/applications/"
 cp -R packaging/linux/hicolor "$DIR/share/icons/"
 
 tar -czf "$DIR.tar.gz" -C target/release "$(basename "$DIR")"

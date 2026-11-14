@@ -1,5 +1,5 @@
-// Modified for PowerCommander: exports MenuBuilder. Changes are marked
-// "PowerCommander patch".
+// Modified for SparkCommander: exports MenuBuilder. Changes are marked
+// "SparkCommander patch".
 
 use gpui::App;
 
@@ -9,7 +9,7 @@ mod dropdown_menu;
 mod menu_item;
 mod popup_menu;
 
-// PowerCommander patch: MenuBuilder.
+// SparkCommander patch: MenuBuilder.
 pub use app_menu_bar::{AppMenuBar, MenuBuilder};
 pub use context_menu::{ContextMenu, ContextMenuExt, ContextMenuState};
 pub use dropdown_menu::DropdownMenu;

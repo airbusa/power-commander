@@ -1,8 +1,8 @@
 // Modified for Water Data Studio (Apache-2.0, section 4b): a long menu's
 // scrollbar shows while it scrolls. Changes are marked "WDS patch".
-// Modified for PowerCommander: menus take the window's height, scroll only
+// Modified for SparkCommander: menus take the window's height, scroll only
 // past it and show no scrollbar; `with_menu_items` is public. Changes are
-// marked "PowerCommander patch".
+// marked "SparkCommander patch".
 
 use crate::ThemeStyled as _;
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
@@ -448,7 +448,7 @@ impl PopupMenu {
         self
     }
 
-    /// PowerCommander patch: no effect; every menu scrolls only past the window's height.
+    /// SparkCommander patch: no effect; every menu scrolls only past the window's height.
     pub fn scrollable(self, _scrollable: bool) -> Self {
         self
     }
@@ -785,7 +785,7 @@ impl PopupMenu {
         self
     }
 
-    // PowerCommander patch: public, so a ☰ button's menu holds the app's menus as the menu bar does.
+    // SparkCommander patch: public, so a ☰ button's menu holds the app's menus as the menu bar does.
     pub fn with_menu_items<I>(
         mut self,
         items: impl IntoIterator<Item = I>,
@@ -903,7 +903,7 @@ impl PopupMenu {
         window.dispatch_action(action.boxed_clone(), cx);
     }
 
-    /// PowerCommander patch: on macOS, shows the built menu as an `NSMenu` at
+    /// SparkCommander patch: on macOS, shows the built menu as an `NSMenu` at
     /// `position`, see `MacControls`, unless an item draws itself; whether it did.
     /// The item picked runs as a click on it would.
     #[cfg(target_os = "macos")]
@@ -1553,7 +1553,7 @@ impl Render for PopupMenu {
         let view = cx.entity().clone();
         let items_count = self.menu_items.len();
 
-        // PowerCommander patch: the window's height (upstream: half of it, at most 450px).
+        // SparkCommander patch: the window's height (upstream: half of it, at most 450px).
         let max_height = self
             .max_height
             .unwrap_or_else(|| window.viewport_size().height - px(16.));

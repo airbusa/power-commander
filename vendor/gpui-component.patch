@@ -5,7 +5,7 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
  }
  
  impl ButtonVariant {
-+    /// PowerCommander patch: push buttons in the desktop style's colours, see
++    /// SparkCommander patch: push buttons in the desktop style's colours, see
 +    /// `NativeControls`; the default (primary) one in its own.
 +    fn native(&self, outline: bool, state: ButtonStyleState, cx: &App) -> Option<ButtonVariantStyle> {
 +        let native = cx.try_global::<crate::NativeControls>().copied()?;
@@ -29,7 +29,7 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
 +        Some(ButtonVariantStyle { bg: bg.into(), border, fg, underline: false, shadow: false })
 +    }
 +
-+    /// PowerCommander patch: AppKit's push buttons, see `MacControls`: filled,
++    /// SparkCommander patch: AppKit's push buttons, see `MacControls`: filled,
 +    /// unframed, the default (primary) one in the accent; no change on hover.
 +    fn mac(&self, state: Option<ButtonStyleState>, cx: &App) -> Option<ButtonVariantStyle> {
 +        let mac = cx.try_global::<crate::MacControls>().copied()?;
@@ -61,12 +61,12 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
          let style: ButtonVariant = self.variant;
 +        let native_framed = cx.has_global::<crate::NativeControls>()
 +            && matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Secondary);
-+        // PowerCommander patch: push buttons as the Qt style draws them, see `ToolkitControls`.
++        // SparkCommander patch: push buttons as the Qt style draws them, see `ToolkitControls`.
 +        let qt = matches!(self.variant, ButtonVariant::Primary | ButtonVariant::Default | ButtonVariant::Secondary)
 +            && !self.shows_selected_style();
 +        let qt = qt.then(|| cx.try_global::<crate::ToolkitControls>().cloned()).flatten();
 +        let qt_default = self.variant == ButtonVariant::Primary;
-+        // PowerCommander patch: AppKit's push buttons are 24 px, see `MacControls`.
++        // SparkCommander patch: AppKit's push buttons are 24 px, see `MacControls`.
 +        let mac_push = cx.has_global::<crate::MacControls>()
 +            && !cx.has_global::<crate::NativeControls>()
 +            && self.variant.is_mac_push();
@@ -124,7 +124,7 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
                  this.rounded_br(rounding)
              })
 -            .when(self.variant.is_default() || self.outline, |this| {
-+            // PowerCommander patch: every native push button is framed, see `NativeControls`.
++            // SparkCommander patch: every native push button is framed, see `NativeControls`.
 +            .when(qt.is_none() && (self.variant.is_default() || self.outline || native_framed), |this| {
                  this.when(self.border_edges.left, |this| this.border_l_1())
                      .when(self.border_edges.right, |this| this.border_r_1())
@@ -141,7 +141,7 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
                          .min_w_0()
                          .whitespace_nowrap()
                          .text_ellipsis()
-+                        // PowerCommander patch: GNOME's labels are bold, see `NativeControls`.
++                        // SparkCommander patch: GNOME's labels are bold, see `NativeControls`.
 +                        .when(native_bold, |this| this.font_weight(gpui::FontWeight::BOLD))
                          .child(label),
                  )
@@ -150,7 +150,7 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
                          .refine_style(&instance_style)
                  })
                  .disabled(|style| {
-+                    // PowerCommander patch: the Qt style's disabled button has its own fill.
++                    // SparkCommander patch: the Qt style's disabled button has its own fill.
 +                    let style = match qt.is_some() {
 +                        true => style,
 +                        false => style.bg(disabled_style.bg).border_color(disabled_style.border),
@@ -166,7 +166,7 @@ diff -ruN a/src/button/button.rs b/src/button/button.rs
          .track_focus(&focus_handle)
          .tab_index(self.tab_index)
          .tab_stop(self.tab_stop)
-+        // PowerCommander patch: Windows' darker bottom edge of the frame, see `NativeControls`.
++        // SparkCommander patch: Windows' darker bottom edge of the frame, see `NativeControls`.
 +        .when_some(native_edge, |this, edge| {
 +            this.relative().child(
 +                div().absolute().left(rounding).right(rounding).bottom(gpui::px(-1.)).h(gpui::px(1.)).bg(edge),
@@ -241,7 +241,7 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
 -        cx.theme().primary_foreground.opacity(0.5)
 -    } else {
 -        cx.theme().primary_foreground
-+    // PowerCommander patch: the desktop style's mark, see `NativeControls`;
++    // SparkCommander patch: the desktop style's mark, see `NativeControls`;
 +    // AppKit's, bolder, on the accent, see `MacControls`.
 +    let mac = cx.try_global::<crate::MacControls>().copied();
 +    let color = match (cx.try_global::<crate::NativeControls>(), mac) {
@@ -283,7 +283,7 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
          let radius = cx.theme().radius.min(px(4.));
          let disabled_text_color = cx.theme().muted_foreground;
          let instance_style = self.style.clone();
-+        // PowerCommander patch: see `ToolkitControls`.
++        // SparkCommander patch: see `ToolkitControls`.
 +        let qt = cx.try_global::<crate::ToolkitControls>().cloned();
          base.role(self.role)
 +            .group(crate::toolkit::CHECKBOX)
@@ -310,7 +310,7 @@ diff -ruN a/src/checkbox.rs b/src/checkbox.rs
 -                                style
 -                                    .border_color(disabled_indicator_color)
 -                                    .when(checked, |style| style.bg(disabled_indicator_color))
-+                    // PowerCommander patch: the Qt style's box, else the desktop style's, see `ToolkitControls`, `NativeControls`;
++                    // SparkCommander patch: the Qt style's box, else the desktop style's, see `ToolkitControls`, `NativeControls`;
 +                    // AppKit's, see `MacControls`.
 +                    .map(|this| match (&qt, cx.try_global::<crate::NativeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
 +                        (Some(qt), _, _) => {
@@ -390,8 +390,8 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a dialog moves by
 +// its title, can open centred over a part of the window, and fades in
 +// without sliding. Changes are marked "WDS patch".
-+// Modified for PowerCommander: the title is smaller and ends in "…" when
-+// long; on macOS the frame is a window's. Changes are marked "PowerCommander patch".
++// Modified for SparkCommander: the title is smaller and ends in "…" when
++// long; on macOS the frame is a window's. Changes are marked "SparkCommander patch".
 +
  use super::entrance::{DialogEntrance, EntranceSurface};
  use crate::root::WindowState;
@@ -464,7 +464,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
      cx.theme().overlay
  }
  
-+/// PowerCommander patch: AppKit's red close button, grey while the window
++/// SparkCommander patch: AppKit's red close button, grey while the window
 +/// is not in front, its cross shown under the pointer.
 +fn mac_close_button(button: gpui_base::Button, mac: crate::MacControls, active: bool) -> impl IntoElement {
 +    let (fill, rim) = match active {
@@ -540,7 +540,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
 +        };
 +        let laid_out = moving.clone();
 +        let has_title = self.title.is_some();
-+        // PowerCommander patch: AppKit's window, see `MacControls`: 16 px corners,
++        // SparkCommander patch: AppKit's window, see `MacControls`: 16 px corners,
 +        // a 32 px title bar of the dialog's colour, the close button on the left.
 +        let mac = cx
 +            .try_global::<crate::MacControls>()
@@ -607,7 +607,7 @@ diff -ruN a/src/dialog/dialog.rs b/src/dialog/dialog.rs
 +                                                        None => this.bg(theme.muted).border_b_1().border_color(theme.border),
 +                                                    })
 +                                                    .rounded_t(corner - px(1.))
-+                                                    // PowerCommander patch: the window title's size; a long one ends in "…".
++                                                    // SparkCommander patch: the window title's size; a long one ends in "…".
 +                                                    .child(
 +                                                        DialogTitle::new()
 +                                                            .text_sm()
@@ -751,7 +751,7 @@ diff -ruN a/src/group_box.rs b/src/group_box.rs
  
  impl RenderOnce for GroupBox {
      fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-+        // PowerCommander patch: AppKit's box, see `MacControls`: faintly filled,
++        // SparkCommander patch: AppKit's box, see `MacControls`: faintly filled,
 +        // unframed, 12 px corners, its title small above it.
 +        let mac = cx
 +            .try_global::<crate::MacControls>()
@@ -867,7 +867,7 @@ diff -ruN a/src/input/input.rs b/src/input/input.rs
          } else {
              bg
          };
-+        // PowerCommander patch: Windows' fields, see `NativeControls`: a button's
++        // SparkCommander patch: Windows' fields, see `NativeControls`: a button's
 +        // fill, the page's when focused, and a bottom line, the accent's when focused.
 +        let native = cx.try_global::<crate::NativeControls>().copied().filter(|_| self.appearance && self.bordered);
 +        let field_line = native.and_then(|native| native.field_line.map(|line| (line, native.checked_fill)));
@@ -895,7 +895,7 @@ diff -ruN a/src/input/input.rs b/src/input/input.rs
                      .when(self.bordered, |this| {
                          this.border_1().border_color(cx.theme().input)
                      })
-+                    // PowerCommander patch: AppKit's text field, see `MacControls`: a
++                    // SparkCommander patch: AppKit's text field, see `MacControls`: a
 +                    // faint frame, 6 px corners, 24 px as the push buttons beside it.
 +                    .when_some(mac, |this, mac| {
 +                        this.rounded(px(6.))
@@ -942,8 +942,8 @@ diff -ruN a/src/kbd.rs b/src/kbd.rs
 @@ -1,3 +1,8 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a binding of
 +// several keystrokes shows them all. Changes are marked "WDS patch".
-+// Modified for PowerCommander: numpad keys show as "Num +", "Num -", "Num *"
-+// and "Num /". Changes are marked "PowerCommander patch".
++// Modified for SparkCommander: numpad keys show as "Num +", "Num -", "Num *"
++// and "Num /". Changes are marked "SparkCommander patch".
 +
  use gpui::{
      Action, AsKeystroke, FocusHandle, Half, InteractiveElement as _, IntoElement, KeyBinding,
@@ -1007,7 +1007,7 @@ diff -ruN a/src/kbd.rs b/src/kbd.rs
              "down" => keys.push('↓'),
              #[cfg(not(target_os = "macos"))]
              "down" => keys.push_str("Down"),
-+            // PowerCommander patch: GPUI names the numpad's keys by their operation.
++            // SparkCommander patch: GPUI names the numpad's keys by their operation.
 +            "add" => keys.push_str("Num +"),
 +            "subtract" => keys.push_str("Num -"),
 +            "multiply" => keys.push_str("Num *"),
@@ -1040,13 +1040,13 @@ diff -ruN a/src/lib.rs b/src/lib.rs
  mod touch_selection;
  mod virtual_list;
  mod window_border;
-+// PowerCommander patch: see `NativeControls`.
++// SparkCommander patch: see `NativeControls`.
 +mod native;
 +pub use native::NativeControls;
-+// PowerCommander patch: see `ToolkitControls`.
++// SparkCommander patch: see `ToolkitControls`.
 +mod toolkit;
 +pub use toolkit::{StateImages, ToolkitControls};
-+// PowerCommander patch: see `MacControls`.
++// SparkCommander patch: see `MacControls`.
 +mod mac;
 +pub use mac::MacControls;
  mod window_ext;
@@ -1118,7 +1118,7 @@ diff -ruN a/src/mac.rs b/src/mac.rs
 --- a/src/mac.rs	1970-01-01 01:00:00.000000000 +0100
 +++ b/src/mac.rs	2026-11-13 08:05:02.857478301 +0100
 @@ -0,0 +1,43 @@
-+// PowerCommander patch: this file is new.
++// SparkCommander patch: this file is new.
 +use gpui::{Global, Hsla};
 +
 +/// Controls drawn as AppKit draws them (macOS 26, measured), in the system's
@@ -1167,8 +1167,8 @@ diff -ruN a/src/menu/app_menu_bar.rs b/src/menu/app_menu_bar.rs
 @@ -1,7 +1,13 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): menu-bar menus may
 +// use the window's height. Changes are marked "WDS patch".
-+// Modified for PowerCommander: a bar of a window's own menus, each built as
-+// it opens. Changes are marked "PowerCommander patch".
++// Modified for SparkCommander: a bar of a window's own menus, each built as
++// it opens. Changes are marked "SparkCommander patch".
 +
  use crate::{
      InteractiveElementExt as _, Selectable, Sizable,
@@ -1184,11 +1184,11 @@ diff -ruN a/src/menu/app_menu_bar.rs b/src/menu/app_menu_bar.rs
  
  const CONTEXT: &str = "AppMenuBar";
 +
-+/// PowerCommander patch: builds a window's own menu each time it opens.
++/// SparkCommander patch: builds a window's own menu each time it opens.
 +pub type MenuBuilder =
 +    std::rc::Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
 +
-+/// PowerCommander patch: the app's menu, or a window's own.
++/// SparkCommander patch: the app's menu, or a window's own.
 +enum Items {
 +    App(OwnedMenu),
 +    Built(MenuBuilder),
@@ -1200,7 +1200,7 @@ diff -ruN a/src/menu/app_menu_bar.rs b/src/menu/app_menu_bar.rs
          })
      }
  
-+    /// PowerCommander patch: a bar of a window's own menus instead of the app's.
++    /// SparkCommander patch: a bar of a window's own menus instead of the app's.
 +    pub fn built(menus: Vec<(SharedString, MenuBuilder)>, cx: &mut App) -> Entity<Self> {
 +        cx.new(|cx| {
 +            let menu_bar = cx.entity();
@@ -1291,14 +1291,14 @@ diff -ruN a/src/menu/app_menu_bar.rs b/src/menu/app_menu_bar.rs
  impl Render for AppMenu {
      fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
          let is_open = self.is_open(cx);
-+        // PowerCommander patch: a window's own menu is built anew as it opens,
++        // SparkCommander patch: a window's own menu is built anew as it opens,
 +        // as what it shows may have changed.
 +        if !is_open && matches!(self.items, Items::Built(_)) {
 +            self.popup_menu = None;
 +            self._subscription = None;
 +        }
  
-+        // PowerCommander patch: an open menu's name in the accent, as KDE's.
++        // SparkCommander patch: an open menu's name in the accent, as KDE's.
 +        let theme = cx.theme();
 +        let colors = ButtonCustomVariant::new(cx)
 +            .color(theme.transparent)
@@ -1327,7 +1327,7 @@ diff -ruN a/src/menu/context_menu.rs b/src/menu/context_menu.rs
                  menu.set_previous_focus(previous_focus_handle, cx);
              });
  
-+            // PowerCommander patch: on macOS, AppKit's own menu, see `MacControls`.
++            // SparkCommander patch: on macOS, AppKit's own menu, see `MacControls`.
 +            #[cfg(target_os = "macos")]
 +            if PopupMenu::show_native(&menu, position, window, cx) {
 +                shared_state.borrow_mut().open = false;
@@ -1386,7 +1386,7 @@ diff -ruN a/src/menu/dropdown_menu.rs b/src/menu/dropdown_menu.rs
                          menu.update(cx, |menu, cx| {
                              menu.set_trigger_focus(Some(trigger_focus.clone()), cx)
                          });
-+                        // PowerCommander patch: on macOS, AppKit's own menu below the
++                        // SparkCommander patch: on macOS, AppKit's own menu below the
 +                        // button, see `MacControls`; the popover closes at once.
 +                        #[cfg(target_os = "macos")]
 +                        {
@@ -1421,7 +1421,7 @@ diff -ruN a/src/menu/dropdown_menu.rs b/src/menu/dropdown_menu.rs
  #[derive(Default)]
  struct TriggerFocusState {
      focus_handle: Option<FocusHandle>,
-+    /// PowerCommander patch: where the trigger was last drawn, for a native menu.
++    /// SparkCommander patch: where the trigger was last drawn, for a native menu.
 +    bounds: Rc<Cell<Bounds<Pixels>>>,
  }
  
@@ -1488,7 +1488,7 @@ diff -ruN a/src/menu/menu_item.rs b/src/menu/menu_item.rs
              .px_2()
              .text_base()
              .text_color(cx.theme().foreground)
-+            // PowerCommander patch: the highlighted item framed in `ring`, as KDE's.
++            // SparkCommander patch: the highlighted item framed in `ring`, as KDE's.
 +            .rounded(cx.theme().radius)
 +            .border_1()
 +            .border_color(cx.theme().transparent)
@@ -1512,8 +1512,8 @@ diff -ruN a/src/menu/mod.rs b/src/menu/mod.rs
 --- a/src/menu/mod.rs	2026-11-13 07:54:07.075485788 +0100
 +++ b/src/menu/mod.rs	2026-11-13 08:05:02.871331284 +0100
 @@ -1,3 +1,6 @@
-+// Modified for PowerCommander: exports MenuBuilder. Changes are marked
-+// "PowerCommander patch".
++// Modified for SparkCommander: exports MenuBuilder. Changes are marked
++// "SparkCommander patch".
 +
  use gpui::App;
  
@@ -1523,7 +1523,7 @@ diff -ruN a/src/menu/mod.rs b/src/menu/mod.rs
  mod popup_menu;
  
 -pub use app_menu_bar::AppMenuBar;
-+// PowerCommander patch: MenuBuilder.
++// SparkCommander patch: MenuBuilder.
 +pub use app_menu_bar::{AppMenuBar, MenuBuilder};
  pub use context_menu::{ContextMenu, ContextMenuExt, ContextMenuState};
  pub use dropdown_menu::DropdownMenu;
@@ -1534,9 +1534,9 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
 @@ -1,8 +1,13 @@
 +// Modified for Water Data Studio (Apache-2.0, section 4b): a long menu's
 +// scrollbar shows while it scrolls. Changes are marked "WDS patch".
-+// Modified for PowerCommander: menus take the window's height, scroll only
++// Modified for SparkCommander: menus take the window's height, scroll only
 +// past it and show no scrollbar; `with_menu_items` is public. Changes are
-+// marked "PowerCommander patch".
++// marked "SparkCommander patch".
 +
  use crate::ThemeStyled as _;
  use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
@@ -1569,7 +1569,7 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
 -    /// Set the menu to be scrollable to show vertical scrollbar.
 -    pub fn scrollable(mut self, scrollable: bool) -> Self {
 -        self.scrollable = scrollable;
-+    /// PowerCommander patch: no effect; every menu scrolls only past the window's height.
++    /// SparkCommander patch: no effect; every menu scrolls only past the window's height.
 +    pub fn scrollable(self, _scrollable: bool) -> Self {
          self
      }
@@ -1579,7 +1579,7 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
      }
  
 -    pub(super) fn with_menu_items<I>(
-+    // PowerCommander patch: public, so a ☰ button's menu holds the app's menus as the menu bar does.
++    // SparkCommander patch: public, so a ☰ button's menu holds the app's menus as the menu bar does.
 +    pub fn with_menu_items<I>(
          mut self,
          items: impl IntoIterator<Item = I>,
@@ -1599,7 +1599,7 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
          window.dispatch_action(action.boxed_clone(), cx);
      }
  
-+    /// PowerCommander patch: on macOS, shows the built menu as an `NSMenu` at
++    /// SparkCommander patch: on macOS, shows the built menu as an `NSMenu` at
 +    /// `position`, see `MacControls`, unless an item draws itself; whether it did.
 +    /// The item picked runs as a click on it would.
 +    #[cfg(target_os = "macos")]
@@ -1698,7 +1698,7 @@ diff -ruN a/src/menu/popup_menu.rs b/src/menu/popup_menu.rs
 -            let window_half_height = window.window_bounds().get_bounds().size.height * 0.5;
 -            window_half_height.min(px(450.))
 -        });
-+        // PowerCommander patch: the window's height (upstream: half of it, at most 450px).
++        // SparkCommander patch: the window's height (upstream: half of it, at most 450px).
 +        let max_height = self
 +            .max_height
 +            .unwrap_or_else(|| window.viewport_size().height - px(16.));
@@ -1734,7 +1734,7 @@ diff -ruN a/src/native.rs b/src/native.rs
 --- a/src/native.rs	1970-01-01 01:00:00.000000000 +0100
 +++ b/src/native.rs	2026-11-13 08:05:02.807233110 +0100
 @@ -0,0 +1,63 @@
-+// PowerCommander patch: this file is new.
++// SparkCommander patch: this file is new.
 +use gpui::{Global, Hsla, Pixels};
 +
 +/// Controls drawn as the desktop's own style draws them (KDE's Breeze,
@@ -1804,7 +1804,7 @@ diff -ruN a/src/native_menu/macos.rs b/src/native_menu/macos.rs
      NSImage::initWithData(NSImage::alloc(), &data)
  }
  
-+/// PowerCommander patch: an entry of a drawn menu shown by AppKit, see
++/// SparkCommander patch: an entry of a drawn menu shown by AppKit, see
 +/// `PopupMenu::show_native`.
 +pub(crate) enum NativeEntry {
 +    Separator,
@@ -1824,7 +1824,7 @@ diff -ruN a/src/native_menu/macos.rs b/src/native_menu/macos.rs
 +    },
 +}
 +
-+/// PowerCommander patch: shows `entries` as an `NSMenu` at `position`; `picked`
++/// SparkCommander patch: shows `entries` as an `NSMenu` at `position`; `picked`
 +/// gets the path to the item chosen, its index in each menu down to it.
 +pub(crate) fn pop_up_entries(
 +    entries: Vec<NativeEntry>,
@@ -1967,7 +1967,7 @@ diff -ruN a/src/native_menu/macos.rs b/src/native_menu/macos.rs
 +    Some((key, flags))
 +}
 +
-+/// PowerCommander patch: a pop-up button's menu as AppKit shows it, the chosen
++/// SparkCommander patch: a pop-up button's menu as AppKit shows it, the chosen
 +/// row over the button and the menu at least as wide; `chosen` gets the row picked.
 +pub(crate) fn pop_up_list(
 +    labels: Vec<gpui::SharedString>,
@@ -2064,7 +2064,7 @@ diff -ruN a/src/progress/progress.rs b/src/progress/progress.rs
 -            Size::Medium => (px(8.), px(4.)),
 -            Size::Large => (px(10.), px(5.)),
 -            Size::Size(s) => (s, s / 2.),
-+        // PowerCommander patch: the desktop style's groove and fill, see `NativeControls`.
++        // SparkCommander patch: the desktop style's groove and fill, see `NativeControls`.
 +        let native = cx.try_global::<crate::NativeControls>().copied();
 +        // AppKit's 8 px groove, rimmed, see `MacControls`.
 +        let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| native.is_none());
@@ -2129,7 +2129,7 @@ diff -ruN a/src/radio.rs b/src/radio.rs
 -                    .child(checkbox_check_icon(
 -                        self.id, self.size, checked, disabled, window, cx,
 -                    )),
-+                    // PowerCommander patch: the desktop style's circle and dot, see `NativeControls`; AppKit's, see `MacControls`.
++                    // SparkCommander patch: the desktop style's circle and dot, see `NativeControls`; AppKit's, see `MacControls`.
 +                    .map(|this| match (cx.try_global::<crate::NativeControls>().copied(), cx.try_global::<crate::MacControls>().copied()) {
 +                        (None, Some(mac)) => {
 +                            let fill = if checked && !disabled { mac.accent } else { mac.well };
@@ -2198,7 +2198,7 @@ diff -ruN a/src/root.rs b/src/root.rs
      touch_selection_overlay: Entity<WindowTouchSelectionOverlay>,
      sheet_size: Option<DefiniteLength>,
      pending_focus_restore: Option<WeakFocusHandle>,
-+    // PowerCommander patch: the window lets the desktop through where its
++    // SparkCommander patch: the window lets the desktop through where its
 +    // content paints nothing, so the root paints no background.
 +    pub(crate) see_through: bool,
  }
@@ -2225,14 +2225,14 @@ diff -ruN a/src/root.rs b/src/root.rs
 -                .bg(cx.theme().tokens.background)
 -                .text_color(cx.theme().foreground),
 -        );
-+        // PowerCommander patch: rounded as the frame, see `WindowCornerRadius`.
++        // SparkCommander patch: rounded as the frame, see `WindowCornerRadius`.
 +        let (top_left, top_right) = crate::top_corners(window, cx);
 +        let style = gpui::StyleRefinement::default()
 +            .font_family(cx.theme().font_family.clone())
 +            .text_color(cx.theme().foreground)
 +            .rounded_tl(top_left)
 +            .rounded_tr(top_right);
-+        // PowerCommander patch: see `see_through`.
++        // SparkCommander patch: see `see_through`.
 +        let style = match self.see_through {
 +            true => style,
 +            false => style.bg(cx.theme().tokens.background),
@@ -2262,7 +2262,7 @@ diff -ruN a/src/select.rs b/src/select.rs
      fn toggle_menu(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
          cx.stop_propagation();
  
-+        // PowerCommander patch: on macOS, AppKit's own pop-up menu, see `MacControls`.
++        // SparkCommander patch: on macOS, AppKit's own pop-up menu, see `MacControls`.
 +        #[cfg(target_os = "macos")]
 +        if cx.has_global::<crate::MacControls>() && !self.searchable && !self.state.open {
 +            let delegate = &self.state.list.read(cx).delegate().delegate;
@@ -2288,7 +2288,7 @@ diff -ruN a/src/select.rs b/src/select.rs
          let outline_visible = self.state.open || (is_focused && !self.state.disabled);
  
          let (bg, fg) = input_style(self.state.disabled, cx);
-+        // PowerCommander patch: AppKit's pop-up button, see `MacControls`: filled
++        // SparkCommander patch: AppKit's pop-up button, see `MacControls`: filled
 +        // as a push button, 24 px, with its up and down chevrons.
 +        let mac = cx
 +            .try_global::<crate::MacControls>()
@@ -2314,7 +2314,7 @@ diff -ruN a/src/select.rs b/src/select.rs
 +                                    this.h(px(24.)).py_0()
 +                                })
 +                        })
-+                        // PowerCommander patch: Windows' and GNOME's combo box is a push button, see `NativeControls`.
++                        // SparkCommander patch: Windows' and GNOME's combo box is a push button, see `NativeControls`.
 +                        .when_some(native_combo, |this, native| {
 +                            let [(fill, frame), (hover, hover_frame), _] = native.button;
 +                            this.bg(fill)
@@ -2362,7 +2362,7 @@ diff -ruN a/src/slider.rs b/src/slider.rs
              (relative(percentage.start), relative(1. - percentage.end))
          };
          let rem_size = window.rem_size();
-+        // PowerCommander patch: the desktop style's groove and handle, see `NativeControls`;
++        // SparkCommander patch: the desktop style's groove and handle, see `NativeControls`;
 +        // AppKit's groove and pill-shaped knob, see `MacControls`.
 +        let native = cx.try_global::<crate::NativeControls>().copied();
 +        let mac = cx.try_global::<crate::MacControls>().copied().filter(|_| native.is_none());
@@ -2479,7 +2479,7 @@ diff -ruN a/src/styled.rs b/src/styled.rs
  /// as part of one grounded surface rather than as an outline with a separate
  /// shadow below it. An opaque border cannot reproduce that — a border composites
  /// over the element's own background, not over the shadow.
-+#[allow(dead_code)] // PowerCommander patch: the ring is the theme's border.
++#[allow(dead_code)] // SparkCommander patch: the ring is the theme's border.
  const POPOVER_RING_INK: f32 = 0.1;
  
  /// The colour of a popup surface's hairline ring in this theme.
@@ -2488,7 +2488,7 @@ diff -ruN a/src/styled.rs b/src/styled.rs
  ///
  pub(crate) fn popover_ring(cx: &App) -> Hsla {
 -    cx.theme().foreground.alpha(POPOVER_RING_INK)
-+    // PowerCommander patch: the theme's border, as KDE frames menus.
++    // SparkCommander patch: the theme's border, as KDE frames menus.
 +    cx.theme().border
  }
  
@@ -2500,7 +2500,7 @@ diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
                  hover_style.borders.left = px(0.);
              }
          }
-+        // PowerCommander patch: Breeze's document-mode tabs, see `NativeControls`:
++        // SparkCommander patch: Breeze's document-mode tabs, see `NativeControls`:
 +        // the selected one tinted by the selection, the others in the view colour.
 +        let native = cx.try_global::<crate::NativeControls>().copied();
 +        let breeze = match self.variant {
@@ -2513,7 +2513,7 @@ diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
 +            selected_style.bg = selected.into();
 +            selected_style.fg = text;
 +        }
-+        // PowerCommander patch: AppKit's window tabs, see `MacControls`: pills in
++        // SparkCommander patch: AppKit's window tabs, see `MacControls`: pills in
 +        // the bar's track, the selected one lighter and rimmed.
 +        let mac = match self.variant {
 +            TabVariant::Tab if breeze.is_none() => cx.try_global::<crate::MacControls>().copied(),
@@ -2588,7 +2588,7 @@ diff -ruN a/src/tab/tab.rs b/src/tab/tab.rs
                  )
              })
              .child(inner_element)
-+            // PowerCommander patch: the selected tab's accent line on top, as Breeze draws it.
++            // SparkCommander patch: the selected tab's accent line on top, as Breeze draws it.
 +            .when(self.selected && !self.disabled && self.variant == TabVariant::Tab && mac.is_none(), |this| {
 +                let (line, color) = breeze.map_or((px(2.), cx.theme().primary), |([_, _, line], _)| (px(3.), line));
 +                this.child(div().absolute().top_0().left_0().right_0().h(line).bg(color))
@@ -2620,7 +2620,7 @@ diff -ruN a/src/tab/tab_bar.rs b/src/tab/tab_bar.rs
              Size::Large => px(16.),
              _ => px(12.),
          };
-+        // PowerCommander patch: AppKit's window tab bar, see `MacControls`: a
++        // SparkCommander patch: AppKit's window tab bar, see `MacControls`: a
 +        // rounded track holding tabs of equal width.
 +        let mac = match self.variant {
 +            TabVariant::Tab if !cx.has_global::<crate::NativeControls>() => {
@@ -3370,9 +3370,9 @@ diff -ruN a/src/title_bar.rs b/src/title_bar.rs
 --- a/src/title_bar.rs	2026-11-13 07:54:07.087565691 +0100
 +++ b/src/title_bar.rs	2026-11-13 08:05:02.856610489 +0100
 @@ -1,3 +1,7 @@
-+// Modified for PowerCommander (Apache-2.0, section 4b): the window's buttons
++// Modified for SparkCommander (Apache-2.0, section 4b): the window's buttons
 +// are those the desktop's layout names, and may be the icon theme's pictures
-+// in round buttons, as GTK draws them. Changes are marked "PowerCommander patch".
++// in round buttons, as GTK draws them. Changes are marked "SparkCommander patch".
 +
  use std::rc::Rc;
  
@@ -3394,7 +3394,7 @@ diff -ruN a/src/title_bar.rs b/src/title_bar.rs
      }
  }
  
-+/// PowerCommander patch: the window buttons' pictures (minimize, maximize,
++/// SparkCommander patch: the window buttons' pictures (minimize, maximize,
 +/// restore, close), SVG files drawn as GTK does, in round buttons.
 +pub struct WindowButtonPictures(pub [SharedString; 4]);
 +
@@ -3444,7 +3444,7 @@ diff -ruN a/src/title_bar.rs b/src/title_bar.rs
 -            .active(|style| style.bg(active_bg).text_color(hover_fg))
 +            .text_color(fg)
 +            .map(|this| match picture.is_some() {
-+                // PowerCommander patch: GTK's, a round button shaded under the pointer.
++                // SparkCommander patch: GTK's, a round button shaded under the pointer.
 +                true => this
 +                    .size(px(24.))
 +                    .mx(px(5.))
@@ -3487,7 +3487,7 @@ diff -ruN a/src/title_bar.rs b/src/title_bar.rs
          // always ours to offer.
 -        let supported = window.window_controls();
 +        let mut supported = window.window_controls();
-+        // PowerCommander patch: only the buttons the desktop's layout names (GNOME's default: close alone).
++        // SparkCommander patch: only the buttons the desktop's layout names (GNOME's default: close alone).
 +        // shortcut: they stay on the right where the layout puts them left; follow its sides when asked.
 +        if let Some(layout) = cx.button_layout() {
 +            let named = |button| layout.left.iter().chain(&layout.right).any(|named| *named == Some(button));
@@ -3501,7 +3501,7 @@ diff -ruN a/src/toolkit.rs b/src/toolkit.rs
 --- a/src/toolkit.rs	1970-01-01 01:00:00.000000000 +0100
 +++ b/src/toolkit.rs	2026-11-13 08:05:02.827405976 +0100
 @@ -0,0 +1,106 @@
-+// PowerCommander patch: this file is new.
++// SparkCommander patch: this file is new.
 +use std::sync::Arc;
 +
 +use gpui::{
@@ -3614,7 +3614,7 @@ diff -ruN a/src/tooltip.rs b/src/tooltip.rs
                  .px_2()
                  .text_sm()
                  .gap_3()
-+                // PowerCommander patch: AppKit's tooltip, see `MacControls`: 11 px text
++                // SparkCommander patch: AppKit's tooltip, see `MacControls`: 11 px text
 +                // in a small grey box, its corners barely round.
 +                .when_some(cx.try_global::<crate::MacControls>().copied(), |this, mac| {
 +                    this.bg(mac.tooltip)
@@ -3713,14 +3713,14 @@ diff -ruN a/src/window_border.rs b/src/window_border.rs
  /// corners, so keep the generic window wrapper square until rounded content masks exist.
  pub(crate) const BORDER_RADIUS: Pixels = px(0.0);
  
-+/// PowerCommander patch: the top corners' radius of a window drawing its own
++/// SparkCommander patch: the top corners' radius of a window drawing its own
 +/// frame, as the desktop's theme rounds them. The root surface and a title bar
 +/// round theirs with `top_corners`, so no background shows past the curve.
 +pub struct WindowCornerRadius(pub Pixels);
 +
 +impl gpui::Global for WindowCornerRadius {}
 +
-+/// PowerCommander patch: the window's top-left and top-right radius now; none
++/// SparkCommander patch: the window's top-left and top-right radius now; none
 +/// on a side tiled or maximized, or framed by the system.
 +pub fn top_corners(window: &Window, cx: &App) -> (Pixels, Pixels) {
 +    let Decorations::Client { tiling } = window.window_decorations() else {
@@ -3779,7 +3779,7 @@ diff -ruN a/src/window_ext.rs b/src/window_ext.rs
  
  /// Extension trait for [`Window`] to add dialog, sheet .. functionality.
  pub trait WindowExt: Sized {
-+    /// PowerCommander patch: the root paints no background, for a window
++    /// SparkCommander patch: the root paints no background, for a window
 +    /// whose desktop shows through where its content paints none.
 +    fn set_see_through(&mut self, see_through: bool, cx: &mut App);
 +

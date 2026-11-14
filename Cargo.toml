@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/pc-core", "crates/pc-gui", "crates/pc-tui"]
+members = ["crates/sc-core", "crates/sc-gui", "crates/sc-tui"]
 # Patched third-party crates are not workspace members (no tests or lints run).
 exclude = ["vendor"]
 
@@ -10,7 +10,7 @@ edition = "2024"
 license = "GPL-3.0-or-later"
 
 [workspace.dependencies]
-pc-core = { path = "crates/pc-core" }
+sc-core = { path = "crates/sc-core" }
 
 # GPUI Kit with Water Data Studio's patches (menu bar not scrolling, ...); see vendor/README.md.
 [patch.crates-io]

@@ -1,6 +1,6 @@
 # 7-Zip 26.06 (bundled)
 
-Power Commander uses only this copy of 7-Zip, never a system one. It is not
+Spark Commander uses only this copy of 7-Zip, never a system one. It is not
 in git: fetch it once after cloning, and again after an update.
 
 - Linux, macOS: `vendor/7zip/fetch.sh` (all platforms; needs `curl`, `tar`)
@@ -30,4 +30,4 @@ executable, in `Contents/MacOS`, signed with the app, and the license in
 `Contents/Resources/licenses` (`packaging/macos/bundle.sh`).
 
 To update: change the version in both scripts and the digests in
-`SHA256SUMS`, run a fetch script, and `cargo test -p pc-core`.
+`SHA256SUMS`, run a fetch script, and `cargo test -p sc-core`.

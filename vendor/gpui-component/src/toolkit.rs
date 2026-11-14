@@ -1,4 +1,4 @@
-// PowerCommander patch: this file is new.
+// SparkCommander patch: this file is new.
 use std::sync::Arc;
 
 use gpui::{

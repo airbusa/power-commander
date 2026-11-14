@@ -1,5 +1,5 @@
-// Modified for PowerCommander (Apache-2.0, section 4b): files on the clipboard
-// as file managers put them there. Changes are marked "PowerCommander patch".
+// Modified for SparkCommander (Apache-2.0, section 4b): files on the clipboard
+// as file managers put them there. Changes are marked "SparkCommander patch".
 
 use std::{
     fs::File,
@@ -99,7 +99,7 @@ impl<T: ReceiveData> DataOffer<T> {
         }
     }
 
-    /// PowerCommander patch: another program's files, as file managers offer them.
+    /// SparkCommander patch: another program's files, as file managers offer them.
     fn read_files(&self, connection: &Connection) -> Option<ClipboardItem> {
         if !self.has_mime_type(URI_LIST) {
             return None;
@@ -193,7 +193,7 @@ impl Clipboard {
     }
 
     pub fn send(&self, mime_type: String, fd: OwnedFd) {
-        // PowerCommander patch: files as file managers read them.
+        // SparkCommander patch: files as file managers read them.
         if let Some(bytes) = self.contents.as_ref().and_then(|c| file_bytes(c, &mime_type)) {
             return self.send_bytes(fd, bytes);
         }
@@ -222,7 +222,7 @@ impl Clipboard {
             return self.contents.clone();
         }
 
-        // PowerCommander patch: files before their text.
+        // SparkCommander patch: files before their text.
         let item = offer
             .read_files(&self.connection)
             .or_else(|| offer.read_text(&self.connection))
